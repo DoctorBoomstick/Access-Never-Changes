@@ -23,6 +23,29 @@ class TestMapMode(unittest.TestCase):
         self.assertTrue(screens.is_map_mode(screens.MODE_COMBAT))
         self.assertTrue(screens.is_map_mode(0x40))
 
+    def test_player_combat_is_combat_plus_pcombat(self):
+        """The same bug's second life. `mode in (0, MODE_COMBAT)` looked like a
+        fix and was not: during the player's own turn the engine reports 0x840,
+        COMBAT and PCOMBAT together, so equality against one value still failed.
+        Captured from a live log as `WORLD:gamemode 2112`."""
+        self.assertTrue(screens.is_map_mode(0x840))
+        self.assertTrue(screens.is_map_mode(2112))
+        self.assertTrue(screens.is_map_mode(screens.MODE_PCOMBAT))
+
+    def test_localmap_bit_does_not_hide_the_map(self):
+        self.assertTrue(screens.is_map_mode(screens.MODE_LOCALMAP))
+        self.assertTrue(screens.is_map_mode(0x842))
+
+    def test_a_panel_over_combat_is_still_a_panel(self):
+        """Opening the inventory mid-fight must stop aiming, even though the
+        combat bits are still set."""
+        self.assertFalse(screens.is_map_mode(0x840 | screens.MODE_INVENTORY))
+
+    def test_unknown_bits_are_treated_as_a_panel(self):
+        """Failing this way round is the safe one: decline to aim rather than
+        aim into something we have never seen."""
+        self.assertFalse(screens.is_map_mode(0x800000))
+
     def test_panels_are_not_the_map(self):
         for mode in (screens.MODE_DIALOG, screens.MODE_INVENTORY,
                      screens.MODE_PIPBOY, screens.MODE_BARTER,

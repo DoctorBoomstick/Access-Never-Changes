@@ -42,6 +42,15 @@
 // define_extra.h carries the OBJ_TYPE_* constants.
 #include "sfall/define_extra.h"
 
+// Game modes that put a panel over the map. get_game_mode is a bitmask, so
+// membership is tested with bwand rather than equality. LOCALMAP, COMBAT and
+// PCOMBAT are deliberately absent: none of them hides the world.
+#define MAP_HIDDEN (WORLDMAP bwor DIALOG bwor ESCMENU bwor SAVEGAME bwor \
+                    LOADGAME bwor OPTIONS bwor HELP bwor CHARSCREEN bwor \
+                    PIPBOY bwor INVENTORY bwor AUTOMAP bwor SKILLDEX bwor \
+                    INTFACEUSE bwor INTFACELOOT bwor BARTER bwor HEROWIN bwor \
+                    DIALOGVIEW bwor COUNTERWIN bwor PAUSEWIN)
+
 #define CURSOR_UNSET        (-1)
 
 #define DIR_NE              (0)
@@ -176,12 +185,14 @@ procedure poll_state begin
       debug_msg("WORLD:cursormode " + c);
    end
 
-   // Map telemetry is meaningful on the plain map view AND in combat, which is
-   // a distinct game mode (COMBAT, 0x40) rather than a flag on top of 0. The
-   // first version tested `m != 0` and so switched every watcher below off the
-   // moment a fight started -- which is precisely when they matter most. A
-   // whole fight was debugged with no button telemetry at all because of it.
-   if (m != 0 and m != COMBAT) then return;
+   // Map telemetry is meaningful whenever the map is actually visible, which
+   // includes combat. get_game_mode is a BITMASK and several bits can be set at
+   // once -- during the player's own turn it reads 0x840, COMBAT *and*
+   // PCOMBAT -- so this has to be a mask test. Two earlier versions compared it
+   // for equality (`m != 0`, then `m != 0 and m != COMBAT`) and both switched
+   // every watcher below off for the whole of every fight, which is exactly
+   // when they matter most.
+   if (m bwand MAP_HIDDEN) then return;
 
    // Did the player actually move? The one unambiguous answer to whether a
    // click worked, and it costs nothing to watch.

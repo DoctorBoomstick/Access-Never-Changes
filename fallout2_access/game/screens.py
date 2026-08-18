@@ -63,24 +63,33 @@ MODE_NAMES = [
 ]
 
 
+# get_game_mode returns a BITMASK, and several bits can be set at once. These
+# three do not hide the map, so hexes still mean something while they are set.
+MODE_LOCALMAP = 0x2
+MODE_PCOMBAT = 0x800  # player's own combat; set alongside COMBAT, not instead
+MAP_MODES = MODE_LOCALMAP | MODE_COMBAT | MODE_PCOMBAT
+
+
 def is_map_mode(mode: Optional[int]) -> bool:
     """True where the world exists in hexes, so aiming at one is meaningful.
 
-    Combat is a MODE, not a flag layered on top of the map view, so a plain
-    `mode == 0` test excludes it. That mistake was made twice in a single day --
-    once in the script, which switched off all its telemetry the instant a fight
-    began, and once in the click path, which stopped aiming during combat and so
-    attacked whatever the pointer happened to be resting on. It is a function
-    now, so there is exactly one place to be wrong about it and a test that says
-    what the right answer is.
+    Tested as a MASK, and that detail has now cost three separate debugging
+    sessions. The first version asked `mode == 0`, which excluded combat and so
+    silently stopped the click from aiming during every fight. The second asked
+    `mode in (0, MODE_COMBAT)`, which looked right and was not: in the player's
+    own turn the engine reports 0x840, COMBAT *and* PCOMBAT together, so
+    equality against a single value fails just as completely. The symptom both
+    times was a click landing wherever the pointer had last been left, which
+    reads as the character walking off in a direction nobody chose.
 
-    Everything else -- dialogue, inventory, Pipboy, barter, the world map --
-    puts a panel over the view, where hexes mean nothing and a click belongs
-    wherever the pointer already is.
+    So: anything outside the known-harmless set counts as a panel over the view,
+    including bits we have never seen. Failing that way round is the safe one --
+    an unrecognised mode means we decline to aim, rather than aiming into a
+    dialogue box.
     """
     if mode is None:
         return False
-    return mode in (0, MODE_COMBAT)
+    return (mode & ~MAP_MODES) == 0
 
 
 def mode_name(mode: Optional[int]) -> str:
