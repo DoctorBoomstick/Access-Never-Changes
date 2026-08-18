@@ -298,7 +298,8 @@ def _mouse_event(flags: int, dx: int = 0, dy: int = 0) -> INPUT:
     return inp
 
 
-def move_mouse_relative(dx: int, dy: int, settle: float = 0.05) -> None:
+def move_mouse_relative(dx: int, dy: int, settle: float = 0.05,
+                        hwnd: Optional[int] = None) -> None:
     """Nudge the pointer by a relative delta, the way a physical mouse does.
 
     SetCursorPos does NOT move Fallout 2's cursor: the game captures the mouse
@@ -308,7 +309,33 @@ def move_mouse_relative(dx: int, dy: int, settle: float = 0.05) -> None:
     """
     ev = _mouse_event(MOUSEEVENTF_MOVE, dx, dy)
     user32.SendInput(1, ctypes.byref(ev), ctypes.sizeof(INPUT))
+    # Re-centre the Windows cursor afterwards so these deltas cannot accumulate
+    # into a drift towards a window edge. See park_pointer.
+    if hwnd is not None:
+        park_pointer(hwnd)
     time.sleep(settle)
+
+
+def park_pointer(hwnd: int) -> None:
+    """Put the *Windows* cursor back in the middle of the game window.
+
+    Fallout tracks its own cursor from relative DirectInput motion and ignores
+    SetCursorPos entirely, so this does not disturb where the game thinks the
+    pointer is -- verified live: the game still reported (569,346) either side
+    of a park.
+
+    What it prevents is the Windows cursor drifting to a window edge. The engine
+    scrolls the map while the pointer sits near one, so the mod's own relative
+    moves would eventually push the real cursor into that zone and the world
+    would start sliding. The pointer then stands still while the map moves
+    underneath it: the hex under a stationary pointer marched 17687, 17888,
+    18289, 18490, 18891 over two seconds, so every aimed click landed on a hex
+    that had since moved on, and one of them found the interface bar's OPTIONS
+    button and opened the escape menu over the game.
+    """
+    w, h = client_size(hwnd)
+    sx, sy = client_to_screen(hwnd, w // 2, h // 2)
+    user32.SetCursorPos(int(sx), int(sy))
 
 
 def mouse_click(button: str = "left", hold: float = 0.06, settle: float = 0.25) -> None:

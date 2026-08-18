@@ -30,7 +30,7 @@ import re
 import time
 from typing import NamedTuple, Optional
 
-from ..input.send import guarded_tap, move_mouse_relative
+from ..input.send import guarded_tap, move_mouse_relative, park_pointer
 
 # Fallout 2's tile numbering is row-major with 200 tiles to a row, so a tile
 # number splits into a row and a column that behave like coordinates. The screen
@@ -164,7 +164,7 @@ class Aimer:
         prev = 0
         for dy in TARGET_STEPS:
             if dy != prev:
-                move_mouse_relative(0, dy - prev, settle=0.05)
+                move_mouse_relative(0, dy - prev, settle=0.05, hwnd=self.hwnd)
                 prev = dy
             r = self.read()
             if r is None:
@@ -208,6 +208,10 @@ class Aimer:
         confirms the pointer is on the requested hex -- never on our own belief
         about where we put it.
         """
+        # Start from a known-safe pointer position. A session's worth of
+        # relative moves can leave the Windows cursor at a window edge, where
+        # the engine scrolls the map continuously and no aim can converge.
+        park_pointer(self.hwnd)
         r = self.read()
         if r is None:
             return False, None, "the game did not report the cursor position"
@@ -255,7 +259,7 @@ class Aimer:
                 else:
                     return False, r, "that hex is off the edge of the view"
 
-            move_mouse_relative(dx, dy, settle=0.05)
+            move_mouse_relative(dx, dy, settle=0.05, hwnd=self.hwnd)
             nxt = self.read()
             if nxt is None:
                 return False, r, "lost contact with the game"

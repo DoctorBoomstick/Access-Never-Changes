@@ -429,7 +429,7 @@ end
  * g_cursor, the screen point is right and a click is safe.
  */
 procedure calibrate begin
-   variable mx, my, under, btns, winid, barid, ou, ouname;
+   variable mx, my, under, btns, winid, barid, ou, ouname, savedmode;
    mx := get_mouse_x;
    my := get_mouse_y;
    under := tile_under_cursor;
@@ -465,11 +465,25 @@ procedure calibrate begin
    // HOOK_TARGETOBJECT only fires for the combat targeting cursor; this works
    // for walking, interacting and skills alike, so one aim routine serves them
    // all instead of a special case per kind of click.
+   // obj_under_cursor CHANGES THE ACTION CURSOR as a side effect -- asking the
+   // engine what is under the pointer makes it decide what a click there would
+   // do, and it leaves that decision behind. Measured: the first calibration
+   // after setting the movement cursor reports 0, and every one after it
+   // reports 6, with no key pressed in between.
+   //
+   // That matters because the aim servo calls this several times per click, so
+   // the side effect landed on every single click the mod made: the player set
+   // the movement cursor, the mod quietly replaced it while aiming, and the
+   // click then did nothing at all. Save the mode and put it back.
+   savedmode := get_cursor_mode;
    ou := obj_under_cursor(0, 0);
    ouname := "";
    if (ou) then begin
       call obj_label(ou);
       ouname := g_label;
+   end
+   if (get_cursor_mode != savedmode) then begin
+      set_cursor_mode(savedmode);
    end
 
    debug_msg("WORLD:calib mouse=" + mx + "," + my
