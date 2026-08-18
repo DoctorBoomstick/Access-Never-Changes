@@ -123,6 +123,38 @@ The skill cursors are announced by number rather than name: sfall reports modes
 skill name on the thing that decides whether you walk or pick a lock is worse
 than a number.
 
+## Skills, doors and other things you act on
+
+Skills work the way they do for everyone else: **press a number key to arm one,
+then click the target.**
+
+| Key | Skill | | Key | Skill |
+|---|---|---|---|---|
+| 1 | Sneak (a toggle — no target) | | 5 | First Aid |
+| 2 | Lockpick | | 6 | Doctor |
+| 3 | Steal | | 7 | Science |
+| 4 | Traps | | 8 | Repair |
+
+The mod tells you what is armed — `Lockpick ready. A click uses it.` — so you
+always know what the next click will do. Numpad 0 puts you back to the movement
+cursor.
+
+So a locked door is: find it with the scanner, `/` to put the cursor on it,
+press `2`, then numpad `+`.
+
+**The mod no longer decides what your click means.** It moves the pointer onto
+the hex you chose, because that is the part you cannot do yourself, and it
+refuses to click if the game will not confirm the pointer is really on the
+thing. What the click then *does* is the cursor mode's business, and the cursor
+mode is yours — right click cycles it, number keys arm skills, and every change
+is announced.
+
+Hexes and the scanner now say when something is **locked** or **open**, so you
+find out before walking across a room rather than by clicking and hearing
+nothing:
+
+    Door, locked, east 3 hexes. 1 of 4.
+
 ## The game's own words
 
 Fallout talks to you along the bottom of the screen — "You see: a door", "It's

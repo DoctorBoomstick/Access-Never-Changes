@@ -38,7 +38,6 @@ from .input.send import (
     guarded_click,
     guarded_tap,
     is_foreground,
-    move_mouse_relative,
 )
 from .memory.process import FALLOUT_EXE_NAMES, Process, ProcessNotFound
 from .speech.backends import Speaker, get_speaker
@@ -312,15 +311,9 @@ class WorldWatcher(Watcher):
         self.scanner = Scanner()
         self._queue: list = []
         self._mode: Optional[int] = None
-        self._mute_cursor_until = 0.0
 
     def reset(self) -> None:
         self._queue = []
-        self._mute_cursor_until = 0.0
-
-    def mute_cursor_for(self, seconds: float) -> None:
-        """Ignore cursor-mode chatter briefly, for a mode we set ourselves."""
-        self._mute_cursor_until = time.time() + seconds
 
     def pump(self) -> None:
         """Consume script output. Runs every tick, whatever screen is active,
@@ -373,11 +366,8 @@ class WorldWatcher(Watcher):
                 # Numpad 0 pressed when the cursor was already in that mode.
                 # Confirm briefly rather than repeating the full explanation,
                 # which is what it sounds like when you press it twice.
-                if time.time() >= self._mute_cursor_until:
-                    self._queue.append(("Already the movement cursor.", True))
+                self._queue.append(("Already the movement cursor.", True))
             elif line.startswith("WORLD:cursormode"):
-                if time.time() < self._mute_cursor_until:
-                    continue
                 # Always announce. This is the state that decides whether a
                 # click walks or fires off a skill, and it can change without
                 # the player doing anything they would connect to it -- a
@@ -502,108 +492,54 @@ class App:
         return self.watchers.get(self.screen)
 
     def click(self, button: str = "left") -> None:
-        """Walk to the hex the look cursor is on.
+        """Press a mouse button on the hex the look cursor is on.
 
-        A left click aims first: the pointer is servoed onto the look cursor's
-        hex and the game is asked to confirm it landed there before any button
-        is sent. If it cannot be confirmed, nothing is clicked and the reason is
-        spoken. Clicking a hex we merely believe we are pointing at is the one
-        thing this must never do -- a misplaced click in Fallout 2 walks you
-        somewhere you did not choose, attacks, or uses an item, and a blind
-        player has no way to notice before it happens.
+        The mod moves the pointer; it does not decide what the click means.
+        That split matters. Pointing is the part you physically cannot do, so
+        the mod does it and verifies it. What a click then *does* -- walk,
+        interact, attack, pick a lock -- belongs to the cursor mode, which is
+        yours to set with right click or a Skilldex key, exactly as it is for a
+        sighted player. The mod announces the mode whenever it changes, so you
+        have the same information they read off the cursor's shape.
 
-        It then taps numpad 0, which asks the script to set the cursor to match
-        what is on the chosen hex: the targeting cursor when a living critter is
-        standing there in combat, so the click attacks, and the movement cursor
-        otherwise, so it walks. The script decides because the script is what
-        knows the combat state and the hex contents.
+        An earlier version chose the mode for you and it was a mistake in both
+        directions: it disarmed a skill the moment you tried to use one, and it
+        guessed wrong about intent in cases nobody had enumerated.
 
-        That step is not optional. Scrolling the view leaves the engine holding
-        a directional scroll cursor, and a click in that state does nothing at
-        all: six such clicks were logged doing exactly nothing while every click
-        in movement mode walked correctly.
-
-        A right click is left alone: it toggles the cursor mode on purpose, so
-        aiming and forcing a mode first would defeat the point of pressing it.
+        What does NOT change is the refusal to click on a maybe. If the look
+        hex holds something and the engine will not confirm the pointer is on
+        it, nothing is sent -- a misplaced click walks you somewhere you did not
+        choose, or swings at empty ground and spends the turn.
         """
         if self.hwnd is None:
             return
         try:
-            if button == "left":
-                # Only aim where hexes exist. In a dialog, the inventory, the
-                # Pipboy or barter, the pointer is over a panel and hexes are
-                # meaningless -- there the click should just go where the
-                # pointer already is, so it can still press a button.
-                #
-                # Combat counts, and is a SEPARATE mode rather than a flag on
-                # top of the map view. Testing `== 0` silently disabled aiming
-                # for every fight, so attacks clicked wherever the pointer had
-                # been left. This is the second place that mistake was made --
-                # the script's own telemetry had it too -- which is why the
-                # comparison is spelled out here rather than left as a zero.
-                on_map = screens.is_map_mode(self.world.log.game_mode)
-                if on_map and self.aimer is not None:
-                    ok, reading, why = self.aimer.aim()
-                    if not ok:
-                        self.ann.answer(
-                            "Cannot aim at that hex: {}.".format(
-                                why or "unknown reason")
-                        )
-                        return
-                # Swallow the acknowledgement this provokes -- the player
-                # pressed the click key, not the cursor key, and does not need
-                # to hear about the mode being set every single time.
-                self.world.mute_cursor_for(0.8)
-                self.world.log.cursor_mode = None
-                guarded_tap(self.hwnd, "numpad0", settle=0.10)
-                if self._cursor_after_tap() == screens.CURSOR_TARGETING:
-                    # Attacking needs the pointer on the critter's SPRITE, not
-                    # on its hex: Fallout picks critters by the drawn figure,
-                    # which stands above the tile it occupies, so a click dead
-                    # centre on the hex hits the ground underneath and does
-                    # nothing while still looking like a delivered click.
-                    #
-                    # The offset is searched for, not assumed. A fixed 12 pixels
-                    # landed on one ant and sailed straight over the next, and
-                    # the difference is invisible without asking the engine. So
-                    # we ask: HOOK_TARGETOBJECT names whatever the crosshair is
-                    # really on, and nothing is clicked until it answers.
-                    name, _dy = self.aimer.confirm_target()
+            if button == "left" and screens.is_map_mode(self.world.log.game_mode):
+                if self.aimer is None:
+                    return
+                ok, reading, why = self.aimer.aim()
+                if not ok:
+                    self.ann.answer(
+                        "Cannot aim at that hex: {}.".format(why or "unknown reason")
+                    )
+                    return
+
+                # Was something meant to be there? The hex readout is the
+                # player's own last look at it.
+                last = self.world.log.last_hex
+                expects_object = bool(
+                    last and last.contents and last.contents not in ("empty", "you")
+                )
+                if expects_object:
+                    name, _dy = self.aimer.confirm_object()
                     if not name:
-                        self.ann.answer("No target there.")
+                        self.ann.answer("Cannot point at that.")
                         return
             guarded_click(self.hwnd, button)
         except FocusLost:
             self.ann.answer("Game is not focused.")
         except Exception as exc:  # never let a hotkey kill the loop
             print("[app] click: {}".format(exc), flush=True)
-
-    def action(self, what: str) -> None:
-        """Queue a hotkey. Called from the keyboard listener thread.
-
-        Nothing is done here. Hotkeys arrive on pynput's thread while the main
-        loop is reading the script's log, and aiming a click reads that same log
-        and sends its own keystrokes -- two threads doing that at once
-        interleave keys and steal each other's log lines. Queue it, run it in
-        the loop.
-        """
-        self._pending.append((what, time.time()))
-
-    def _cursor_after_tap(self, timeout: float = 0.5) -> Optional[int]:
-        """The cursor mode the script reports after being asked to set one.
-
-        Waits for the answer rather than assuming it: the script chooses between
-        the targeting and movement cursors based on what is standing on the look
-        hex, and only it knows that. Returns None if no answer arrives, in which
-        case the caller should treat the mode as unknown rather than guess.
-        """
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            self.world.pump()
-            if self.world.log.cursor_mode is not None:
-                return self.world.log.cursor_mode
-            time.sleep(0.02)
-        return None
 
     def _run_pending(self) -> None:
         while self._pending:

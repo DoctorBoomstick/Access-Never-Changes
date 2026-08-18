@@ -84,6 +84,8 @@ variable g_scan_cat := 0;
 variable g_scan_type := 0;
 variable g_scan_inst := 0;
 variable g_restore_ticks := 0;
+variable g_savedcursor := 0;
+variable g_label := "";
 variable g_movestart := -1;
 variable g_moving := 0;
 variable g_stillticks := 0;
@@ -99,6 +101,7 @@ procedure snap_to_dude;
 procedure calibrate;
 procedure force_action_cursor;
 procedure live_critter_at_cursor;
+procedure obj_label(variable obj);
 procedure scan_list_type(variable cat);
 procedure scan_keep(variable obj);
 procedure scan_do(variable level, variable dojump);
@@ -191,8 +194,8 @@ procedure poll_state begin
    c := get_cursor_mode;
    if (g_restore_ticks > 0) then begin
       g_restore_ticks := g_restore_ticks - 1;
-      if (c > CURSOR_TARGETING) then begin
-         set_cursor_mode(CURSOR_MOVEMENT);
+      if (c != g_savedcursor) then begin
+         set_cursor_mode(g_savedcursor);
          c := get_cursor_mode;
       end
       g_lastcursormode := c;
@@ -401,6 +404,11 @@ end
  * movement cursor rather than being preserved.
  */
 procedure recenter_view begin
+   // Remember what the cursor was, because scrolling is about to change it and
+   // we want it put back exactly. Forcing it to movement instead would disarm
+   // a skill the player had just readied -- press 2 for Lockpick, step the look
+   // cursor onto the door, and the lockpick is gone before you can click.
+   g_savedcursor := get_cursor_mode;
    tile_set_center(g_cursor);
    // The engine sets the scroll cursor a frame or two later, so it cannot be
    // put back here -- poll_state cleans it up over the next few ticks instead.
@@ -421,7 +429,7 @@ end
  * g_cursor, the screen point is right and a click is safe.
  */
 procedure calibrate begin
-   variable mx, my, under, btns, winid, barid;
+   variable mx, my, under, btns, winid, barid, ou, ouname;
    mx := get_mouse_x;
    my := get_mouse_y;
    under := tile_under_cursor;
@@ -453,12 +461,24 @@ procedure calibrate begin
    // (Prime suspect is now the third possibility: it arrived, and acted -- as a
    //  skill use, because the cursor was armed from the Skilldex.)
    btns := get_mouse_buttons;
+   // What the engine thinks a click would act on, in ANY cursor mode.
+   // HOOK_TARGETOBJECT only fires for the combat targeting cursor; this works
+   // for walking, interacting and skills alike, so one aim routine serves them
+   // all instead of a special case per kind of click.
+   ou := obj_under_cursor(0, 0);
+   ouname := "";
+   if (ou) then begin
+      call obj_label(ou);
+      ouname := g_label;
+   end
+
    debug_msg("WORLD:calib mouse=" + mx + "," + my
       + " btns=" + btns
       + " under=" + under
       + " cursor=" + g_cursor
       + " match=" + (under == g_cursor)
-      + " screen=" + get_screen_width + "x" + get_screen_height);
+      + " screen=" + get_screen_width + "x" + get_screen_height
+      + " obj=" + ouname + "|");
 end
 
 /*
@@ -606,7 +626,8 @@ procedure scan_do(variable level, variable dojump) begin
          dists[n] := tile_distance(here, tile_num(obj));
          // Cached once per object: grouping compares names repeatedly, and
          // asking the engine for each comparison would be hundreds of calls.
-         names[n] := obj_name(obj);
+         call obj_label(obj);
+         names[n] := g_label;
          n := n + 1;
       end
       i := i + 1;
@@ -762,6 +783,28 @@ procedure msg_marker begin
    debug_msg("WORLD:marker ANCPROBE7F3C9D51|");
 end
 
+/*
+ * obj_label  --  the object's name, plus whether it is locked or open.
+ *
+ * Sets g_label. Doors are the case that matters: "there is a door" and "there
+ * is a door you cannot open" are different facts, and the second one is the
+ * reason a click on it appears to do nothing at all.
+ *
+ * The name is the game's own. "locked" and "open" are ours, in the same
+ * category as distances and bearings -- scaffolding describing how to get
+ * around, which the game has no phrase for because it simply shows you.
+ */
+procedure obj_label(variable obj) begin
+   g_label := obj_name(obj);
+   if (obj_type(obj) != OBJ_TYPE_CRITTER) then begin
+      if (obj_is_locked(obj)) then begin
+         g_label := g_label + ", locked";
+      end else if (obj_is_open(obj)) then begin
+         g_label := g_label + ", open";
+      end
+   end
+end
+
 procedure live_critter_at_cursor begin
    variable objs, total, i, obj;
    objs := tile_get_objs(g_cursor, elevation(dude_obj));
@@ -895,10 +938,11 @@ procedure describe_cursor begin
                // need a structural property to reject them by. Filtering on the
                // English name would break localisation, so log pid/fid/flags
                // and pick a rule from the data.
-               debug_msg("WORLD:obj pid=" + obj_pid(obj) + " fid=" + obj_art_fid(obj)
+               debug_msg("WORLD:objdbg pid=" + obj_pid(obj) + " fid=" + obj_art_fid(obj)
                   + " flags=" + get_flags(obj) + " ty=" + ty + " nm=" + obj_name(obj));
                if (count > 0) then names := names + ", ";
-               names := names + obj_name(obj);
+               call obj_label(obj);
+               names := names + g_label;
                count := count + 1;
             end
          end

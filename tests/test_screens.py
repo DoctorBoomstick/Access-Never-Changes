@@ -65,16 +65,29 @@ class TestCursorNames(unittest.TestCase):
         self.assertIn("interacts", screens.cursor_name(screens.CURSOR_COMMAND))
         self.assertIn("attacks", screens.cursor_name(screens.CURSOR_TARGETING))
 
-    def test_unknown_cursors_claim_nothing(self):
-        """These were once announced as Skilldex skills on the strength of
-        sfall's docs. Live logs showed the value tracking the direction the view
-        had just scrolled. An unknown mode now reports a number and the one fact
-        that is definitely true about it."""
-        for mode in (5, 7, 8, 9, 10):
-            text = screens.cursor_name(mode)
-            self.assertIn(str(mode), text)
-            self.assertNotIn("Skilldex", text)
-            self.assertIn("numpad 0", text)
+    def test_skill_cursors_are_named(self):
+        """Measured by arming each Skilldex key against the live game.
+
+        These were once announced as Skilldex skills on sfall's word alone,
+        then "corrected" to scroll cursors when the same values turned up while
+        the view scrolled. The probe settled it: the values ARE skills, and
+        something else evidently writes direction values into the same variable
+        during a scroll.
+        """
+        self.assertEqual(screens.armed_skill(4), "First Aid")
+        self.assertEqual(screens.armed_skill(6), "Lockpick")
+        self.assertEqual(screens.armed_skill(10), "Repair")
+        self.assertIn("Lockpick", screens.cursor_name(6))
+
+    def test_sneak_has_no_cursor_of_its_own(self):
+        """Sneak is a toggle, not something you aim, so the enum skips it --
+        which is why the skill numbering has a gap where it would be."""
+        self.assertIsNone(screens.armed_skill(screens.CURSOR_MOVEMENT))
+
+    def test_a_mode_outside_the_known_set_claims_nothing(self):
+        text = screens.cursor_name(99)
+        self.assertIn("99", text)
+        self.assertIn("numpad 0", text)
 
     def test_unknown_is_none_not_a_guess(self):
         self.assertIsNone(screens.cursor_name(None))

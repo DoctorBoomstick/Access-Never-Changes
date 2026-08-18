@@ -52,7 +52,7 @@ TARGET_STEPS = (0, -4, -8, -12, -16, -20, -26, -32)
 
 _CALIB = re.compile(
     r"WORLD:calib mouse=(-?\d+),(-?\d+) btns=(-?\d+) under=(-?\d+) "
-    r"cursor=(-?\d+) match=(-?\d+) screen=(\d+)x(\d+)"
+    r"cursor=(-?\d+) match=(-?\d+) screen=(\d+)x(\d+) obj=([^|]*)\|"
 )
 
 # Screen-pixel motion to (row, column) motion, measured live: 59 pixels right
@@ -82,6 +82,7 @@ class Reading(NamedTuple):
     look: int       # hex the player selected with the numpad
     width: int
     height: int
+    obj: str        # what the engine says a click would act on, "" for nothing
 
     @property
     def on_target(self) -> bool:
@@ -134,41 +135,42 @@ class Aimer:
                         x=int(m.group(1)), y=int(m.group(2)),
                         under=int(m.group(4)), look=int(m.group(5)),
                         width=int(m.group(7)), height=int(m.group(8)),
+                        obj=m.group(9).strip(),
                     )
             if found:
                 return found
             time.sleep(0.03)
         return None
 
-    def confirm_target(self, per_step: float = 0.30):
-        """Nudge upward until the engine confirms a critter under the crosshair.
+    def confirm_object(self):
+        """Nudge upward until the engine says a click would act on something.
 
-        Returns (name, dy) with the name the engine gave, or (None, dy) if it
-        never saw anything. The caller must not click on (None, ...) -- an
-        unconfirmed attack in Fallout swings at empty ground and spends the
-        action points anyway.
+        Returns (name, dy), or (None, dy) if nothing was ever reported. The
+        caller must not click on (None, ...) when it expected an object: an
+        unconfirmed click acts on empty ground and, in combat, spends the action
+        points anyway.
 
-        Requires the targeting cursor to already be up, since HOOK_TARGETOBJECT
-        only fires for it.
+        Fallout picks objects by their drawn sprite, which stands above the hex
+        they occupy, so a pointer sitting dead centre on a hex is aimed at the
+        ground beneath whatever is standing there. The offset is searched for
+        rather than assumed -- a fixed 12 pixels landed on one ant and sailed
+        clean over the next.
 
-        Each step carries a one-pixel sideways jiggle. Hover events fire on
-        pointer *movement*, so the first probe -- which wants to test the hex
-        centre without moving at all -- would otherwise never produce one, and
-        would read as "nothing there" when the truth was "nobody asked".
+        This asks `obj_under_cursor`, which answers in every cursor mode, so the
+        same routine serves walking, attacking and using a skill. The earlier
+        version asked HOOK_TARGETOBJECT, which only fires for the combat
+        targeting cursor and so could never have verified a lockpick.
         """
         prev = 0
         for dy in TARGET_STEPS:
-            self._tail()  # drop anything from before this probe
-            move_mouse_relative(1, dy - prev, settle=0.06)
-            move_mouse_relative(-1, 0, settle=0.06)
-            prev = dy
-
-            deadline = time.time() + per_step
-            while time.time() < deadline:
-                for _valid_ev, valid, name in _TARGET.findall(self._tail()):
-                    if name and valid == "1":
-                        return name, dy
-                time.sleep(0.03)
+            if dy != prev:
+                move_mouse_relative(0, dy - prev, settle=0.05)
+                prev = dy
+            r = self.read()
+            if r is None:
+                return None, prev
+            if r.obj:
+                return r.obj, dy
         return None, prev
 
     # -- solving --------------------------------------------------------

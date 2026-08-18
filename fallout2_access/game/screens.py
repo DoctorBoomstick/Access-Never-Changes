@@ -102,19 +102,14 @@ def mode_name(mode: Optional[int]) -> str:
     return ", ".join(names) if names else "mode {}".format(mode)
 
 
-# Cursor modes reported by the script's get_cursor_mode. These decide what a
-# left click does, which is information a sighted player reads off the cursor
-# art at a glance and a blind player otherwise has no access to at all.
+# Cursor modes reported by the script's get_cursor_mode. This decides what a
+# left click does, which is something a sighted player reads off the cursor's
+# shape without thinking about it.
 #
-# Only 0, 1 and 2 are named here, because only those three are actually known.
-# sfall's docs say modes 4-10 are Skilldex skill cursors, and this file used to
-# announce them that way -- wrongly. Live logs show the value tracking the
-# DIRECTION the view was just scrolled (W gives 8, E gives 5, SE 7, NW 9), which
-# is nothing to do with skills; they are almost certainly the engine's
-# directional map-scroll cursors. "Almost certainly" is not good enough to put
-# a name to, so an unknown mode is reported as a number plus the one thing that
-# is definitely true about it: it is not the movement cursor, and there is a key
-# that fixes that.
+# The skill numbering was measured by arming each Skilldex key in turn against
+# the live game, not taken from documentation. Note the gap where Sneak would
+# be: Sneak is a toggle rather than something you aim, so it has no cursor of
+# its own and the enum skips it.
 CURSOR_MOVEMENT = 0
 CURSOR_COMMAND = 1
 CURSOR_TARGETING = 2
@@ -125,6 +120,24 @@ CURSOR_NAMES = {
     CURSOR_TARGETING: "targeting cursor. A click attacks",
 }
 
+# mode -> the skill a click will apply.
+SKILL_CURSORS = {
+    4: "First Aid",
+    5: "Doctor",
+    6: "Lockpick",
+    7: "Steal",
+    8: "Traps",
+    9: "Science",
+    10: "Repair",
+}
+
+
+def armed_skill(mode: Optional[int]) -> Optional[str]:
+    """The skill a click would use, or None if the cursor is not holding one."""
+    if mode is None:
+        return None
+    return SKILL_CURSORS.get(mode)
+
 
 def cursor_name(mode: Optional[int]) -> Optional[str]:
     """What a left click will do right now, or None if we cannot say."""
@@ -132,10 +145,12 @@ def cursor_name(mode: Optional[int]) -> Optional[str]:
         return None
     if mode in CURSOR_NAMES:
         return CURSOR_NAMES[mode]
-    return (
-        "cursor mode {}. Not the movement cursor. Press numpad 0 to "
-        "walk".format(mode)
-    )
+    skill = SKILL_CURSORS.get(mode)
+    if skill:
+        return "{} ready. A click uses it".format(skill)
+    # Never seen one outside 0-10, but an unknown mode gets a number and the
+    # one thing that is definitely true, rather than a confident guess.
+    return "cursor mode {}. Not the movement cursor. Press numpad 0 to walk".format(mode)
 
 
 def detect(proc: Process, in_game: bool = False) -> str:
