@@ -41,32 +41,63 @@ CHARGEN = "chargen"
 WORLD = "world"
 UNKNOWN = "unknown"
 
-# Sub-modes reported by the in-game script's get_game_mode bitmask.
+# Sub-modes reported by the in-game script's get_game_mode bitmask, from
+# sfall.h. Every one of these is worth naming: an unnamed mode is announced as a
+# bare number, and "mode 8" told a player nothing while the escape menu sat open
+# over their game and quietly swallowed every click.
 MODE_WORLDMAP = 0x1
+MODE_LOCALMAP = 0x2
 MODE_DIALOG = 0x4
+MODE_ESCMENU = 0x8
+MODE_SAVEGAME = 0x10
+MODE_LOADGAME = 0x20
 MODE_COMBAT = 0x40
+MODE_OPTIONS = 0x80
+MODE_HELP = 0x100
 MODE_CHARSCREEN = 0x200
 MODE_PIPBOY = 0x400
+MODE_PCOMBAT = 0x800   # the player's own combat; set alongside COMBAT
 MODE_INVENTORY = 0x1000
+MODE_AUTOMAP = 0x2000
 MODE_SKILLDEX = 0x4000
+MODE_INTFACEUSE = 0x8000
+MODE_INTFACELOOT = 0x10000
 MODE_BARTER = 0x20000
+MODE_HEROWIN = 0x40000
+MODE_DIALOGVIEW = 0x80000
+MODE_COUNTERWIN = 0x100000
+MODE_PAUSEWIN = 0x200000
 
+# Order matters only in that the most informative name should come first when
+# several bits are set. LOCALMAP and PCOMBAT are absent on purpose: the first
+# means "on a map", which is the ordinary state, and the second only ever
+# accompanies COMBAT and would say it twice.
 MODE_NAMES = [
     (MODE_DIALOG, "dialogue"),
     (MODE_BARTER, "barter"),
     (MODE_INVENTORY, "inventory"),
+    (MODE_INTFACELOOT, "loot"),
+    (MODE_INTFACEUSE, "use item on"),
     (MODE_PIPBOY, "pipboy"),
     (MODE_SKILLDEX, "skilldex"),
     (MODE_CHARSCREEN, "character screen"),
+    (MODE_AUTOMAP, "automap"),
     (MODE_WORLDMAP, "world map"),
+    (MODE_ESCMENU, "escape menu"),
+    (MODE_SAVEGAME, "save game"),
+    (MODE_LOADGAME, "load game"),
+    (MODE_OPTIONS, "options"),
+    (MODE_HELP, "help"),
+    (MODE_HEROWIN, "party member screen"),
+    (MODE_DIALOGVIEW, "dialogue"),
+    (MODE_COUNTERWIN, "quantity"),
+    (MODE_PAUSEWIN, "paused"),
     (MODE_COMBAT, "combat"),
 ]
 
 
-# get_game_mode returns a BITMASK, and several bits can be set at once. These
-# three do not hide the map, so hexes still mean something while they are set.
-MODE_LOCALMAP = 0x2
-MODE_PCOMBAT = 0x800  # player's own combat; set alongside COMBAT, not instead
+# Several bits can be set at once, and these three do not hide the map, so
+# hexes still mean something while they are set.
 MAP_MODES = MODE_LOCALMAP | MODE_COMBAT | MODE_PCOMBAT
 
 
@@ -93,13 +124,12 @@ def is_map_mode(mode: Optional[int]) -> bool:
 
 
 def mode_name(mode: Optional[int]) -> str:
-    """Human name for a get_game_mode bitmask. 0 means the normal map view."""
+    """Human name for a get_game_mode bitmask."""
     if mode is None:
         return "unknown"
-    if mode == 0:
-        return "exploring"
     names = [name for bit, name in MODE_NAMES if mode & bit]
-    return ", ".join(names) if names else "mode {}".format(mode)
+    # No panel bits set means the plain map view, whether or not LOCALMAP is on.
+    return ", ".join(names) if names else "exploring"
 
 
 # Cursor modes reported by the script's get_cursor_mode. This decides what a

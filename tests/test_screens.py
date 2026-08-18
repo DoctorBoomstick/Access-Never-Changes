@@ -97,6 +97,21 @@ class TestModeNames(unittest.TestCase):
     def test_zero_is_exploring(self):
         self.assertEqual(screens.mode_name(0), "exploring")
 
+    def test_localmap_alone_is_still_exploring(self):
+        self.assertEqual(screens.mode_name(screens.MODE_LOCALMAP), "exploring")
+
+    def test_every_panel_mode_has_a_name(self):
+        """An unnamed mode is announced as a bare number. "mode 8" told a
+        player nothing while the escape menu sat open over their game and
+        swallowed every click -- the game looked like it had stopped
+        responding, and the mod knew exactly why and did not say."""
+        for bit, _name in screens.MODE_NAMES:
+            self.assertNotIn("mode ", screens.mode_name(bit), hex(bit))
+
+    def test_the_escape_menu_is_named(self):
+        self.assertEqual(screens.mode_name(0x8), "escape menu")
+        self.assertFalse(screens.is_map_mode(0x8))
+
     def test_combined_modes(self):
         self.assertIn("combat", screens.mode_name(screens.MODE_COMBAT))
 

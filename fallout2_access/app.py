@@ -514,7 +514,18 @@ class App:
         if self.hwnd is None:
             return
         try:
-            if button == "left" and screens.is_map_mode(self.world.log.game_mode):
+            mode = self.world.log.game_mode
+            if button == "left" and not screens.is_map_mode(mode):
+                # Something is over the map, so there is no hex to aim at and
+                # the click goes to whatever panel is up. Say which -- an escape
+                # menu left open swallows every click in the world, and with no
+                # way to see it the game simply appears to have stopped
+                # responding. That cost a whole debugging round.
+                self.ann.answer("{}.".format(screens.mode_name(mode).capitalize()))
+                guarded_click(self.hwnd, button)
+                return
+
+            if button == "left":
                 if self.aimer is None:
                     return
                 ok, reading, why = self.aimer.aim()
