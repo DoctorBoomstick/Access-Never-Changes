@@ -53,6 +53,12 @@ RECONNECT_SECONDS = 2.0
 # costs 200ms, far below the time any real screen change takes.
 SCREEN_STABLE_TICKS = 4
 
+# Long enough for the in-game script's cursor-restore window (8 script ticks) to
+# finish after the last world read. Reading the world changes the cursor mode,
+# and the engine applies the change a frame late, so it cannot be put back
+# instantly -- see the note in gl_world.ssl's calibrate.
+CURSOR_SETTLE = 0.35
+
 MAIN_MENU_HELP = (
     "Main menu. Press N for new game, L to load a game, I for the intro, "
     "O for options, C for credits, E to exit."
@@ -546,6 +552,14 @@ class App:
                 # cursor mode, and it sat in the servo loop. Aiming still
                 # verifies the HEX with the game, which is what movement needs.
                 del expects_object
+
+                # Let the script put the cursor mode back before clicking.
+                # Reading the world disturbs it and the engine applies that a
+                # frame or two later, so the script restores it over a short
+                # window -- and aiming's last act is a read. Clicking inside
+                # that window is what made every click land with the wrong
+                # cursor and do nothing at all.
+                time.sleep(CURSOR_SETTLE)
             guarded_click(self.hwnd, button)
         except FocusLost:
             self.ann.answer("Game is not focused.")

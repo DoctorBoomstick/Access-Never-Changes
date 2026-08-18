@@ -496,6 +496,21 @@ procedure calibrate begin
       + " match=" + (under == g_cursor)
       + " screen=" + get_screen_width + "x" + get_screen_height
       + " obj=" + ouname + "|");
+
+   // Reading the world moves the cursor. Several of the engine's query
+   // functions decide what a click here would do and leave that decision
+   // behind, and the change is DEFERRED -- get_cursor_mode still reads the old
+   // value on the next line, so it cannot be saved and put back on the spot.
+   //
+   // Measured: numpad 5 (describe) leaves mode 4, numpad 2 (calibrate) leaves
+   // mode 6, while doing nothing, moving the mouse, or stepping the look cursor
+   // leave it alone. Stepping is unaffected only because it already opens a
+   // restore window -- which is the fix, applied here too.
+   //
+   // This matters because the aim servo calibrates several times per click: the
+   // player set the movement cursor, aiming replaced it, and the click then did
+   // nothing at all.
+   g_restore_ticks := 8;
 end
 
 /*
@@ -757,6 +772,7 @@ procedure scan_do(variable level, variable dojump) begin
       + "|" + dists[chosen]
       + "|" + rotation_to_tile(here, tile_num(cands[chosen]))
       + "|" + level + "|");
+   g_restore_ticks := 8;
 end
 
 procedure scan_instance(variable delta) begin
@@ -980,4 +996,19 @@ procedure describe_cursor begin
    // to ours without always starting a new line, and object names are the last
    // field here. Everything after the bar is discarded.
    debug_msg("WORLD:hex " + g_cursor + " dist " + dist + " : " + names + "|");
+
+   // Reading the world moves the cursor. Several of the engine's query
+   // functions decide what a click here would do and leave that decision
+   // behind, and the change is DEFERRED -- get_cursor_mode still reads the old
+   // value on the next line, so it cannot be saved and put back on the spot.
+   //
+   // Measured: numpad 5 (describe) leaves mode 4, numpad 2 (calibrate) leaves
+   // mode 6, while doing nothing, moving the mouse, or stepping the look cursor
+   // leave it alone. Stepping is unaffected only because it already opens a
+   // restore window -- which is the fix, applied here too.
+   //
+   // This matters because the aim servo calibrates several times per click: the
+   // player set the movement cursor, aiming replaced it, and the click then did
+   // nothing at all.
+   g_restore_ticks := 8;
 end
