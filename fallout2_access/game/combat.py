@@ -76,6 +76,14 @@ class CombatWatcher:
         self.whose_turn: Optional[str] = None
         self.target_name: Optional[str] = None
         self.target_valid = False
+        # Fallout prints its own account of every blow to the interface bar --
+        # "You hit the Giant Ant for 10 points of damage." Once the mod can read
+        # that buffer it is strictly better than anything assembled here: the
+        # engine's own wording, already translated, including the body part
+        # struck, which this file deliberately refuses to name in English.
+        # Turn order and action points stay ours, because the game never writes
+        # those anywhere.
+        self.narrate_damage = True
 
     def reset(self) -> None:
         self.__init__()
@@ -185,6 +193,8 @@ class CombatWatcher:
         return ["{}.".format(cur)]
 
     def _damage(self, f: List[str]) -> List[str]:
+        if not self.narrate_damage:
+            return []
         if len(f) < 3:
             return []
         attacker, target, amount = f[0], f[1], f[2]
@@ -212,6 +222,8 @@ class CombatWatcher:
         return [text + "."]
 
     def _miss(self, f: List[str]) -> List[str]:
+        if not self.narrate_damage:
+            return []
         if len(f) < 3:
             return []
         try:

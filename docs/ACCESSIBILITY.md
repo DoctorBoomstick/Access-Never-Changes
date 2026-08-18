@@ -123,6 +123,20 @@ The skill cursors are announced by number rather than name: sfall reports modes
 skill name on the thing that decides whether you walk or pick a lock is worse
 than a number.
 
+## The game's own words
+
+Fallout talks to you along the bottom of the screen — "You see: a door", "It's
+locked", "You hit the Giant Ant for 10 points of damage." The mod reads that
+strip directly out of the game and speaks it.
+
+This is the preferred source for anything about the world. It's the engine's own
+sentences: already written, already translated, and describing exactly what a
+sighted player was told, rather than something the mod reconstructed in English.
+Once it's available the mod stops narrating blows itself and defers to it.
+
+Turn order and action points stay the mod's own, because the game never writes
+those anywhere.
+
 ## Combat
 
 ### Attacking

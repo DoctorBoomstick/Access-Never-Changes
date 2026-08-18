@@ -134,6 +134,15 @@ procedure start begin
       register_hook_proc(HOOK_KEYPRESS, on_key);
       g_cursor := tile_num(dude_obj);
       g_lastdude := g_cursor;
+      // Print a beacon into the interface bar's display window. The Python
+      // side finds it by searching memory for this exact text, which is how it
+      // learns where that buffer lives -- it is heap-allocated and moves every
+      // launch, and there is no static pointer to it anywhere in the exe.
+      //
+      // Planting our own landmark beats hunting for the buffer's shape: empty
+      // heap looks just like an empty message record, so a structural search
+      // finds hundreds of false positives. This finds exactly one thing.
+      display_msg("Access Never Changes ready.");
       debug_msg("WORLD:ready");
    end else begin
       call poll_state;

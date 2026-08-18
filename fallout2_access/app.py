@@ -28,6 +28,7 @@ from .game import screens
 from .game.aim import Aimer
 from .game.chargen import CharGen
 from .game.combat import CombatWatcher
+from .game.displaywin import DisplayWindow
 from .game.premade import PremadeScreen
 from .game.scanner import Scanner
 from .game.worldlog import HexReading, WorldLog
@@ -467,6 +468,9 @@ class App:
                   flush=True)
         self.world = WorldWatcher(WorldLog(log_path))
         self.aimer = Aimer(self.hwnd, log_path) if self.hwnd else None
+        # The game's own prose. Located lazily: the beacon it keys off is only
+        # printed once a game is actually loaded.
+        self.display = DisplayWindow(self.proc)
         self.watchers = {
             screens.MAIN_MENU: MainMenuWatcher(),
             screens.SELECT: SelectWatcher(PremadeScreen(self.proc)),
@@ -618,6 +622,27 @@ class App:
             return
         getattr(watcher, what, lambda _a: None)(self.ann)
 
+    def pump_display(self) -> None:
+        """Speak whatever the game has written along the bottom of the screen.
+
+        These are the engine's own sentences, so they are preferred over
+        anything the mod could assemble: already written, already translated,
+        and describing exactly what a sighted player was told.
+        """
+        if not self.display.located:
+            # Only worth looking once a session is live; before a game loads
+            # the beacon has not been printed and the scan is wasted work.
+            if not self.world.log.session_live:
+                return
+            if not self.display.locate():
+                return
+            print("[app] display window at 0x{:08X}".format(self.display.anchor),
+                  flush=True)
+            # The engine narrates its own blows now, so stop assembling ours.
+            self.world.combat.narrate_damage = False
+        for line in self.display.poll():
+            self.ann.say(line, force=True)
+
     def tick(self) -> None:
         if not self.proc:
             return
@@ -625,6 +650,7 @@ class App:
         # us a game session is live, and memory alone mistakes the map for the
         # premade-character screen.
         self.world.pump()
+        self.pump_display()
         detected = screens.detect(self.proc, in_game=self.world.log.session_live)
 
         if detected != self.screen:
