@@ -38,6 +38,9 @@ Then, with the game running:
 python f2access.py
 ```
 
+Run that **from this folder**. Only the two compiled scripts belong in the game
+directory; the Python half stays here.
+
 Optional: `pip install pynput` for the hotkeys, `pip install pywin32` for SAPI
 speech if you do not use NVDA.
 
@@ -53,6 +56,9 @@ what gets announced. The short version:
 | Numpad 8 | bring the cursor back to you |
 | Numpad ✳ | walk there — or attack, if an enemy is standing there |
 | Numpad + | where am I / whose turn is it |
+| `[` / `]` | previous / next thing the scanner can see |
+| `Shift+[` / `Shift+]` | change scanner category |
+| `/` | move the look cursor to the scanned thing |
 
 **Do not hold Ctrl while using the numpad.** sfall binds Ctrl plus the numpad to
 the game speed controls. [docs/CONTROLS.md](docs/CONTROLS.md) covers that and

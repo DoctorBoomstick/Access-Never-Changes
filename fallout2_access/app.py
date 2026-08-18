@@ -29,6 +29,7 @@ from .game.aim import Aimer
 from .game.chargen import CharGen
 from .game.combat import CombatWatcher
 from .game.premade import PremadeScreen
+from .game.scanner import Scanner
 from .game.worldlog import HexReading, WorldLog
 from .input.send import (
     FocusLost,
@@ -297,6 +298,7 @@ class WorldWatcher(Watcher):
     def __init__(self, log: WorldLog) -> None:
         self.log = log
         self.combat = CombatWatcher()
+        self.scanner = Scanner()
         self._queue: list = []
         self._mode: Optional[int] = None
         self._mute_cursor_until = 0.0
@@ -320,7 +322,14 @@ class WorldWatcher(Watcher):
         logged it, and no one ever said so.
         """
         for line in self.log.poll():
-            if line.startswith("COMBAT:"):
+            if line.startswith("SCAN:obj"):
+                # Furniture survey: pid, flags and type for every object the
+                # scanner considered. Logged so the filter can be derived from
+                # real data instead of guessed at. Never spoken.
+                continue
+            elif line.startswith("SCAN:"):
+                self._queue.extend(self.scanner.handle(line))
+            elif line.startswith("COMBAT:"):
                 # Combat speaks even when the mod thinks another screen is up.
                 # Being attacked is not something to withhold because a screen
                 # detector is unsure.

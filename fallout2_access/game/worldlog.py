@@ -25,6 +25,8 @@ PREFIX = "WORLD:"
 # kept as separate scripts so a bug in one cannot crash the other, but there is
 # only one way for either to get text out of the engine.
 COMBAT_PREFIX = "COMBAT:"
+# The scanner also writes on this channel, from gl_world.ssl.
+SCAN_PREFIX = "SCAN:"
 
 # "WORLD:hex 17488 dist 0 : you, Tree|"
 # Contents stop at the terminating bar. The engine appends its own debug output
@@ -88,6 +90,9 @@ class WorldLog:
             return []
 
         for line in chunk.splitlines():
+            if SCAN_PREFIX in line:
+                out.append(line[line.index(SCAN_PREFIX):].strip())
+                continue
             if COMBAT_PREFIX in line:
                 combat = line[line.index(COMBAT_PREFIX):].strip()
                 out.append(combat)

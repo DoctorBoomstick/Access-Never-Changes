@@ -181,6 +181,23 @@ def install(game: str, check_only: bool, replace_config: bool) -> int:
                 fh.write("\n".join(patched) + "\n")
             print("  {}: written (original kept alongside it)".format(filename))
 
+    # -- stale copies --------------------------------------------------
+    #
+    # This mod was developed inside a game folder before it became a repo, so
+    # an older copy of the Python half may still be sitting there. Running that
+    # one silently gives you an old mod, and the symptom -- a fix that plainly
+    # works but appears to do nothing -- is maddening to chase. Only the two
+    # .int files belong in the game folder; f2access.py runs from here.
+    strays = [name for name in ("f2access.py", "fallout2_access")
+              if os.path.exists(os.path.join(game, name))]
+    if strays:
+        print()
+        print("  NOTE: an older copy of the mod is in the game folder:")
+        for name in strays:
+            print("        {}".format(os.path.join(game, name)))
+        print("        Run f2access.py from THIS folder instead, or delete")
+        print("        those, or you will be running the old version.")
+
     print()
     if check_only:
         print("Nothing was changed (--check).")
