@@ -84,7 +84,7 @@ variable g_scan_cat := 0;
 variable g_scan_type := 0;
 variable g_scan_inst := 0;
 variable g_restore_ticks := 0;
-variable g_savedcursor := 0;
+variable g_playercursor := 0;
 variable g_label := "";
 variable g_movestart := -1;
 variable g_moving := 0;
@@ -194,13 +194,16 @@ procedure poll_state begin
    c := get_cursor_mode;
    if (g_restore_ticks > 0) then begin
       g_restore_ticks := g_restore_ticks - 1;
-      if (c != g_savedcursor) then begin
-         set_cursor_mode(g_savedcursor);
+      if (c != g_playercursor) then begin
+         set_cursor_mode(g_playercursor);
          c := get_cursor_mode;
       end
       g_lastcursormode := c;
    end else if (c != g_lastcursormode) then begin
+      // Nothing of ours is in flight, so this is the player's own doing -- a
+      // Skilldex key, a right click. Remember it as what to restore to.
       g_lastcursormode := c;
+      g_playercursor := c;
       debug_msg("WORLD:cursormode " + c);
    end
 
@@ -404,11 +407,7 @@ end
  * movement cursor rather than being preserved.
  */
 procedure recenter_view begin
-   // Remember what the cursor was, because scrolling is about to change it and
-   // we want it put back exactly. Forcing it to movement instead would disarm
-   // a skill the player had just readied -- press 2 for Lockpick, step the look
-   // cursor onto the door, and the lockpick is gone before you can click.
-   g_savedcursor := get_cursor_mode;
+   // Scrolling changes the cursor too; poll_state restores the player's own.
    tile_set_center(g_cursor);
    // The engine sets the scroll cursor a frame or two later, so it cannot be
    // put back here -- poll_state cleans it up over the next few ticks instead.
@@ -429,7 +428,7 @@ end
  * g_cursor, the screen point is right and a click is safe.
  */
 procedure calibrate begin
-   variable mx, my, under, btns, winid, barid, ou, ouname, savedmode;
+   variable mx, my, under, btns, winid, barid, ou, ouname;
    mx := get_mouse_x;
    my := get_mouse_y;
    under := tile_under_cursor;
@@ -475,16 +474,20 @@ procedure calibrate begin
    // the side effect landed on every single click the mod made: the player set
    // the movement cursor, the mod quietly replaced it while aiming, and the
    // click then did nothing at all. Save the mode and put it back.
-   savedmode := get_cursor_mode;
-   ou := obj_under_cursor(0, 0);
+   // NOTE: obj_under_cursor is deliberately NOT called here.
+   //
+   // It changes the action cursor as a side effect -- asking the engine what is
+   // under the pointer makes it decide what a click there would do, and it
+   // leaves that decision behind. Worse, the change is DEFERRED: get_cursor_mode
+   // still reads the old value immediately afterwards, so it cannot even be put
+   // back on the spot.
+   //
+   // Calibration is what the aim servo calls, several times per click, so the
+   // side effect landed on every click the mod made: the player set the
+   // movement cursor, aiming quietly replaced it, and the click did nothing at
+   // all. A query that mutates the thing being measured has no place in the
+   // measuring loop.
    ouname := "";
-   if (ou) then begin
-      call obj_label(ou);
-      ouname := g_label;
-   end
-   if (get_cursor_mode != savedmode) then begin
-      set_cursor_mode(savedmode);
-   end
 
    debug_msg("WORLD:calib mouse=" + mx + "," + my
       + " btns=" + btns
@@ -880,6 +883,8 @@ procedure force_action_cursor begin
 
    before := get_cursor_mode;
    set_cursor_mode(want);
+   g_playercursor := want;
+   g_restore_ticks := 0;
    g_lastcursormode := get_cursor_mode;
 
    // Always answer, but do not give the same long answer twice. Silence is the

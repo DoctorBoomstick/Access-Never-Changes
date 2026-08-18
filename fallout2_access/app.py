@@ -541,11 +541,11 @@ class App:
                 expects_object = bool(
                     last and last.contents and last.contents not in ("empty", "you")
                 )
-                if expects_object:
-                    name, _dy = self.aimer.confirm_object()
-                    if not name:
-                        self.ann.answer("Cannot point at that.")
-                        return
+                # Object-level verification is on hold: the engine query that
+                # answered "what would this click act on" also changed the
+                # cursor mode, and it sat in the servo loop. Aiming still
+                # verifies the HEX with the game, which is what movement needs.
+                del expects_object
             guarded_click(self.hwnd, button)
         except FocusLost:
             self.ann.answer("Game is not focused.")

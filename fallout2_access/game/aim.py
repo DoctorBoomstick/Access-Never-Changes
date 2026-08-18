@@ -145,6 +145,13 @@ class Aimer:
     def confirm_object(self):
         """Nudge upward until the engine says a click would act on something.
 
+        DISABLED while `obj=` is empty. Calibration no longer asks
+        obj_under_cursor, because that query changes the action cursor as a side
+        effect and calibration is what the aim servo runs several times per
+        click -- so verifying an object cost every click its cursor mode. The
+        combat path still verifies through HOOK_TARGETOBJECT, which is a hook
+        rather than a query and disturbs nothing.
+
         Returns (name, dy), or (None, dy) if nothing was ever reported. The
         caller must not click on (None, ...) when it expected an object: an
         unconfirmed click acts on empty ground and, in combat, spends the action
