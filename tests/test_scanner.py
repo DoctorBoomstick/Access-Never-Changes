@@ -1,4 +1,8 @@
-"""The scanner's narration."""
+"""The scanner's narration.
+
+Line format, all fields terminated so engine noise cannot leak in:
+    SCAN:entry cat|typeIdx|nTypes|name|instIdx|nInsts|dist|rotation|level|
+"""
 
 import unittest
 
@@ -13,56 +17,70 @@ def say(lines):
     return s, out
 
 
-class TestScannerNarration(unittest.TestCase):
-    def test_entry_reads_name_bearing_distance_and_position(self):
-        _s, out = say(["SCAN:entry 0|0|3|Giant Ant|4|0|0|"])
-        self.assertEqual(out, ["Giant Ant, north east 4 hexes, 1 of 3."])
+class TestLevels(unittest.TestCase):
+    def test_category_change_says_everything(self):
+        _s, out = say(["SCAN:entry 2|0|12|Torch|0|6|4|0|2|"])
+        self.assertEqual(out, ["Scenery. Torch, 6, nearest north east 4 hexes. 1 of 12."])
 
-    def test_category_is_announced_only_when_it_changed(self):
-        _s, out = say([
-            "SCAN:entry 0|0|3|Giant Ant|4|0|1|",   # category switch
-            "SCAN:entry 0|1|3|Radscorpion|7|2|0|", # stepping within it
-        ])
-        self.assertTrue(out[0].startswith("Critters. "))
-        self.assertFalse(out[1].startswith("Critters"))
+    def test_type_change_drops_the_category(self):
+        _s, out = say(["SCAN:entry 2|1|12|Rocks|0|3|2|1|1|"])
+        self.assertEqual(out, ["Rocks, 3, nearest east 2 hexes. 2 of 12."])
 
+    def test_instance_change_drops_the_name(self):
+        """Stepping between six torches should not say "torch" six times."""
+        _s, out = say(["SCAN:entry 2|0|12|Torch|2|6|7|3|0|"])
+        self.assertEqual(out, ["south west 7 hexes, 3 of 6."])
+
+    def test_lone_instance_keeps_its_name(self):
+        """With only one of a thing, a bare bearing would be meaningless."""
+        _s, out = say(["SCAN:entry 0|0|1|Giant Ant|0|1|4|0|0|"])
+        self.assertEqual(out, ["Giant Ant, north east 4 hexes, 1 of 1."])
+
+    def test_single_of_a_type_omits_the_count(self):
+        _s, out = say(["SCAN:entry 0|0|3|Klint|0|1|2|1|1|"])
+        self.assertEqual(out, ["Klint, east 2 hexes. 1 of 3."])
+
+
+class TestPhrasing(unittest.TestCase):
     def test_singular_hex(self):
-        _s, out = say(["SCAN:entry 1|0|1|Knife|1|4|0|"])
-        self.assertIn("west 1 hex,", out[0])
+        _s, out = say(["SCAN:entry 1|0|1|Knife|0|1|1|4|1|"])
+        self.assertIn("west 1 hex.", out[0])
 
-    def test_distance_zero_is_here_not_zero_hexes(self):
-        _s, out = say(["SCAN:entry 1|0|1|Knife|0|0|0|"])
+    def test_distance_zero_is_here(self):
+        _s, out = say(["SCAN:entry 1|0|1|Knife|0|1|0|0|1|"])
         self.assertIn("here", out[0])
         self.assertNotIn("0 hex", out[0])
 
-    def test_empty_category_says_so(self):
-        _s, out = say(["SCAN:none 2|"])
-        self.assertEqual(out, ["No scenery in sight."])
-
     def test_names_with_spaces_survive(self):
-        _s, out = say(["SCAN:entry 2|0|1|Block Hex Auto Inviso|2|1|0|"])
-        self.assertIn("Block Hex Auto Inviso", out[0])
+        _s, out = say(["SCAN:entry 0|0|1|Lesser Scorpion|0|2|3|2|1|"])
+        self.assertIn("Lesser Scorpion", out[0])
 
     def test_engine_noise_after_the_terminator_is_discarded(self):
-        _s, out = say(["SCAN:entry 0|0|1|Giant Ant|4|0|0|sequencing attack..."])
+        _s, out = say(["SCAN:entry 0|0|1|Giant Ant|0|1|4|0|0|sequencing attack..."])
         self.assertEqual(out, ["Giant Ant, north east 4 hexes, 1 of 1."])
 
+    def test_empty_category_says_so(self):
+        _s, out = say(["SCAN:none 1|"])
+        self.assertEqual(out, ["No items in sight."])
+
+
+class TestQuietLines(unittest.TestCase):
     def test_jump_is_silent(self):
-        """The hex readout that follows a jump says what is there, from the
-        game's own object names. Saying it twice helps nobody."""
         _s, out = say(["SCAN:jump 17488|"])
         self.assertEqual(out, [])
 
-    def test_survey_lines_are_not_narration(self):
+    def test_furniture_survey_is_not_narration(self):
         _s, out = say(["SCAN:obj pid=1 fid=2 flags=3 ty=5 screen=1 vis=1 nm=Rock|"])
         self.assertEqual(out, [])
 
-    def test_repeat_returns_the_last_entry(self):
-        s, _ = say(["SCAN:entry 0|0|2|Giant Ant|4|0|0|"])
-        self.assertEqual(s.repeat(), "Giant Ant, north east 4 hexes, 1 of 2.")
 
-    def test_repeat_is_cleared_when_a_category_empties(self):
-        s, _ = say(["SCAN:entry 0|0|2|Giant Ant|4|0|0|", "SCAN:none 0|"])
+class TestRepeat(unittest.TestCase):
+    def test_repeat_returns_the_last_entry(self):
+        s, _ = say(["SCAN:entry 2|0|12|Torch|0|6|4|0|2|"])
+        self.assertIn("Torch", s.repeat())
+
+    def test_repeat_cleared_when_a_category_empties(self):
+        s, _ = say(["SCAN:entry 2|0|12|Torch|0|6|4|0|2|", "SCAN:none 2|"])
         self.assertIsNone(s.repeat())
 
 

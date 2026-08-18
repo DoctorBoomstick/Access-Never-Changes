@@ -64,11 +64,13 @@
 #define ACT_SNAP            (-3)
 #define ACT_CALIB           (-4)
 #define ACT_MOVEMODE        (-5)
-#define ACT_SCAN_NEXT       (-6)
-#define ACT_SCAN_PREV       (-7)
+#define ACT_SCAN_TYPENEXT   (-6)
+#define ACT_SCAN_TYPEPREV   (-7)
 #define ACT_SCAN_CATNEXT    (-8)
 #define ACT_SCAN_CATPREV    (-9)
-#define ACT_SCAN_JUMP      (-10)
+#define ACT_SCAN_INSTNEXT  (-10)
+#define ACT_SCAN_INSTPREV  (-11)
+#define ACT_SCAN_JUMP      (-12)
 
 variable g_cursor := CURSOR_UNSET;
 variable g_lastmode := -1;
@@ -78,7 +80,8 @@ variable g_lastbtn := -1;
 variable g_lastunder := -1;
 variable g_hascritter := 0;
 variable g_scan_cat := 0;
-variable g_scan_idx := 0;
+variable g_scan_type := 0;
+variable g_scan_inst := 0;
 variable g_restore_ticks := 0;
 variable g_movestart := -1;
 variable g_movesettle := 0;
@@ -96,8 +99,9 @@ procedure force_action_cursor;
 procedure live_critter_at_cursor;
 procedure scan_list_type(variable cat);
 procedure scan_keep(variable obj);
-procedure scan_report(variable announce_cat);
-procedure scan_step(variable delta);
+procedure scan_do(variable level, variable dojump);
+procedure scan_instance(variable delta);
+procedure scan_type(variable delta);
 procedure scan_category(variable delta);
 procedure scan_jump;
 
@@ -297,21 +301,28 @@ procedure on_key begin
    else if (key == DIK_NUMPAD8) then dir := ACT_SNAP;
    else if (key == DIK_NUMPAD2) then dir := ACT_CALIB;
    else if (key == DIK_NUMPAD0) then dir := ACT_MOVEMODE;
-   // Shift inverts the brackets: stepping through entries is the frequent
-   // action and gets the bare key, changing category is rare and takes the
-   // modifier. key_pressed reads the live keyboard, which is why this works
-   // from inside a keypress hook.
+   // The brackets carry all three scanner levels, chosen so the frequent
+   // action needs no modifier at all:
+   //     [ ]         the type of thing -- torches, rocks, ants
+   //     shift [ ]   which one of that type
+   //     ctrl  [ ]   the category -- critters, items, scenery
+   // key_pressed reads the live keyboard, which is why modifiers work from
+   // inside a keypress hook.
    else if (key == DIK_LBRACKET) then begin
-      if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
+      if (key_pressed(DIK_LCONTROL) or key_pressed(DIK_RCONTROL)) then
          dir := ACT_SCAN_CATPREV;
+      else if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
+         dir := ACT_SCAN_INSTPREV;
       else
-         dir := ACT_SCAN_PREV;
+         dir := ACT_SCAN_TYPEPREV;
    end
    else if (key == DIK_RBRACKET) then begin
-      if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
+      if (key_pressed(DIK_LCONTROL) or key_pressed(DIK_RCONTROL)) then
          dir := ACT_SCAN_CATNEXT;
+      else if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
+         dir := ACT_SCAN_INSTNEXT;
       else
-         dir := ACT_SCAN_NEXT;
+         dir := ACT_SCAN_TYPENEXT;
    end
    else if (key == DIK_SLASH) then dir := ACT_SCAN_JUMP;
    else return;
@@ -325,10 +336,12 @@ procedure on_key begin
    else if (dir == ACT_DESCRIBE) then call describe_cursor;
    else if (dir == ACT_CALIB)    then call calibrate;
    else if (dir == ACT_MOVEMODE) then call force_action_cursor;
-   else if (dir == ACT_SCAN_NEXT)    then call scan_step(1);
-   else if (dir == ACT_SCAN_PREV)    then call scan_step(-1);
-   else if (dir == ACT_SCAN_CATNEXT) then call scan_category(1);
-   else if (dir == ACT_SCAN_CATPREV) then call scan_category(-1);
+   else if (dir == ACT_SCAN_TYPENEXT) then call scan_type(1);
+   else if (dir == ACT_SCAN_TYPEPREV) then call scan_type(-1);
+   else if (dir == ACT_SCAN_INSTNEXT) then call scan_instance(1);
+   else if (dir == ACT_SCAN_INSTPREV) then call scan_instance(-1);
+   else if (dir == ACT_SCAN_CATNEXT)  then call scan_category(1);
+   else if (dir == ACT_SCAN_CATPREV)  then call scan_category(-1);
    else if (dir == ACT_SCAN_JUMP)    then call scan_jump;
    else                               call step_cursor(dir);
 
@@ -462,6 +475,10 @@ end
 #define SCAN_SCENERY        (2)
 #define SCAN_CATEGORIES     (3)
 
+// Art index of the blank placeholder frame. Objects drawn with it are the
+// engine's own invisible furniture; see scan_keep.
+#define ART_INVISIBLE       (21)
+
 procedure scan_list_type(variable cat) begin
    if (cat == SCAN_CRITTERS) then return LIST_CRITTERS;
    if (cat == SCAN_ITEMS)    then return LIST_GROUNDITEMS;
@@ -491,12 +508,24 @@ procedure scan_keep(variable obj) begin
    ty := obj_type(obj);
    if (ty == OBJ_TYPE_SPATIAL) then return;
 
-   // Data collection for the furniture filter. Logged, never spoken.
-   debug_msg("SCAN:obj pid=" + obj_pid(obj) + " fid=" + obj_art_fid(obj)
-      + " flags=" + get_flags(obj) + " ty=" + ty
-      + " screen=" + obj_on_screen(obj)
-      + " vis=" + obj_is_visible_flag(obj)
-      + " nm=" + obj_name(obj) + "|");
+   // The engine's invisible furniture, rejected by the art it is drawn with.
+   //
+   // Derived from 81,000 logged samples rather than guessed at. Every one of
+   // Block Hex Auto Inviso, Blocking Hex (NoLight), Secret Blocking Hex, Exit
+   // Grid Map Marker and Light Source is drawn with fid 0x02000015 -- art index
+   // 21, the blank placeholder -- and not one of the 23 real object types seen
+   // uses it. Flags were the obvious candidate and turned out useless: the same
+   // bits appear on Chasm and Temple as on the blockers.
+   //
+   // Note this cannot be left to obj_on_screen. Block Hex Auto Inviso was
+   // reported on screen 9,492 times out of 28,480: the engine happily "draws"
+   // an invisible object.
+   //
+   // Critters are exempt because a critter's fid encodes animation state, not a
+   // scenery art index, so the comparison would be meaningless for them.
+   if (ty != OBJ_TYPE_CRITTER) then begin
+      if ((obj_art_fid(obj) bwand 0xFFF) == ART_INVISIBLE) then return;
+   end
 
    if (not obj_on_screen(obj)) then return;
    if (not obj_is_visible_flag(obj)) then return;
@@ -515,15 +544,25 @@ procedure scan_keep(variable obj) begin
 end
 
 /*
- * scan_report  --  read out entry g_scan_idx of category g_scan_cat.
+ * scan_do  --  collect, group, select, and either report or jump.
  *
- * The list is rebuilt from the engine on every keypress rather than cached.
- * Critters move; a remembered list would quietly describe a world that has
- * moved on, which is the same desync that sank the very first version of this
- * mod. Rebuilding costs a few engine calls and can never be wrong.
+ * Three levels, because a category can hold dozens of one thing and stepping
+ * through them one at a time is unusable:
+ *
+ *   category   critters / items / scenery        ctrl [ ]
+ *   type       "Torch", "Rocks", "Giant Ant"     [ ]
+ *   instance   which of the six torches          shift [ ]
+ *
+ * Types are ordered by their nearest member, and instances within a type by
+ * distance, so the first thing offered is always the closest.
+ *
+ * Rebuilt from the engine on every keypress. Critters move; a cached list would
+ * describe a world that had moved on, which is the desync that sank the first
+ * version of this mod.
  */
-procedure scan_report(variable announce_cat) begin
-   variable objs, total, i, obj, here, n, cands, dists, d, j, best, bestd, tile;
+procedure scan_do(variable level, variable dojump) begin
+   variable objs, total, i, j, k, obj, here, n, cands, dists, names;
+   variable best, bestd, tmp, ntypes, seen, typename, isnew, ninst, chosen;
 
    here := tile_num(dude_obj);
    objs := list_as_array(scan_list_type(g_scan_cat));
@@ -534,6 +573,7 @@ procedure scan_report(variable announce_cat) begin
 
    cands := temp_array(total + 1, 0);
    dists := temp_array(total + 1, 0);
+   names := temp_array(total + 1, 0);
    n := 0;
    i := 0;
    while (i < total) do begin
@@ -542,6 +582,9 @@ procedure scan_report(variable announce_cat) begin
       if (g_hascritter) then begin
          cands[n] := obj;
          dists[n] := tile_distance(here, tile_num(obj));
+         // Cached once per object: grouping compares names repeatedly, and
+         // asking the engine for each comparison would be hundreds of calls.
+         names[n] := obj_name(obj);
          n := n + 1;
       end
       i := i + 1;
@@ -552,16 +595,10 @@ procedure scan_report(variable announce_cat) begin
       return;
    end
 
-   // Clamp rather than wrap on rebuild: the world may have changed under us.
-   if (g_scan_idx >= n) then g_scan_idx := n - 1;
-   if (g_scan_idx < 0) then g_scan_idx := 0;
-
-   // Selection sort by distance, nearest first. n is small -- only what is on
-   // screen survives the filter -- so this stays cheap, and precomputed
-   // distances keep it to one engine call per object rather than one per
-   // comparison.
+   // Sort the whole list by distance. Grouping reads it in order, so that
+   // types come out nearest-first and so do the instances within each type.
    i := 0;
-   while (i <= g_scan_idx) do begin
+   while (i < n - 1) do begin
       best := i;
       bestd := dists[i];
       j := i + 1;
@@ -573,92 +610,117 @@ procedure scan_report(variable announce_cat) begin
          j := j + 1;
       end
       if (best != i) then begin
-         obj := cands[i];   cands[i] := cands[best];   cands[best] := obj;
-         d := dists[i];     dists[i] := dists[best];   dists[best] := d;
+         tmp := cands[i];  cands[i] := cands[best];  cands[best] := tmp;
+         tmp := dists[i];  dists[i] := dists[best];  dists[best] := tmp;
+         tmp := names[i];  names[i] := names[best];  names[best] := tmp;
       end
       i := i + 1;
    end
 
-   obj := cands[g_scan_idx];
-   tile := tile_num(obj);
-   debug_msg("SCAN:entry " + g_scan_cat + "|" + g_scan_idx + "|" + n
-      + "|" + obj_name(obj) + "|" + dists[g_scan_idx]
-      + "|" + rotation_to_tile(here, tile) + "|" + announce_cat + "|");
+   // How many distinct types, counting each name the first time it appears.
+   ntypes := 0;
+   i := 0;
+   while (i < n) do begin
+      isnew := 1;
+      j := 0;
+      while (j < i) do begin
+         if (string_compare(names[j], names[i])) then begin
+            isnew := 0;
+            j := i;
+         end
+         j := j + 1;
+      end
+      if (isnew) then ntypes := ntypes + 1;
+      i := i + 1;
+   end
+
+   if (g_scan_type >= ntypes) then g_scan_type := ntypes - 1;
+   if (g_scan_type < 0) then g_scan_type := ntypes - 1;
+
+   // Name of the selected type.
+   seen := -1;
+   typename := "";
+   i := 0;
+   while (i < n) do begin
+      isnew := 1;
+      j := 0;
+      while (j < i) do begin
+         if (string_compare(names[j], names[i])) then begin
+            isnew := 0;
+            j := i;
+         end
+         j := j + 1;
+      end
+      if (isnew) then begin
+         seen := seen + 1;
+         if (seen == g_scan_type) then begin
+            typename := names[i];
+            i := n;
+         end
+      end
+      i := i + 1;
+   end
+
+   ninst := 0;
+   i := 0;
+   while (i < n) do begin
+      if (string_compare(names[i], typename)) then ninst := ninst + 1;
+      i := i + 1;
+   end
+   if (g_scan_inst >= ninst) then g_scan_inst := ninst - 1;
+   if (g_scan_inst < 0) then g_scan_inst := ninst - 1;
+
+   k := -1;
+   chosen := 0;
+   i := 0;
+   while (i < n) do begin
+      if (string_compare(names[i], typename)) then begin
+         k := k + 1;
+         if (k == g_scan_inst) then begin
+            chosen := i;
+            i := n;
+         end
+      end
+      i := i + 1;
+   end
+
+   if (dojump) then begin
+      g_cursor := tile_num(cands[chosen]);
+      call recenter_view;
+      debug_msg("SCAN:jump " + g_cursor + "|");
+      call describe_cursor;
+      return;
+   end
+
+   debug_msg("SCAN:entry " + g_scan_cat + "|" + g_scan_type + "|" + ntypes
+      + "|" + typename + "|" + g_scan_inst + "|" + ninst
+      + "|" + dists[chosen]
+      + "|" + rotation_to_tile(here, tile_num(cands[chosen]))
+      + "|" + level + "|");
 end
 
-procedure scan_step(variable delta) begin
-   g_scan_idx := g_scan_idx + delta;
-   if (g_scan_idx < 0) then g_scan_idx := 0;
-   call scan_report(0);
+procedure scan_instance(variable delta) begin
+   g_scan_inst := g_scan_inst + delta;
+   call scan_do(0, 0);
+end
+
+procedure scan_type(variable delta) begin
+   g_scan_type := g_scan_type + delta;
+   g_scan_inst := 0;
+   call scan_do(1, 0);
 end
 
 procedure scan_category(variable delta) begin
    g_scan_cat := g_scan_cat + delta;
    if (g_scan_cat < 0) then g_scan_cat := SCAN_CATEGORIES - 1;
    if (g_scan_cat >= SCAN_CATEGORIES) then g_scan_cat := 0;
-   g_scan_idx := 0;
-   call scan_report(1);
+   g_scan_type := 0;
+   g_scan_inst := 0;
+   call scan_do(2, 0);
 end
 
-/*
- * scan_jump  --  put the look cursor on the selected entry.
- *
- * The one place the scanner touches the cursor, and only when asked. From here
- * everything the cursor can already do applies: numpad star walks there, or
- * attacks it if it is alive and a fight is on.
- */
 procedure scan_jump begin
-   variable objs, total, i, obj, here, n, cands, dists, d, j, best, bestd;
-
-   here := tile_num(dude_obj);
-   objs := list_as_array(scan_list_type(g_scan_cat));
-   total := 0;
-   if (objs) then begin
-      total := len_array(objs);
-   end
-   cands := temp_array(total + 1, 0);
-   dists := temp_array(total + 1, 0);
-   n := 0;
-   i := 0;
-   while (i < total) do begin
-      obj := objs[i];
-      call scan_keep(obj);
-      if (g_hascritter) then begin
-         cands[n] := obj;
-         dists[n] := tile_distance(here, tile_num(obj));
-         n := n + 1;
-      end
-      i := i + 1;
-   end
-   if (n == 0) then begin
-      debug_msg("SCAN:none " + g_scan_cat + "|");
-      return;
-   end
-   if (g_scan_idx >= n) then g_scan_idx := n - 1;
-
-   i := 0;
-   while (i <= g_scan_idx) do begin
-      best := i;
-      bestd := dists[i];
-      j := i + 1;
-      while (j < n) do begin
-         if (dists[j] < bestd) then begin
-            best := j;
-            bestd := dists[j];
-         end
-         j := j + 1;
-      end
-      if (best != i) then begin
-         obj := cands[i];   cands[i] := cands[best];   cands[best] := obj;
-         d := dists[i];     dists[i] := dists[best];   dists[best] := d;
-      end
-      i := i + 1;
-   end
-
-   g_cursor := tile_num(cands[g_scan_idx]);
-   call recenter_view;
-   debug_msg("SCAN:jump " + g_cursor + "|");
-   call describe_cursor;
+   call scan_do(0, 1);
 end
 
 procedure live_critter_at_cursor begin

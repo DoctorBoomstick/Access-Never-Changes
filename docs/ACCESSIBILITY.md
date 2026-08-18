@@ -172,35 +172,53 @@ never touches those.
 
 ## The scanner
 
-The look cursor is for feeling your way around one hex at a time. The scanner is
-for finding things: it asks the game for everything of a kind that is currently
-on screen and reads it out, nearest first.
+The look cursor feels its way around one hex at a time. The scanner is for
+finding things: it asks the game for everything of a kind that is on screen and
+reads it out, nearest first.
 
-| Key | Action |
+It has three levels, because a room can hold a dozen torches and stepping
+through them one at a time is unbearable.
+
+| Key | Level |
 |---|---|
-| `Shift+[` / `Shift+]` | previous / next category |
-| `[` / `]` | previous / next entry in that category |
-| `/` | move the look cursor to the selected entry |
+| `Ctrl+[` / `Ctrl+]` | **category** — critters, items, scenery |
+| `[` / `]` | **type** — Torch, Rocks, Giant Ant |
+| `Shift+[` / `Shift+]` | **which one** of that type |
+| `/` | move the look cursor to the selected one |
 
-Categories are critters, items and scenery. Entries sound like:
+How much it says depends on what you changed:
 
-    Critters. Giant Ant, north east 4 hexes, 1 of 3.
-    Radscorpion, south east 7 hexes, 2 of 3.
+    Ctrl+]    Scenery. Torch, 6, nearest north east 4 hexes. 1 of 12.
+    ]         Rocks, 3, nearest east 2 hexes. 2 of 12.
+    Shift+]   south west 7 hexes, 3 of 6.
 
-Stepping through the list does **not** move your cursor — listing what is around
-you and going to it are different intentions, and you may just want to look.
-Press `/` when you actually want to go there. From that point the cursor works
-as it always does: numpad ✳ walks you there, or attacks it if it's alive and a
-fight is on.
+Stepping between six torches doesn't say "torch" six times — you already know
+what they are; you want to know where. The count after a type name tells you
+whether `Shift+]` is worth pressing at all.
 
-**It only lists what is on screen.** The engine would happily hand over every
-object on the map, including things behind walls, but reading those out would be
-x-ray vision. The mod uses the game's own "am I drawing this" test, so the line
-falls exactly where it falls for a sighted player. A sighted player takes in a
-whole screen at a glance — listing it one item at a time is how you get the same
-information through a screen reader, not more of it.
+Stepping the list does **not** move your cursor. Listing what is around you and
+going to it are different intentions, and you may just want to look. Press `/`
+when you actually want to go there — then the cursor works as it always does:
+numpad ✳ walks you there, or attacks it if it's alive and a fight is on.
 
-## Hotkeys this mod adds
+### What it won't tell you
+
+**Only what is on screen.** The engine would happily hand over every object on
+the map, walls and all, but reading those out would be x-ray vision. The mod
+uses the game's own "am I drawing this" test, so the line falls exactly where it
+falls for a sighted player. A sighted player takes in a whole screen at a
+glance — listing it one item at a time is how you get the same information
+through a screen reader, not more of it.
+
+**None of the engine's invisible furniture.** A Fallout map is carpeted in
+objects that exist only to make the engine work: Block Hex Auto Inviso, Secret
+Blocking Hex, Exit Grid Map Marker, Light Source. They have names, they pass the
+game's own visibility flag, and the engine reports them as on screen — but no
+player has ever seen one. They are recognised by the blank placeholder art they
+are drawn with, a rule derived from 81,000 logged objects rather than guessed
+at. On the Temple map that is 65% of everything you would otherwise have heard.
+
+## Hotkeys this mod adds## Hotkeys this mod adds
 
 These live on the numpad **operator** keys, since 0-9 belong to the in-game
 script:

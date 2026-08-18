@@ -56,8 +56,9 @@ what gets announced. The short version:
 | Numpad 8 | bring the cursor back to you |
 | Numpad ✳ | walk there — or attack, if an enemy is standing there |
 | Numpad + | where am I / whose turn is it |
-| `[` / `]` | previous / next thing the scanner can see |
-| `Shift+[` / `Shift+]` | change scanner category |
+| `[` / `]` | scanner: type of thing nearby |
+| `Shift+[` / `Shift+]` | scanner: which one of that type |
+| `Ctrl+[` / `Ctrl+]` | scanner: category |
 | `/` | move the look cursor to the scanned thing |
 
 **Do not hold Ctrl while using the numpad.** sfall binds Ctrl plus the numpad to
