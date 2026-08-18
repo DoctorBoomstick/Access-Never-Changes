@@ -1,0 +1,366 @@
+{
+  "0": [
+    {
+      "index": 0,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Small Frame",
+      "p_05CC": "You are not quite as big as the other villagers, but that never slowed"
+    },
+    {
+      "index": 1,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Small Frame",
+      "p_05CC": "You are not quite as big as the other villagers, but that never slowed"
+    },
+    {
+      "index": 2,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Small Frame",
+      "p_05CC": "You are not quite as big as the other villagers, but that never slowed"
+    },
+    {
+      "index": 3,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Small Frame",
+      "p_05CC": "You are not quite as big as the other villagers, but that never slowed"
+    },
+    {
+      "index": 4,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Small Frame",
+      "p_05CC": "You are not quite as big as the other villagers, but that never slowed"
+    },
+    {
+      "index": 5,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Small Frame",
+      "p_05CC": "You are not quite as big as the other villagers, but that never slowed"
+    },
+    {
+      "index": 6,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Small Frame",
+      "p_05CC": "You are not quite as big as the other villagers, but that never slowed"
+    }
+  ],
+  "10": [
+    {
+      "index": 10,
+      "p_00F4": "Hit Points",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 11,
+      "p_00F4": "Poisoned",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 12,
+      "p_00F4": "Radiated",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 13,
+      "p_00F4": "Eye Damage",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 14,
+      "p_00F4": "Crippled Right Arm",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 15,
+      "p_00F4": "Crippled Left Arm",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 16,
+      "p_00F4": "Crippled Right Leg",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 17,
+      "p_00F4": "Crippled Left Leg",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    }
+  ],
+  "18": [
+    {
+      "index": 18,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 19,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 20,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 21,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 22,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 23,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 83,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 24,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 25,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 26,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    }
+  ],
+  "28": [
+    {
+      "index": 28,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 29,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 30,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 31,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 32,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 33,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 34,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 35,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 36,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 37,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 38,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 39,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 40,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 41,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 42,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 43,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 44,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 45,
+      "p_00F4": "Base:",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    }
+  ],
+  "55": [
+    {
+      "index": 55,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Metabolism",
+      "p_05CC": "Your metabolic rate is twice normal.  This means that you are much les"
+    },
+    {
+      "index": 56,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Bruiser",
+      "p_05CC": "A little slower, but a little bigger.  You may not hit as often, but t"
+    },
+    {
+      "index": 57,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Small Frame",
+      "p_05CC": "You are not quite as big as the other villagers, but that never slowed"
+    },
+    {
+      "index": 58,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "One Hander",
+      "p_05CC": "One of your hands is very dominant.  You excel with single-handed weap"
+    },
+    {
+      "index": 59,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Finesse",
+      "p_05CC": "Your attacks show a lot of finesse.  You don't do as much damage, but "
+    },
+    {
+      "index": 60,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Kamikaze",
+      "p_05CC": "By not paying attention to any threats, you can act a lot faster in a "
+    },
+    {
+      "index": 61,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Heavy Handed",
+      "p_05CC": "You swing harder, not better.  Your attacks are very brutal, but lack "
+    },
+    {
+      "index": 62,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Fast Shot",
+      "p_05CC": "You don't have time to aim for a targeted attack, because you attack f"
+    },
+    {
+      "index": 63,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Bloody Mess",
+      "p_05CC": "By some strange twist of fate, people around you die violently.  You a"
+    },
+    {
+      "index": 64,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Jinxed",
+      "p_05CC": "The good thing is that everyone around you has more critical failures "
+    },
+    {
+      "index": 65,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Good Natured",
+      "p_05CC": "You studied less-combative skills as you were growing up.  Your combat"
+    },
+    {
+      "index": 66,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Chem Reliant",
+      "p_05CC": "You are more easily influenced by chems.  Your chance to be reliant by"
+    },
+    {
+      "index": 67,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Chem Resistant",
+      "p_05CC": "Chems only affect you half as long as normal, but your chance to be re"
+    },
+    {
+      "index": 94,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Sex Appeal",
+      "p_05CC": "You've got the \"right\" stuff.  Members of the opposite sex are attract"
+    },
+    {
+      "index": 69,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Skilled",
+      "p_05CC": "Since you spent more time improving your skills than a normal person, "
+    },
+    {
+      "index": 70,
+      "p_00F4": "Critical Chance",
+      "p_05B8": "Gifted",
+      "p_05CC": "You have more innate abilities than most, so you have not spent as muc"
+    }
+  ]
+}

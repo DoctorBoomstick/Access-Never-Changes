@@ -1,0 +1,197 @@
+{
+  "premade_index_addr": 5366496,
+  "premades": [
+    {
+      "index": 6,
+      "special": [
+        8,
+        5,
+        9,
+        3,
+        4,
+        7,
+        4
+      ],
+      "tags": [
+        4,
+        0,
+        5
+      ],
+      "tag_names": [
+        "Melee Weapons",
+        "Small Guns",
+        "Throwing"
+      ],
+      "traits": [
+        6,
+        15,
+        0
+      ],
+      "trait_names": [
+        "Heavy Handed",
+        "Gifted",
+        "Fast Metabolism"
+      ]
+    },
+    {
+      "index": 7,
+      "special": [
+        5,
+        8,
+        4,
+        4,
+        5,
+        9,
+        5
+      ],
+      "tags": [
+        8,
+        9,
+        10
+      ],
+      "tag_names": [
+        "Sneak",
+        "Lockpick",
+        "Steal"
+      ],
+      "traits": [
+        14,
+        2,
+        0
+      ],
+      "trait_names": [
+        "Skilled",
+        "Small Frame",
+        "Fast Metabolism"
+      ]
+    },
+    {
+      "index": 8,
+      "special": [
+        4,
+        5,
+        4,
+        10,
+        7,
+        6,
+        4
+      ],
+      "tags": [
+        14,
+        15,
+        6
+      ],
+      "tag_names": [
+        "Speech",
+        "Barter",
+        "First aid"
+      ],
+      "traits": [
+        3,
+        13,
+        0
+      ],
+      "trait_names": [
+        "One Hander",
+        "Sex Appeal",
+        "Fast Metabolism"
+      ]
+    },
+    {
+      "index": 9,
+      "special": [
+        8,
+        5,
+        9,
+        3,
+        4,
+        7,
+        4
+      ],
+      "tags": [
+        4,
+        0,
+        5
+      ],
+      "tag_names": [
+        "Melee Weapons",
+        "Small Guns",
+        "Throwing"
+      ],
+      "traits": [
+        6,
+        15,
+        0
+      ],
+      "trait_names": [
+        "Heavy Handed",
+        "Gifted",
+        "Fast Metabolism"
+      ]
+    },
+    {
+      "index": 10,
+      "special": [
+        5,
+        8,
+        4,
+        4,
+        5,
+        9,
+        5
+      ],
+      "tags": [
+        8,
+        9,
+        10
+      ],
+      "tag_names": [
+        "Sneak",
+        "Lockpick",
+        "Steal"
+      ],
+      "traits": [
+        14,
+        2,
+        0
+      ],
+      "trait_names": [
+        "Skilled",
+        "Small Frame",
+        "Fast Metabolism"
+      ]
+    },
+    {
+      "index": 11,
+      "special": [
+        4,
+        5,
+        4,
+        10,
+        7,
+        6,
+        4
+      ],
+      "tags": [
+        14,
+        15,
+        6
+      ],
+      "tag_names": [
+        "Speech",
+        "Barter",
+        "First aid"
+      ],
+      "traits": [
+        3,
+        13,
+        0
+      ],
+      "trait_names": [
+        "One Hander",
+        "Sex Appeal",
+        "Fast Metabolism"
+      ]
+    }
+  ]
+}

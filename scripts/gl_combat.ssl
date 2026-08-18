@@ -1,0 +1,278 @@
+/*
+ * gl_combat.ssl  --  make combat legible.
+ *
+ * Combat is the one part of Fallout 2 a blind player cannot infer from sound.
+ * You cannot tell whose turn it is, how many action points you have left, what
+ * hit you, or whether your own swing connected. This script reports all of it
+ * through debug.log as "COMBAT:" lines, which the Python side speaks.
+ *
+ * PHASE 1: announcement only. Nothing here sends input, and nothing here uses
+ * a hook's return value to change an outcome. HOOK_COMBATTURN can skip a turn
+ * and HOOK_AFTERHITROLL can override a hit into a miss; we touch neither. The
+ * policy for this mod is that a blind player plays by the same rules as a
+ * sighted one, and a script that could quietly turn a miss into a hit is the
+ * exact thing that policy exists to prevent.
+ *
+ * Deliberately a SEPARATE global script from gl_world.ssl. Each one registers
+ * its own hooks and repeat rate independently, so separation is free -- and
+ * gl_world has hard-crashed the engine twice during development. A bug in
+ * combat reporting should not be able to take the hex cursor down with it, and
+ * a crash during a fight costs the player a save.
+ *
+ * Compile from data/scripts (two steps, packaged compiler preprocessor bug):
+ *   compile.exe -P gl_combat.ssl
+ *   compile.exe gl_combat.preprocessed.ssl -o gl_combat.int
+ */
+
+#include "sfall/sfall.h"
+#include "sfall/define_lite.h"
+#include "sfall/define_extra.h"
+
+// Fields are separated by '|' rather than spaces because critter names contain
+// spaces ("Giant Ant"), and a space-delimited format would need the Python side
+// to guess where a name ends.
+//
+// Every line also ENDS with the separator, which looks redundant but is not.
+// The engine writes its own debug output to this same file without always
+// starting a new line, so our text gets things appended to it:
+//
+//   COMBAT:turn 1|Giant AntGiant Ant is using Rat packet with a 0% chance...
+//
+// With a trailing separator that engine noise lands in a final field nobody
+// reads, instead of corrupting the last real one -- which is a critter's name
+// in three of the five messages here.
+#define SEP                 ("|")
+
+variable g_lastap := -1;
+variable g_lastmaxap := -1;
+
+procedure start;
+procedure poll_combat;
+procedure on_turn;
+procedure on_damage;
+procedure on_hitroll;
+procedure on_death;
+procedure on_target;
+
+procedure start begin
+   if game_loaded then begin
+      set_global_script_type(1);
+      set_global_script_repeat(4);   // ~15 polls/sec; action points only
+      register_hook_proc(HOOK_COMBATTURN,   on_turn);
+      register_hook_proc(HOOK_COMBATDAMAGE, on_damage);
+      register_hook_proc(HOOK_AFTERHITROLL, on_hitroll);
+      register_hook_proc(HOOK_ONDEATH,      on_death);
+      register_hook_proc(HOOK_TARGETOBJECT, on_target);
+      debug_msg("COMBAT:ready" + SEP);
+   end else begin
+      call poll_combat;
+   end
+end
+
+/*
+ * poll_combat  --  action points.
+ *
+ * AP is the resource every combat decision spends, and the interface shows it
+ * as a row of lights that mean nothing to a blind player. There is no hook for
+ * it changing, so it is polled and reported on change.
+ *
+ * Outside combat AP is not meaningful, so this stays quiet -- and reports once
+ * more when combat ends, so the announcement does not simply stop mid-fight
+ * with a stale number as the last thing heard.
+ */
+procedure poll_combat begin
+   variable cur, mx;
+
+   if (not combat_is_initialized) then begin
+      if (g_lastap != -1) then begin
+         g_lastap := -1;
+         g_lastmaxap := -1;
+      end
+      return;
+   end
+
+   cur := get_critter_current_ap(dude_obj);
+   mx  := get_critter_stat(dude_obj, STAT_max_move_points);
+   if (cur != g_lastap or mx != g_lastmaxap) then begin
+      g_lastap := cur;
+      g_lastmaxap := mx;
+      debug_msg("COMBAT:ap " + cur + SEP + mx + SEP);
+   end
+end
+
+/*
+ * on_turn  --  HOOK_COMBATTURN.
+ *
+ * arg0: 1 start of turn, 0 end of turn, -1 combat ended abruptly,
+ *       -2 combat ended normally.
+ * arg1: the critter whose turn it is.
+ *
+ * The single most valuable thing in this file. Without it there is no way to
+ * know whether the game is waiting for you or for something else, which makes
+ * every other piece of combat information useless.
+ */
+procedure on_turn begin
+   variable event, critter, name;
+   event := get_sfall_arg;
+   critter := get_sfall_arg;
+
+   if (critter == dude_obj) then begin
+      name := "you";
+   end else if (critter) then begin
+      name := obj_name(critter);
+   end else begin
+      name := "";
+   end
+
+   debug_msg("COMBAT:turn " + event + SEP + name + SEP);
+end
+
+/*
+ * on_damage  --  HOOK_COMBATDAMAGE.
+ *
+ * arg0 target, arg1 attacker, arg2 damage to target, arg3 damage to attacker,
+ * arg4 target effect flags, arg5 attacker effect flags, arg6 weapon,
+ * arg7 bodypart.
+ *
+ * Two caveats the sfall docs are explicit about, both of which shape this:
+ *  - It does NOT run for misses. Misses come from on_hitroll below.
+ *  - It ALSO runs when the AI is merely *considering* an area attack (burst or
+ *    grenade) to work out whether it would hit its friends. So it can fire for
+ *    an attack that never happens. Rare with early-game melee, but it is the
+ *    reason this is not treated as proof that a blow landed.
+ *
+ * Only attacks involving the player are reported. A big fight otherwise buries
+ * the player in speech at the moment they most need to think.
+ */
+procedure on_damage begin
+   variable target, attacker, dmg, dmg_att, flags, tname, aname;
+   target   := get_sfall_arg;
+   attacker := get_sfall_arg;
+   dmg      := get_sfall_arg;
+   dmg_att  := get_sfall_arg;
+   flags    := get_sfall_arg;
+
+   if (target != dude_obj and attacker != dude_obj) then return;
+
+   if (target == dude_obj) then begin
+      tname := "you";
+   end else if (target) then begin
+      tname := obj_name(target);
+   end else begin
+      tname := "";
+   end
+
+   if (attacker == dude_obj) then begin
+      aname := "you";
+   end else if (attacker) then begin
+      aname := obj_name(attacker);
+   end else begin
+      aname := "";
+   end
+
+   debug_msg("COMBAT:dmg " + aname + SEP + tname + SEP + dmg + SEP + flags + SEP);
+end
+
+/*
+ * on_hitroll  --  HOOK_AFTERHITROLL.
+ *
+ * arg0: 0 critical miss, 1 miss, 2 hit, 3 critical hit.
+ * arg1 attacker, arg2 target, arg3 bodypart, arg4 hit chance.
+ *
+ * Only misses are announced here. A hit is already covered by on_damage with
+ * its damage figure attached, and announcing both would say everything twice.
+ *
+ * The hit chance is passed along because it is a number the game SHOWS a
+ * sighted player in the targeting interface -- reporting it is parity, not an
+ * advantage. The bodypart index is passed but not yet spoken: naming body parts
+ * needs the game's own words out of combat.msg, and inventing English ones here
+ * would break every translation.
+ */
+procedure on_hitroll begin
+   variable result, attacker, target, bodypart, chance, aname, tname;
+   result   := get_sfall_arg;
+   attacker := get_sfall_arg;
+   target   := get_sfall_arg;
+   bodypart := get_sfall_arg;
+   chance   := get_sfall_arg;
+
+   if (target != dude_obj and attacker != dude_obj) then return;
+   if (result > 1) then return;          // a hit: on_damage will report it
+
+   if (attacker == dude_obj) then begin
+      aname := "you";
+   end else if (attacker) then begin
+      aname := obj_name(attacker);
+   end else begin
+      aname := "";
+   end
+
+   if (target == dude_obj) then begin
+      tname := "you";
+   end else if (target) then begin
+      tname := obj_name(target);
+   end else begin
+      tname := "";
+   end
+
+   debug_msg("COMBAT:miss " + result + SEP + aname + SEP + tname
+      + SEP + chance + SEP + bodypart + SEP);
+end
+
+/*
+ * on_target  --  HOOK_TARGETOBJECT.
+ *
+ * arg0: 0 the targeting cursor is hovering over the object, 1 the player is
+ *       trying to attack it. arg1: 1 if it is a valid thing to attack.
+ * arg2: the object.
+ *
+ * This is the confirmation that aiming an attack was missing. Fallout picks
+ * critters by their drawn sprite rather than by the hex they stand on, so a
+ * pointer sitting dead centre on an enemy's tile is aimed at the ground
+ * underneath it -- measured live, a click there did nothing at all, while the
+ * same click twelve pixels higher landed for 4 damage.
+ *
+ * The mod compensates by lifting the pointer, but a fixed lift is a guess about
+ * sprite heights. This hook is the engine answering directly: it says whether
+ * the game currently considers a critter targeted, and which one. That turns
+ * "we think we are aimed at the ant" into "the engine says we are aimed at the
+ * ant", which is the same standard we hold movement to.
+ *
+ * Reported, not overridden. ret0 could redirect an attack to a different target
+ * or forbid it outright, and the mod has no business doing either.
+ */
+procedure on_target begin
+   variable event, valid, obj, name;
+   event := get_sfall_arg;
+   valid := get_sfall_arg;
+   obj   := get_sfall_arg;
+
+   if (obj) then begin
+      name := obj_name(obj);
+   end else begin
+      name := "";
+   end
+
+   debug_msg("COMBAT:target " + event + SEP + valid + SEP + name + SEP);
+end
+
+/*
+ * on_death  --  HOOK_ONDEATH. arg0 is the critter that died.
+ *
+ * Runs for any death, not just ones the player caused, which is right: a
+ * sighted player sees a body drop anywhere on screen.
+ */
+procedure on_death begin
+   variable critter, name;
+   critter := get_sfall_arg;
+
+   if (critter == dude_obj) then begin
+      name := "you";
+   end else if (critter) then begin
+      name := obj_name(critter);
+   end else begin
+      name := "";
+   end
+
+   debug_msg("COMBAT:death " + name + SEP);
+end

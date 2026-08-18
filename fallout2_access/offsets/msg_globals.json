@@ -1,0 +1,30 @@
+{
+  "module_base": 4194304,
+  "globals": {
+    "editor_msg": {
+      "global": 5700776,
+      "rva": 1506472,
+      "count": 255
+    },
+    "perk_msg": {
+      "global": 6701780,
+      "rva": 2507476,
+      "count": 234
+    },
+    "skill_msg": {
+      "global": 6717568,
+      "rva": 2523264,
+      "count": 96
+    },
+    "stat_msg": {
+      "global": 6717820,
+      "rva": 2523516,
+      "count": 97
+    },
+    "trait_msg": {
+      "global": 6733368,
+      "rva": 2539064,
+      "count": 32
+    }
+  }
+}

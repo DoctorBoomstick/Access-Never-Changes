@@ -1,0 +1,11 @@
+# Fallout 2 Screen Reader Bridge - Python dependencies
+# pip install -r requirements.txt
+
+# Speech output - picks NVDA / JAWS / SAPI automatically
+accessible_output2>=0.17
+
+# SAPI fallback (also needed by some accessible_output2 backends on Windows)
+pywin32>=305
+
+# Keyboard mouse emulation (global hotkeys + cursor movement)
+pynput>=1.7

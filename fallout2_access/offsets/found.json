@@ -1,0 +1,74 @@
+{
+  "_comment": "Confirmed against the retail Steam fallout2.exe (image base 0x00400000, sfall 4.4.8 + built-in HRP). Absolute addresses are a development convenience; rva is what survives a different image base. These still need AoB signatures before distribution.",
+  "_module_base": 4194304,
+
+  "char_editor_selected": {
+    "addr": 5703148,
+    "hex": "0x005709EC",
+    "rva": 1509868,
+    "type": "i32",
+    "note": "characterEditorSelectedItem. Verified by prediction: +3 after 3x down, returns after 3x up."
+  },
+  "char_editor_condition_name_ptr": {
+    "addr": 5701876,
+    "hex": "0x005700F4",
+    "rva": 1508596,
+    "type": "u32",
+    "note": "char* to current item name. Tracks ONLY the condition section (10-17); stale elsewhere."
+  },
+  "char_editor_trait_name_ptr": {
+    "addr": 5703096,
+    "hex": "0x005705B8",
+    "rva": 1509816,
+    "type": "u32",
+    "note": "char* to current trait name. Tracks ONLY the trait section (55-70, 94)."
+  },
+  "char_editor_trait_desc_ptr": {
+    "addr": 5703116,
+    "hex": "0x005705CC",
+    "rva": 1509836,
+    "type": "u32",
+    "note": "char* to current trait description. Tracks ONLY the trait section."
+  },
+
+  "msg_editor": {
+    "addr": 5700264,
+    "hex": "0x0056FCA8",
+    "rva": 1506984,
+    "type": "MessageList",
+    "count": 255,
+    "note": "editor.msg. Conditions, derived stat labels, UI strings (DONE/OPTIONS/CANCEL)."
+  },
+  "msg_stat": {
+    "addr": 6717820,
+    "hex": "0x0066817C",
+    "rva": 2523516,
+    "type": "MessageList",
+    "count": 97,
+    "note": "stat.msg. SPECIAL names 100-106, derived 107-137, descriptions from 200."
+  },
+  "msg_skill": {
+    "addr": 6717568,
+    "hex": "0x00668080",
+    "rva": 2523264,
+    "type": "MessageList",
+    "count": 96,
+    "note": "skill.msg. 18 skill names at 100-117."
+  },
+  "msg_trait": {
+    "addr": 6733880,
+    "hex": "0x0066BE38",
+    "rva": 2539576,
+    "type": "MessageList",
+    "count": 32,
+    "note": "trait.msg. 16 trait names plus descriptions."
+  },
+  "msg_perk": {
+    "addr": 6702292,
+    "hex": "0x006642D4",
+    "rva": 2507988,
+    "type": "MessageList",
+    "count": 234,
+    "note": "perk.msg. Not needed for chargen but resolved for free."
+  }
+}

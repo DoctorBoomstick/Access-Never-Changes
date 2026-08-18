@@ -1,0 +1,18 @@
+{
+  "special_array": {
+    "addr": 5358484,
+    "values": [
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5
+    ]
+  },
+  "char_points": {
+    "addr": 5342520,
+    "value": 5
+  }
+}

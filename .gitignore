@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Staged third-party sfall headers (fetched by build.py, not ours to ship)
+scripts/sfall/
+
+# Compiler leftovers
+scripts/*.preprocessed.ssl
+
+# Logs pulled from a game install while debugging
+debug.log
+sfall-log.txt
+
+# Never commit game data
+*.dat
+*.exe
+*.dll

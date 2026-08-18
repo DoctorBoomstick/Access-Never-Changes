@@ -1,0 +1,84 @@
+{
+  "candidates": [
+    {
+      "addr": 5346564,
+      "editor": 1,
+      "selection": 0
+    },
+    {
+      "addr": 5346568,
+      "editor": 1,
+      "selection": 0
+    },
+    {
+      "addr": 5359608,
+      "editor": -1,
+      "selection": 5
+    },
+    {
+      "addr": 5359620,
+      "editor": -1,
+      "selection": 11
+    },
+    {
+      "addr": 5359632,
+      "editor": -1,
+      "selection": 12
+    },
+    {
+      "addr": 5359644,
+      "editor": -1,
+      "selection": 13
+    },
+    {
+      "addr": 5359656,
+      "editor": -1,
+      "selection": 14
+    },
+    {
+      "addr": 5359668,
+      "editor": -1,
+      "selection": 15
+    },
+    {
+      "addr": 5359680,
+      "editor": -1,
+      "selection": 16
+    },
+    {
+      "addr": 5366496,
+      "editor": 0,
+      "selection": 1
+    },
+    {
+      "addr": 5366500,
+      "editor": 0,
+      "selection": 1
+    },
+    {
+      "addr": 5687744,
+      "editor": 27,
+      "selection": 31
+    },
+    {
+      "addr": 5826872,
+      "editor": 4,
+      "selection": 1
+    },
+    {
+      "addr": 6375512,
+      "editor": 0,
+      "selection": 1
+    },
+    {
+      "addr": 7002420,
+      "editor": 1,
+      "selection": 49
+    },
+    {
+      "addr": 7021920,
+      "editor": 1,
+      "selection": 49
+    }
+  ]
+}

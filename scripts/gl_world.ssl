@@ -1,0 +1,544 @@
+/*
+ * gl_world.ssl  --  a virtual hex cursor for exploring the map by ear.
+ *
+ * Fallout 2 has no keyboard movement, and a blind player cannot point at a
+ * hex. This puts a cursor on the map that the numpad walks around one hex at
+ * a time, announcing what is on each. The six directions map onto the numpad's
+ * corners and sides, because a hex has six neighbours and no north or south:
+ *
+ *        7 NW   9 NE
+ *      4 W          6 E          5 = re-read current hex
+ *        1 SW   3 SE             8 = snap cursor back to the player
+ *
+ * Hex arithmetic is left entirely to tile_num_in_direction. Neighbour offsets
+ * are parity-dependent -- from tile 17488 they are NE-1, E+199, SE+200, SW+201,
+ * W+1, NW-200, and they differ on the next row -- so reimplementing them by
+ * hand is a bug farm. We ask the engine.
+ *
+ * STATUS: diagnostic pass. Two crashes so far, both instructive:
+ *   1. free_array() on the temp array from tile_get_objs -- sfall auto-deletes
+ *      temporary arrays at end of frame, so that was a double free.
+ *   2. A null dereference at 0x004AA6AE reading [0x15C], reached from inside
+ *      this procedure. obj_can_see_obj is the prime suspect: it is documented
+ *      to do perception and stealth rolls "if the objects are critters", and
+ *      tile_get_objs returns scenery and walls too.
+ * So this version calls NO visibility function at all. It logs what is
+ * actually on a hex, with object types, so the visibility policy can be
+ * chosen against real data instead of guesswork. Every step traces before it
+ * runs: the last line printed names whatever kills it.
+ *
+ * Output goes to debug.log as "WORLD:..." lines. Requires DebugMode=2.
+ *
+ * Compile from data/scripts (two steps -- packaged compiler preprocessor bug):
+ *   compile.exe -P gl_world.ssl
+ *   compile.exe gl_world.preprocessed.ssl -o gl_world.int
+ */
+
+#include "sfall/sfall.h"
+#include "sfall/dik.h"
+// define_lite.h is needed only for tile_set_center, which is a metarule3
+// macro rather than a builtin opcode like the rest of what we call here.
+#include "sfall/define_lite.h"
+// define_extra.h carries the OBJ_TYPE_* constants.
+#include "sfall/define_extra.h"
+
+#define CURSOR_UNSET        (-1)
+
+#define DIR_NE              (0)
+#define DIR_E               (1)
+#define DIR_SE              (2)
+#define DIR_SW              (3)
+#define DIR_W               (4)
+#define DIR_NW              (5)
+
+#define ACT_DESCRIBE        (-2)
+#define ACT_SNAP            (-3)
+#define ACT_CALIB           (-4)
+#define ACT_MOVEMODE        (-5)
+
+variable g_cursor := CURSOR_UNSET;
+variable g_lastmode := -1;
+variable g_lastcursormode := -1;
+variable g_lastdude := -1;
+variable g_lastbtn := -1;
+variable g_lastunder := -1;
+variable g_hascritter := 0;
+variable g_restore_ticks := 0;
+variable g_movestart := -1;
+variable g_movesettle := 0;
+
+procedure start;
+procedure map_enter_p_proc;
+procedure on_key;
+procedure poll_state;
+procedure recenter_view;
+procedure describe_cursor;
+procedure step_cursor(variable dir);
+procedure snap_to_dude;
+procedure calibrate;
+procedure force_action_cursor;
+procedure live_critter_at_cursor;
+
+/*
+ * start  --  init once, then poll.
+ *
+ * `game_loaded` is true on the FIRST call after a load and never again, so
+ * this splits cleanly: the true branch sets up, the false branch is the
+ * periodic poll. That split only works because the keypress hook now goes to
+ * its own procedure via register_hook_proc. With the bare register_hook, the
+ * hook is delivered to `start` itself and lands in the else branch, which
+ * makes the else branch mean two different things and rules out polling
+ * entirely.
+ *
+ * That was a silent, load-bearing bug: without set_global_script_repeat this
+ * script ran `start` exactly ONCE per session. Every "emit when it changes"
+ * watcher below was dead code -- a whole session's debug.log contains exactly
+ * one WORLD:gamemode line and not a single automatic WORLD:cursormode. So the
+ * game mode was never re-reported after the first frame, and the cursor mode
+ * was only ever heard when numpad 0 was pressed explicitly. It looked like the
+ * watchers were working because the one line they emit at startup is the one
+ * the Python side needs to detect a live session.
+ */
+procedure start begin
+   if game_loaded then begin
+      set_global_script_type(1);   // run wherever the cursor is visible
+      set_global_script_repeat(2); // ~30 polls/sec; fast enough to catch a click
+      register_hook_proc(HOOK_KEYPRESS, on_key);
+      g_cursor := tile_num(dude_obj);
+      g_lastdude := g_cursor;
+      debug_msg("WORLD:ready");
+   end else begin
+      call poll_state;
+   end
+end
+
+/*
+ * poll_state  --  watch the states that change without a keypress.
+ *
+ * Everything here emits only on change, so debug.log stays readable and the
+ * Python side can speak the ones that matter without heartbeat chatter.
+ *
+ * The map-specific reads are gated on game mode 0 (the plain map view). On the
+ * world map or behind an open panel, the hex and mouse functions have nothing
+ * sensible to report, and this script has hard-crashed the engine twice
+ * already by calling a function on something it did not expect.
+ */
+procedure poll_state begin
+   variable m, c, d, b;
+
+   // Game mode. This is the ONLY reliable way for the Python side to know we
+   // are in a loaded game and which sub-screen is up: from memory alone, being
+   // in the world looks identical to sitting on the premade-character screen,
+   // so the mod was announcing "character selection" while the player stood on
+   // a map.
+   m := get_game_mode;
+   if (m != g_lastmode) then begin
+      g_lastmode := m;
+      debug_msg("WORLD:gamemode " + m);
+   end
+
+   // Cursor mode decides what a left click MEANS -- walk, interact, aim, or
+   // use a skill -- and a sighted player reads that off the cursor art
+   // continuously. It can also change without the player doing anything they
+   // would connect to it: a skill armed from the Skilldex stays armed.
+   // Undo our own scroll-cursor side effect, on a short retry window rather
+   // than immediately. Restoring inside recenter_view did not work: the engine
+   // applies the directional scroll cursor a frame or two AFTER tile_set_center
+   // returns, so the restore landed first and was promptly overwritten.
+   //
+   // Nothing is announced while this window is open. The player did not ask for
+   // the mode change and never needed to know it happened -- saying "cursor
+   // mode 8" after every single hex step was pure noise generated by the mod
+   // about the mod.
+   c := get_cursor_mode;
+   if (g_restore_ticks > 0) then begin
+      g_restore_ticks := g_restore_ticks - 1;
+      if (c > CURSOR_TARGETING) then begin
+         set_cursor_mode(CURSOR_MOVEMENT);
+         c := get_cursor_mode;
+      end
+      g_lastcursormode := c;
+   end else if (c != g_lastcursormode) then begin
+      g_lastcursormode := c;
+      debug_msg("WORLD:cursormode " + c);
+   end
+
+   // Map telemetry is meaningful on the plain map view AND in combat, which is
+   // a distinct game mode (COMBAT, 0x40) rather than a flag on top of 0. The
+   // first version tested `m != 0` and so switched every watcher below off the
+   // moment a fight started -- which is precisely when they matter most. A
+   // whole fight was debugged with no button telemetry at all because of it.
+   if (m != 0 and m != COMBAT) then return;
+
+   // Did the player actually move? The one unambiguous answer to whether a
+   // click worked, and it costs nothing to watch.
+   //
+   // A walk arrives one tile at a time, so announcing each tile would babble
+   // through every step of a long journey. Instead the tiles are counted and a
+   // single "arrived" is emitted once the player has been still for a moment,
+   // with the distance measured by the engine's own tile_distance.
+   d := tile_num(dude_obj);
+   if (d != g_lastdude) then begin
+      if (g_movesettle == 0) then begin
+         g_movestart := g_lastdude;
+      end
+      g_lastdude := d;
+      // The window has to be longer than the time it takes to walk ONE hex,
+      // or a multi-hex walk is chopped into several "arrivals" and announced
+      // as "moved 1 hex" over and over. A hex takes roughly half a second at
+      // walking pace, so this leaves comfortable headroom.
+      g_movesettle := 40;
+      debug_msg("WORLD:dude " + d);
+   end else if (g_movesettle > 0) then begin
+      g_movesettle := g_movesettle - 1;
+      if (g_movesettle == 0) then begin
+         debug_msg("WORLD:arrive " + d + " dist " + tile_distance(g_movestart, d));
+      end
+   end
+
+   // Which hex the pointer is actually over. Logged on change because of a
+   // result that still makes no sense: across a whole session this stayed
+   // pinned at 17890 while the view was recentred on several different hexes
+   // and the pointer never moved. If the view really scrolls under a fixed
+   // pointer, this MUST change. Either tile_set_center is not scrolling (the
+   // map may be clamped at its edges), or this value is stale. Until that is
+   // settled, aiming a click at a chosen hex is guesswork.
+   variable u;
+   u := tile_under_cursor;
+   if (u != g_lastunder) then begin
+      g_lastunder := u;
+      // dist is the objective function for aiming: the pointer has to be
+      // walked onto the look cursor, and hex geometry is parity-dependent and
+      // not worth reimplementing. With a distance to minimise, the mouse can be
+      // servoed by feedback instead of by arithmetic.
+      debug_msg("WORLD:under " + u + " look=" + g_cursor
+         + " dist " + tile_distance(u, g_cursor) + " dude=" + d);
+   end
+
+   // Mouse buttons, sampled continuously rather than on demand. This is the
+   // measurement the click investigation has been missing for two sessions:
+   // calibration only ran when numpad 2 was pressed, and nobody can press
+   // numpad 2 at the same instant as the click being diagnosed. Emitting a
+   // full snapshot on every button transition answers, in one line, all three
+   // open questions -- did the engine see the button, where was the pointer
+   // actually pointing, and was it over the map or the interface bar.
+   b := get_mouse_buttons;
+   if (b != g_lastbtn) then begin
+      g_lastbtn := b;
+      debug_msg("WORLD:btn " + b
+         + " under=" + tile_under_cursor
+         + " win=" + get_window_under_mouse
+         + " bar=" + get_interface_id(WINTYPE_IFACEBAR)
+         + " cursor=" + c
+         + " dude=" + d
+         + " look=" + g_cursor
+         + " mouse=" + get_mouse_x + "," + get_mouse_y);
+   end
+end
+
+/*
+ * map_enter_p_proc  --  a new map invalidates everything positional.
+ *
+ * Tile numbers are per-map, so nothing measured on the old one carries over.
+ * Two things went wrong on the first map change: walking through an exit grid
+ * was announced as "moved 74 hexes", because the arrival distance was measured
+ * between two tiles on different maps; and the look cursor kept pointing at a
+ * tile number from the map just left, so it was somewhere arbitrary until the
+ * player happened to press numpad 8.
+ *
+ * Everything positional is therefore reseeded here, and the pending arrival is
+ * cancelled so the transition is not reported as a walk.
+ */
+procedure map_enter_p_proc begin
+   g_cursor := tile_num(dude_obj);
+   g_lastdude := g_cursor;
+   g_movesettle := 0;
+   g_lastunder := -1;
+   debug_msg("WORLD:map " + g_cursor + " elev " + elevation(dude_obj));
+end
+
+procedure on_key begin
+   variable event := get_sfall_arg;
+   variable key   := get_sfall_arg;
+   if (event != 1) then return;          // key-up: ignore
+
+   variable dir := -1;
+   if      (key == DIK_NUMPAD9) then dir := DIR_NE;
+   else if (key == DIK_NUMPAD6) then dir := DIR_E;
+   else if (key == DIK_NUMPAD3) then dir := DIR_SE;
+   else if (key == DIK_NUMPAD1) then dir := DIR_SW;
+   else if (key == DIK_NUMPAD4) then dir := DIR_W;
+   else if (key == DIK_NUMPAD7) then dir := DIR_NW;
+   else if (key == DIK_NUMPAD5) then dir := ACT_DESCRIBE;
+   else if (key == DIK_NUMPAD8) then dir := ACT_SNAP;
+   else if (key == DIK_NUMPAD2) then dir := ACT_CALIB;
+   else if (key == DIK_NUMPAD0) then dir := ACT_MOVEMODE;
+   else return;
+
+   // Log arrival before doing any work. When this crashed the engine,
+   // nothing had been written, leaving it ambiguous whether the key had
+   // even been delivered. Now that is always answerable.
+   debug_msg("WORLD:key " + key + " dir " + dir);
+
+   if      (dir == ACT_SNAP)     then call snap_to_dude;
+   else if (dir == ACT_DESCRIBE) then call describe_cursor;
+   else if (dir == ACT_CALIB)    then call calibrate;
+   else if (dir == ACT_MOVEMODE) then call force_action_cursor;
+   else                               call step_cursor(dir);
+
+   set_sfall_return(0);   // swallow the key so the game does not also act
+end
+
+procedure step_cursor(variable dir) begin
+   variable next := tile_num_in_direction(g_cursor, dir, 1);
+   if (next > 0) then begin
+      g_cursor := next;
+   end
+   // Scroll the view so the cursor hex sits at the centre of the viewport.
+   // Deliberate: with the cursor always dead centre, the Python side can later
+   // click it by moving the mouse to one fixed screen point, with no
+   // tile-to-screen arithmetic to get subtly wrong.
+   call recenter_view;
+   call describe_cursor;
+end
+
+/*
+ * recenter_view  --  scroll to the look cursor WITHOUT wrecking the mouse mode.
+ *
+ * tile_set_center changes the cursor mode as a side effect: the engine swaps in
+ * a directional scroll cursor, and it stays there. Live logs show the mode
+ * tracking the direction just moved (W gives 8, E gives 5, SE 7, NW 9), and a
+ * click in that state does not walk the player.
+ *
+ * That side effect made click testing impossible without anyone realising:
+ * pressing numpad 0 to force the movement cursor and then stepping one hex to
+ * pick a target put the cursor straight back into a scroll mode before the
+ * click ever happened. Every click test so far has been run in the wrong mode.
+ *
+ * So the mode is saved and put back. Only 0-2 are restored verbatim; anything
+ * else is a state we did not ask for and did not choose, so it collapses to the
+ * movement cursor rather than being preserved.
+ */
+procedure recenter_view begin
+   tile_set_center(g_cursor);
+   // The engine sets the scroll cursor a frame or two later, so it cannot be
+   // put back here -- poll_state cleans it up over the next few ticks instead.
+   g_restore_ticks := 8;
+end
+
+/*
+ * calibrate  --  groundwork for clicking a hex.
+ *
+ * Movement in Fallout 2 is click-only, so eventually the mouse must land on
+ * the cursor hex. tile_set_center already parks that hex at the centre of the
+ * world viewport, but the viewport's centre in *screen* pixels is unknown --
+ * the interface bar eats the bottom of the window, and HRP has moved things.
+ *
+ * Rather than derive it (and risk clicks landing one hex off, the exact error
+ * a blind player cannot catch), we ask the engine: put the mouse somewhere,
+ * and tile_under_cursor says which hex it is actually over. When that matches
+ * g_cursor, the screen point is right and a click is safe.
+ */
+procedure calibrate begin
+   variable mx, my, under, btns, winid, barid;
+   mx := get_mouse_x;
+   my := get_mouse_y;
+   under := tile_under_cursor;
+
+   // Which window is the pointer actually over? There is no WINTYPE_* for the
+   // map view -- the world is what is left when no interface window claims the
+   // point -- so "over the map" is established by the id NOT matching the
+   // interface bar. This matters because tile_under_cursor will happily report
+   // a hex while the pointer sits on the interface bar, which would make a
+   // click that pressed a UI button look like a click the map ignored.
+   winid := get_window_under_mouse;
+   barid := get_interface_id(WINTYPE_IFACEBAR);
+   debug_msg("WORLD:win under=" + winid + " ifacebar=" + barid
+      + " onbar=" + (winid == barid)
+      + " barrect=" + get_interface_x(WINTYPE_IFACEBAR) + ","
+      + get_interface_y(WINTYPE_IFACEBAR) + " "
+      + get_interface_width(WINTYPE_IFACEBAR) + "x"
+      + get_interface_height(WINTYPE_IFACEBAR));
+   // Game mode and cursor mode were the two states that made clicks look
+   // broken: with the Skilldex panel open the game consumes clicks, and
+   // right-click toggles the cursor between movement and command, so a left
+   // click may interact instead of walk. Both are now visible rather than
+   // guessed at.
+   debug_msg("WORLD:mode game=" + get_game_mode + " cursor=" + get_cursor_mode);
+   // buttons: synthetic motion demonstrably reaches the game, but a synthetic
+   // click produced no reaction even with focus and hex lock both verified.
+   // This reports whether the engine sees the button at all, which separates
+   // "the click never arrived" from "it arrived and the game declined to act".
+   // (Prime suspect is now the third possibility: it arrived, and acted -- as a
+   //  skill use, because the cursor was armed from the Skilldex.)
+   btns := get_mouse_buttons;
+   debug_msg("WORLD:calib mouse=" + mx + "," + my
+      + " btns=" + btns
+      + " under=" + under
+      + " cursor=" + g_cursor
+      + " match=" + (under == g_cursor)
+      + " screen=" + get_screen_width + "x" + get_screen_height);
+end
+
+/*
+ * live_critter_at_cursor  --  is there something alive on the look hex?
+ *
+ * Sets g_hascritter. A procedure rather than a returned value because SSL's
+ * support for value-returning procedures is not worth relying on here.
+ */
+procedure live_critter_at_cursor begin
+   variable objs, total, i, obj;
+   objs := tile_get_objs(g_cursor, elevation(dude_obj));
+   total := 0;
+   if (objs) then begin
+      total := len_array(objs);
+   end
+   i := 0;
+   while (i < total) do begin
+      obj := objs[i];
+      if (obj and obj != dude_obj) then begin
+         if (obj_type(obj) == OBJ_TYPE_CRITTER) then begin
+            // Corpses share a hex with the living, because a dead critter
+            // stops blocking its tile. Offering a body as an attack target
+            // would waste a turn's action points on nothing.
+            if (not is_critter_dead(obj)) then begin
+               g_hascritter := 1;
+               return;
+            end
+         end
+      end
+      i := i + 1;
+   end
+   // No free_array: tile_get_objs returns a temporary array, auto-deleted at
+   // end of frame. Freeing it by hand is a double free and crashes the engine.
+   g_hascritter := 0;
+end
+
+/*
+ * force_action_cursor  --  set the cursor to match what the look hex holds.
+ *
+ * Fallout decides what a left click does from the cursor mode, so a blind
+ * player needs that mode set deliberately rather than toggled blindly with
+ * right-click. The script picks it, because the script is what knows both
+ * whether combat is running and what is standing on the selected hex.
+ *
+ * In combat, with a living critter on the look hex, that means the targeting
+ * cursor: a click attacks. Otherwise the movement cursor: a click walks. This
+ * is the same decision a sighted player makes by looking at what they are
+ * pointing at, and it keeps one key -- "do the obvious thing with the hex I
+ * have chosen" -- instead of making the player track cursor state themselves.
+ *
+ * There is no ambiguity to worry about: a living critter blocks its hex, so
+ * "walk there" was never available for the hexes this targets.
+ */
+procedure force_action_cursor begin
+   variable before, want;
+
+   g_hascritter := 0;
+   if (combat_is_initialized) then begin
+      call live_critter_at_cursor;
+   end
+
+   if (g_hascritter) then begin
+      want := CURSOR_TARGETING;
+   end else begin
+      want := CURSOR_MOVEMENT;
+   end
+
+   before := get_cursor_mode;
+   set_cursor_mode(want);
+   g_lastcursormode := get_cursor_mode;
+
+   // Always answer, but do not give the same long answer twice. Silence is the
+   // one response a blind player cannot act on -- it reads exactly like the key
+   // never arrived, which is how this key got written off as broken. But the
+   // full "movement cursor, a click walks you there" on every press is its own
+   // problem: pressed twice to be sure, it just repeats itself. So a press that
+   // changed nothing gets a short acknowledgement instead.
+   if (before == g_lastcursormode) then begin
+      debug_msg("WORLD:cursorok " + g_lastcursormode);
+   end else begin
+      debug_msg("WORLD:cursormode " + g_lastcursormode);
+   end
+end
+
+procedure snap_to_dude begin
+   g_cursor := tile_num(dude_obj);
+   call recenter_view;
+   debug_msg("WORLD:snap");
+   call describe_cursor;
+end
+
+procedure describe_cursor begin
+   variable elev, here, dist, objs, total, count, names, i, obj, nm, ty;
+
+   elev := elevation(dude_obj);
+   here := tile_num(dude_obj);
+   dist := tile_distance(here, g_cursor);
+
+   objs := tile_get_objs(g_cursor, elev);
+   total := 0;
+   if (objs) then begin
+      total := len_array(objs);
+   end
+
+   count := 0;
+   names := "";
+   i := 0;
+   while (i < total) do begin
+      obj := objs[i];
+      if (obj) then begin
+         ty := obj_type(obj);
+
+         if (obj == dude_obj) then begin
+            if (count > 0) then names := names + ", ";
+            names := names + "you";
+            count := count + 1;
+
+         // Filter out the engine's invisible furniture. A live map is carpeted
+         // in "Scroll Blocker", "Block Hex Auto Inviso" and unnamed spatial
+         // script triggers -- none of which a sighted player perceives, so
+         // announcing them would both mislead and drown out real content.
+         // obj_is_visible_flag is a plain flag read, so unlike obj_can_see_obj
+         // it is safe to call on any object type.
+         end else if (ty != OBJ_TYPE_SPATIAL and obj_is_visible_flag(obj)) then begin
+
+            if (ty == OBJ_TYPE_CRITTER) then begin
+               // Only critters get the line-of-sight and stealth test, and
+               // only critters: obj_can_see_obj reaches for critter fields and
+               // null-dereferenced at 0x004AA6AE when handed scenery.
+               debug_msg("WORLD:dbgLOS obj=" + obj);
+               if (obj_can_see_obj(dude_obj, obj)) then begin
+                  if (count > 0) then names := names + ", ";
+                  names := names + obj_name(obj);
+                  count := count + 1;
+               end
+            end else begin
+               // Diagnostic: "Scroll Blocker" and "Block Hex Auto Inviso" pass
+               // obj_is_visible_flag despite being invisible to a player, so we
+               // need a structural property to reject them by. Filtering on the
+               // English name would break localisation, so log pid/fid/flags
+               // and pick a rule from the data.
+               debug_msg("WORLD:obj pid=" + obj_pid(obj) + " fid=" + obj_art_fid(obj)
+                  + " flags=" + get_flags(obj) + " ty=" + ty + " nm=" + obj_name(obj));
+               if (count > 0) then names := names + ", ";
+               names := names + obj_name(obj);
+               count := count + 1;
+            end
+         end
+      end
+      i := i + 1;
+   end
+
+   // No free_array: tile_get_objs returns a TEMPORARY array and sfall deletes
+   // those at end of frame. Freeing by hand is a double free -- it hard-crashed
+   // the engine the first time this ran.
+
+   if (count == 0) then begin
+      names := "empty";
+   end
+   // Trailing '|' terminates the line: the engine appends its own debug output
+   // to ours without always starting a new line, and object names are the last
+   // field here. Everything after the bar is discarded.
+   debug_msg("WORLD:hex " + g_cursor + " dist " + dist + " : " + names + "|");
+end

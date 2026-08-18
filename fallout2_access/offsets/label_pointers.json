@@ -1,0 +1,24 @@
+{
+  "0": [],
+  "10": [
+    {
+      "addr": 5701876,
+      "at_11": "Poisoned",
+      "at_12": "Radiated"
+    }
+  ],
+  "18": [],
+  "28": [],
+  "55": [
+    {
+      "addr": 5703096,
+      "at_56": "Bruiser",
+      "at_57": "Small Frame"
+    },
+    {
+      "addr": 5703116,
+      "at_56": "A little slower, but a little bigger.  You may not hit as often, but they will feel it when you do!  Your total action p",
+      "at_57": "You are not quite as big as the other villagers, but that never slowed you down.  You can't carry as much, but you are m"
+    }
+  ]
+}

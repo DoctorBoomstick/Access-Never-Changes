@@ -1,0 +1,97 @@
+"""Parsing the in-game script's output.
+
+debug.log is the only channel the engine gives a script for getting text out, so
+everything the mod knows about the live world arrives as lines in this file --
+and the engine writes its own debug output into the same file, sometimes without
+a newline. These tests use real captured lines, noise included.
+"""
+
+import os
+import tempfile
+import unittest
+
+from fallout2_access.game.worldlog import WorldLog
+
+
+class LogFixture:
+    def __init__(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "debug.log")
+        open(self.path, "w").close()
+        self.log = WorldLog(self.path)
+
+    def write(self, *lines):
+        with open(self.path, "a", encoding="utf-8") as fh:
+            for line in lines:
+                fh.write(line + "\n")
+        return self.log.poll()
+
+    def truncate(self):
+        open(self.path, "w").close()
+
+
+class TestWorldLog(unittest.TestCase):
+    def setUp(self):
+        self.f = LogFixture()
+
+    def test_hex_reading(self):
+        self.f.write("WORLD:hex 17488 dist 0 : you|")
+        self.assertEqual(self.f.log.last_hex.tile, 17488)
+        self.assertEqual(self.f.log.last_hex.contents, "you")
+        self.assertEqual(self.f.log.last_hex.announce(), "you")
+
+    def test_distance_is_pluralised(self):
+        self.f.write("WORLD:hex 17687 dist 1 : empty|")
+        self.assertEqual(self.f.log.last_hex.announce(), "empty, 1 hex")
+        self.f.write("WORLD:hex 17686 dist 2 : Tree|")
+        self.assertEqual(self.f.log.last_hex.announce(), "Tree, 2 hexes")
+
+    def test_engine_noise_after_the_terminator_is_discarded(self):
+        """Captured verbatim: the engine appended its own line to ours."""
+        self.f.write("WORLD:hex 25911 dist 1 : Giant Ant|sequencing attack...")
+        self.assertEqual(self.f.log.last_hex.contents, "Giant Ant")
+
+    def test_cursorok_reports_the_mode_too(self):
+        """Only parsing `cursormode` left the mode unknown exactly when nothing
+        had changed -- which is the common case, and the one the click path
+        needs an answer for."""
+        self.f.write("WORLD:cursorok 2|")
+        self.assertEqual(self.f.log.cursor_mode, 2)
+        self.f.write("WORLD:cursormode 0|")
+        self.assertEqual(self.f.log.cursor_mode, 0)
+
+    def test_game_mode_and_session_liveness(self):
+        self.assertFalse(self.f.log.session_live)
+        self.f.write("WORLD:ready")
+        self.assertTrue(self.f.log.session_live)
+        self.f.write("WORLD:gamemode 64")
+        self.assertEqual(self.f.log.game_mode, 64)
+
+    def test_combat_lines_are_passed_through(self):
+        out = self.f.write("COMBAT:turn 1|you|")
+        self.assertEqual(out, ["COMBAT:turn 1|you|"])
+
+    def test_combat_ready_marks_the_session_live(self):
+        self.f.write("COMBAT:ready|")
+        self.assertTrue(self.f.log.session_live)
+
+    def test_relaunch_resets_everything(self):
+        """The game truncates debug.log on launch, so a shrinking file means a
+        new session and every remembered fact belongs to a dead one."""
+        self.f.write("WORLD:ready", "WORLD:gamemode 0", "WORLD:hex 1 dist 0 : you|")
+        self.assertTrue(self.f.log.session_live)
+        self.f.truncate()
+        self.f.write("WORLD:hex 2 dist 0 : you|")
+        self.assertEqual(self.f.log.last_hex.tile, 2)
+
+    def test_missing_file_is_survivable(self):
+        log = WorldLog(os.path.join(self.f.dir, "nope.log"))
+        self.assertEqual(log.poll(), [])
+
+    def test_unrelated_lines_are_ignored(self):
+        out = self.f.write("Gsound: playing ambient map sfx: animal1")
+        self.assertEqual(out, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

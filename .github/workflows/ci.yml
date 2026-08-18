@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # Windows because the mod reads a running Windows process and speaks
+    # through Windows screen readers. The tests themselves are pure logic and
+    # need no game, but keeping the runner honest avoids surprises.
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run tests
+        run: python -m unittest discover -s tests -t . -v
+      - name: Check the package imports cleanly
+        run: python -c "import fallout2_access.app"

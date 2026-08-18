@@ -1,0 +1,315 @@
+{
+  "symbols": {
+    "char_editor_selected": 5704172,
+    "char_editor_name_ptr": 5703096,
+    "char_editor_desc_ptr": 5703116
+  },
+  "module_base": 4194304,
+  "sections": {
+    "10": [
+      {
+        "index": 10,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 11,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 12,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 13,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 14,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 15,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 16,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 17,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      }
+    ],
+    "18": [
+      {
+        "index": 18,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 19,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 20,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 21,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 22,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 23,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 83,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 24,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 25,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 26,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      }
+    ],
+    "28": [
+      {
+        "index": 28,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 29,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 30,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 31,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 32,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 33,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 34,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 35,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 36,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 37,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 38,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 39,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 40,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 41,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 42,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 43,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 44,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 45,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      }
+    ],
+    "0": [
+      {
+        "index": 0,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 1,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 2,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 3,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 4,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 5,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      },
+      {
+        "index": 6,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      }
+    ],
+    "55": [
+      {
+        "index": 55,
+        "name": "Fast Metabolism",
+        "description": "Your metabolic rate is twice normal.  This means that you are much less resistant to radiation and poison, but your body heals faster."
+      },
+      {
+        "index": 56,
+        "name": "Bruiser",
+        "description": "A little slower, but a little bigger.  You may not hit as often, but they will feel it when you do!  Your total action points are lowered, but your Strength is increased."
+      },
+      {
+        "index": 57,
+        "name": "Small Frame",
+        "description": "You are not quite as big as the other villagers, but that never slowed you down.  You can't carry as much, but you are more agile."
+      },
+      {
+        "index": 58,
+        "name": "One Hander",
+        "description": "One of your hands is very dominant.  You excel with single-handed weapons, but two-handed weapons cause a problem."
+      },
+      {
+        "index": 59,
+        "name": "Finesse",
+        "description": "Your attacks show a lot of finesse.  You don't do as much damage, but you cause more critical hits."
+      },
+      {
+        "index": 60,
+        "name": "Kamikaze",
+        "description": "By not paying attention to any threats, you can act a lot faster in a turn.  This lowers your armor class to just what you are wearing, but you sequence much faster in a combat turn."
+      },
+      {
+        "index": 61,
+        "name": "Heavy Handed",
+        "description": "You swing harder, not better.  Your attacks are very brutal, but lack finesse.  You rarely cause a good critical, but you always do more melee damage."
+      },
+      {
+        "index": 62,
+        "name": "Fast Shot",
+        "description": "You don't have time to aim for a targeted attack, because you attack faster than normal people.  It costs you one less action point for guns and thrown weapons."
+      },
+      {
+        "index": 63,
+        "name": "Bloody Mess",
+        "description": "By some strange twist of fate, people around you die violently.  You always see the worst way a person can die."
+      },
+      {
+        "index": 64,
+        "name": "Jinxed",
+        "description": "The good thing is that everyone around you has more critical failures in combat, the bad thing is so do you!"
+      },
+      {
+        "index": 65,
+        "name": "Good Natured",
+        "description": "You studied less-combative skills as you were growing up.  Your combat skills start at a lower level, but First Aid, Doctor, Speech and Barter are substantially improved."
+      },
+      {
+        "index": 66,
+        "name": "Chem Reliant",
+        "description": "You are more easily influenced by chems.  Your chance to be reliant by chem use is twice normal, but you recover faster from their ill effects."
+      },
+      {
+        "index": 67,
+        "name": "Chem Resistant",
+        "description": "Chems only affect you half as long as normal, but your chance to be reliant is also only 50% of normal."
+      },
+      {
+        "index": 94,
+        "name": "Sex Appeal",
+        "description": "You've got the \"right\" stuff.  Members of the opposite sex are attracted to you, but those of the same sex tend to become quite jealous."
+      },
+      {
+        "index": 69,
+        "name": "Skilled",
+        "description": "Since you spent more time improving your skills than a normal person, you gain 5 additional skill points per experience level. The tradeoff is that you do not gain as many extra abilities. You gain a perk every four levels."
+      },
+      {
+        "index": 70,
+        "name": "Gifted",
+        "description": "You have more innate abilities than most, so you have not spent as much time honing your skills.  Your primary statistics are each +1, but you lose -10% on all skills to start, and receive 5 less skill points per level."
+      }
+    ]
+  }
+}
