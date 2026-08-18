@@ -74,14 +74,14 @@ why the six directions sit on the numpad's corners and sides:
 | Numpad 5 | re-read the current hex |
 | Numpad 8 | bring the cursor back to you |
 | Numpad 0 | force the movement cursor |
-| Numpad ✳ | **walk to the hex the look cursor is on** |
+| Numpad + | **left click on the hex the look cursor is on** |
 
 (Numpad 2 is used internally — the mod presses it several times per click to
 ask the game where the pointer is. It isn't a key you need.)
 
 ## Walking
 
-Pick a hex with the numpad, then press numpad ✳. You walk there.
+Pick a hex with the numpad, then press numpad +. You walk there.
 
 Fallout 2 only moves you where you click, and there is no keyboard equivalent,
 so the mod has to put the mouse pointer on the hex you chose. It does that by
@@ -199,7 +199,7 @@ whether `Shift+]` is worth pressing at all.
 Stepping the list does **not** move your cursor. Listing what is around you and
 going to it are different intentions, and you may just want to look. Press `/`
 when you actually want to go there — then the cursor works as it always does:
-numpad ✳ walks you there, or attacks it if it's alive and a fight is on.
+numpad + walks you there, or attacks it if it's alive and a fight is on.
 
 ### What it won't tell you
 
@@ -225,11 +225,21 @@ script:
 
 | Key | Action |
 |---|---|
-| Numpad ✳ | walk to the look cursor's hex (aims, then clicks) |
-| Numpad - | right click (toggles movement/command cursor) |
+| Numpad + | **left mouse button** |
+| Numpad - | **right mouse button** — cycles the cursor mode |
+| Numpad ✳ | summary / where am I |
 | Numpad / | repeat the current item |
-| Numpad + | summary / where am I |
 | Numpad . | full description |
+
+The two mouse buttons sit next to each other on `+` and `-`, unmistakable by
+feel. Everything else on the numpad is a readout, so a misfire costs you a
+sentence rather than an action.
+
+A left click acts on the hex your look cursor is on: the mod moves the pointer
+there first, because that is the part you cannot do yourself. What the click
+then *means* is up to you and the cursor mode, exactly as it is for a sighted
+player — right click cycles the mode and the mod tells you which one you landed
+on.
 
 Off the map — in the inventory, Pipboy, a dialog — numpad ✳ doesn't aim. There
 are no hexes there, so it just clicks where the pointer already is.

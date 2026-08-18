@@ -54,8 +54,9 @@ what gets announced. The short version:
 | Numpad 7 9 4 6 1 3 | move the look cursor one hex |
 | Numpad 5 | re-read the hex |
 | Numpad 8 | bring the cursor back to you |
-| Numpad ✳ | walk there — or attack, if an enemy is standing there |
-| Numpad + | where am I / whose turn is it |
+| Numpad + | left click on the look cursor's hex — walk, or attack |
+| Numpad - | right click — cycles the cursor mode |
+| Numpad ✳ | where am I / whose turn is it |
 | `[` / `]` | scanner: type of thing nearby |
 | `Shift+[` / `Shift+]` | scanner: which one of that type |
 | `Ctrl+[` / `Ctrl+]` | scanner: category |

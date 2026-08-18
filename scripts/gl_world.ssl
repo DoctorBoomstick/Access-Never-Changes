@@ -71,6 +71,7 @@
 #define ACT_SCAN_INSTNEXT  (-10)
 #define ACT_SCAN_INSTPREV  (-11)
 #define ACT_SCAN_JUMP      (-12)
+#define ACT_MSG_MARKER     (-13)
 
 variable g_cursor := CURSOR_UNSET;
 variable g_lastmode := -1;
@@ -104,6 +105,7 @@ procedure scan_instance(variable delta);
 procedure scan_type(variable delta);
 procedure scan_category(variable delta);
 procedure scan_jump;
+procedure msg_marker;
 
 /*
  * start  --  init once, then poll.
@@ -325,6 +327,7 @@ procedure on_key begin
          dir := ACT_SCAN_TYPENEXT;
    end
    else if (key == DIK_SLASH) then dir := ACT_SCAN_JUMP;
+   else if (key == DIK_BACKSLASH) then dir := ACT_MSG_MARKER;
    else return;
 
    // Log arrival before doing any work. When this crashed the engine,
@@ -342,7 +345,8 @@ procedure on_key begin
    else if (dir == ACT_SCAN_INSTPREV) then call scan_instance(-1);
    else if (dir == ACT_SCAN_CATNEXT)  then call scan_category(1);
    else if (dir == ACT_SCAN_CATPREV)  then call scan_category(-1);
-   else if (dir == ACT_SCAN_JUMP)    then call scan_jump;
+   else if (dir == ACT_SCAN_JUMP)     then call scan_jump;
+   else if (dir == ACT_MSG_MARKER)    then call msg_marker;
    else                               call step_cursor(dir);
 
    set_sfall_return(0);   // swallow the key so the game does not also act
@@ -721,6 +725,23 @@ end
 
 procedure scan_jump begin
    call scan_do(0, 1);
+end
+
+/*
+ * msg_marker  --  print a known string into the interface bar, to find it.
+ *
+ * The display window along the bottom of the screen is where Fallout tells the
+ * player everything in words: "You see: a door", "It's locked", what hit whom
+ * for how much. Nothing in sfall can read it back, so it has to be found in
+ * memory -- and the easy way to find a buffer is to put something recognisable
+ * in it and go looking for that.
+ *
+ * Diagnostic, and temporary. Once the buffer is located and read, the game's
+ * own words replace the sentences this mod currently assembles for itself.
+ */
+procedure msg_marker begin
+   display_msg("ANCPROBE7F3C9D51");
+   debug_msg("WORLD:marker ANCPROBE7F3C9D51|");
 end
 
 procedure live_critter_at_cursor begin

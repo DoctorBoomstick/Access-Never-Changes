@@ -11,10 +11,10 @@ Numpad 0-9 belong to the in-game script (gl_world.ssl), which walks a look
 cursor around the hex grid. So this mod's own hotkeys live on the numpad
 *operator* keys, which the script ignores:
 
-    Numpad *   left click where the game cursor is
-    Numpad -   right click (toggles the movement/command cursor)
+    Numpad +   left mouse button
+    Numpad -   right mouse button (cycles the cursor mode)
+    Numpad *   summary / where am I
     Numpad /   repeat the current item
-    Numpad +   summary / where am I
     Numpad .   full description
 
 Hotkeys need `pip install pynput`; without it everything else still works.
@@ -34,11 +34,14 @@ from fallout2_access.speech.backends import get_speaker
 
 # Numpad 0-9 are claimed by the in-game script (hex cursor movement), so the
 # mod's own hotkeys live on the operator keys, which the script ignores.
+# The two mouse buttons sit on numpad + and -, next to each other and
+# unmistakable by feel. Everything else is a readout, so a misfire costs a
+# sentence rather than an action.
 HOTKEYS = {
-    106: "click",     # numpad *   left click where the game cursor is
-    109: "rclick",    # numpad -   right click (toggles movement/command cursor)
-    111: "repeat",    # numpad /   repeat current item
-    107: "summary",   # numpad +   summary / where am I
+    107: "click",     # numpad +   LEFT mouse button
+    109: "rclick",    # numpad -   RIGHT mouse button (cycles the cursor mode)
+    106: "summary",   # numpad *   summary / where am I
+    111: "repeat",    # numpad /   repeat the current item
     110: "describe",  # numpad .   full description
 }
 
@@ -67,9 +70,9 @@ def start_hotkeys(app: App) -> bool:
     listener.daemon = True
     listener.start()
     print(
-        "[hotkeys] numpad *  left click   |  numpad -  right click\n"
-        "[hotkeys] numpad /  repeat       |  numpad +  summary   |  numpad .  describe\n"
-        "[hotkeys] (numpad 0-9 are handled inside the game by gl_world.ssl)",
+        "[hotkeys] numpad +  LEFT click   |  numpad -  RIGHT click\n"
+        "[hotkeys] numpad *  summary      |  numpad /  repeat    |  numpad .  describe\n"
+        "[hotkeys] (numpad 0-9 and the brackets are handled inside the game)",
         flush=True,
     )
     return True

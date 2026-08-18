@@ -66,6 +66,7 @@ DIK = {
     "numpad_minus": (0x4A, False),
     "numpad_plus": (0x4E, False),
     "numpad_dot": (0x53, False),
+    "backslash": (0x2B, False),
 }
 
 
