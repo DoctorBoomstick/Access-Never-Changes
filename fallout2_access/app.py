@@ -281,7 +281,7 @@ class CharGenWatcher(Watcher):
 WORLD_HELP = (
     "Numpad 7 9 4 6 1 3 move the look cursor around the six hex "
     "directions. Numpad 5 re-reads the hex, numpad 8 returns the cursor to you, "
-    "numpad star clicks where the cursor is."
+    "numpad plus clicks it."
 )
 
 
@@ -565,6 +565,24 @@ class App:
             self.ann.answer("Game is not focused.")
         except Exception as exc:  # never let a hotkey kill the loop
             print("[app] click: {}".format(exc), flush=True)
+
+    def action(self, what: str) -> None:
+        """Queue a hotkey. Called from the keyboard listener's thread.
+
+        Nothing is done here. Hotkeys arrive on pynput's thread while the main
+        loop is reading the script's log, and aiming a click reads that same log
+        and sends its own keystrokes -- two threads doing that at once
+        interleave keys and steal each other's lines. Queue it, run it in the
+        loop.
+
+        This is the mod's entire entry point from the keyboard. It went missing
+        for several rounds during a refactor, and the failure was completely
+        silent: the listener called a method that no longer existed, the
+        AttributeError was caught as "never let a hotkey kill the listener",
+        and the message went to a console the player cannot see. Every key
+        press did nothing at all, without a sound.
+        """
+        self._pending.append((what, time.time()))
 
     def _run_pending(self) -> None:
         while self._pending:
