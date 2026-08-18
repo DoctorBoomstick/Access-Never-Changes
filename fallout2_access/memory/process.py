@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wt
+import os
 from typing import Dict, Iterator, List, NamedTuple, Optional, Sequence
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -189,6 +190,12 @@ def find_pids(names: Sequence[str]) -> List[int]:
     return pids
 
 
+kernel32.QueryFullProcessImageNameW.argtypes = [
+    wt.HANDLE, wt.DWORD, wt.LPWSTR, ctypes.POINTER(wt.DWORD)
+]
+kernel32.QueryFullProcessImageNameW.restype = wt.BOOL
+
+
 class Process:
     """A read-only handle onto a running process."""
 
@@ -223,6 +230,33 @@ class Process:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+    @property
+    def exe_path(self) -> str:
+        """Full path to the running executable, or "" if it cannot be read.
+
+        This is how the mod finds the game's folder, and it has to be asked of
+        the process rather than assumed: the mod used to live inside the game
+        directory and worked out paths from its own location, which broke the
+        moment it moved into a repo of its own. Asking the process is also the
+        only answer that stays right for a GOG install, a second copy, or a
+        game started from somewhere unexpected.
+        """
+        if not self._handle:
+            return ""
+        size = wt.DWORD(1024)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if kernel32.QueryFullProcessImageNameW(
+            self._handle, 0, buf, ctypes.byref(size)
+        ):
+            return buf.value
+        return ""
+
+    @property
+    def directory(self) -> str:
+        """The folder the game is installed in."""
+        path = self.exe_path
+        return os.path.dirname(path) if path else ""
 
     @property
     def alive(self) -> bool:

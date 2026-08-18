@@ -446,9 +446,25 @@ class App:
             self.proc = None
             return False
         self.hwnd = find_game_window(self.proc.pid)
-        log_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "debug.log"
-        )
+        # debug.log lives beside the game's executable -- it is the game that
+        # writes it. Ask the process where it lives rather than working it out
+        # from where THIS file happens to sit: that worked only while the mod
+        # lived inside the game folder, and broke silently the moment it moved
+        # into a repo, attaching happily and then hearing nothing at all.
+        game_dir = self.proc.directory
+        if not game_dir:
+            print("[app] cannot determine the game's folder; is it running?",
+                  flush=True)
+            return False
+        log_path = os.path.join(game_dir, "debug.log")
+        if not os.path.exists(log_path):
+            # Not fatal: the game creates it on launch and truncates it each
+            # time, so an absent file usually just means nothing has been
+            # written yet. Worth saying once, because a missing DebugMode=2 in
+            # ddraw.ini produces exactly this and is otherwise invisible.
+            print("[app] no debug.log in {} yet -- if nothing is ever announced "
+                  "in game, check DebugMode=2 in ddraw.ini".format(game_dir),
+                  flush=True)
         self.world = WorldWatcher(WorldLog(log_path))
         self.aimer = Aimer(self.hwnd, log_path) if self.hwnd else None
         self.watchers = {
@@ -459,7 +475,8 @@ class App:
         }
         self.screen = screens.UNKNOWN
         self.ann.reset()
-        print("[app] attached to pid {}".format(self.proc.pid), flush=True)
+        print("[app] attached to pid {} in {}".format(self.proc.pid, game_dir),
+              flush=True)
         return True
 
     def _connected(self) -> bool:
