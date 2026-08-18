@@ -55,6 +55,11 @@ _CALIB = re.compile(
     r"cursor=(-?\d+) match=(-?\d+) screen=(\d+)x(\d+) obj=([^|]*)\|"
 )
 
+# Verified end to end against a live game on 2026-08-19: cursor holds at 0
+# across four consecutive world reads, the aim matches the chosen hex, the click
+# lands with cursor 0, and the player walks 17488 -> 17687 -> 17686. With
+# Lockpick armed, the skill survives stepping the look cursor and a full aim.
+
 # Screen-pixel motion to (row, column) motion, measured live: 59 pixels right
 # moved one row down and two columns back; 87 pixels down moved five rows and
 # three columns. These are only a starting guess -- the servo re-measures the
