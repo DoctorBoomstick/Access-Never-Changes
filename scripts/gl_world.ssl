@@ -85,7 +85,8 @@ variable g_scan_type := 0;
 variable g_scan_inst := 0;
 variable g_restore_ticks := 0;
 variable g_movestart := -1;
-variable g_movesettle := 0;
+variable g_moving := 0;
+variable g_stillticks := 0;
 
 procedure start;
 procedure map_enter_p_proc;
@@ -209,29 +210,36 @@ procedure poll_state begin
    // when they matter most.
    if (m bwand MAP_HIDDEN) then return;
 
-   // Did the player actually move? The one unambiguous answer to whether a
-   // click worked, and it costs nothing to watch.
+   // Did the player actually move, and have they finished?
    //
-   // A walk arrives one tile at a time, so announcing each tile would babble
-   // through every step of a long journey. Instead the tiles are counted and a
-   // single "arrived" is emitted once the player has been still for a moment,
-   // with the distance measured by the engine's own tile_distance.
+   // A walk arrives one tile at a time, so announcing each tile babbles
+   // through a long journey -- twelve "moved 1 hex" in a row, which is what a
+   // timer-based version produced. The engine knows the answer exactly:
+   // anim_busy is true while the player is animating. A short stillness
+   // counter guards against the gap between one step's animation and the
+   // next being read as an arrival.
    d := tile_num(dude_obj);
    if (d != g_lastdude) then begin
-      if (g_movesettle == 0) then begin
+      if (not g_moving) then begin
          g_movestart := g_lastdude;
+         g_moving := 1;
       end
       g_lastdude := d;
-      // The window has to be longer than the time it takes to walk ONE hex,
-      // or a multi-hex walk is chopped into several "arrivals" and announced
-      // as "moved 1 hex" over and over. A hex takes roughly half a second at
-      // walking pace, so this leaves comfortable headroom.
-      g_movesettle := 40;
-      debug_msg("WORLD:dude " + d);
-   end else if (g_movesettle > 0) then begin
-      g_movesettle := g_movesettle - 1;
-      if (g_movesettle == 0) then begin
-         debug_msg("WORLD:arrive " + d + " dist " + tile_distance(g_movestart, d));
+      g_stillticks := 0;
+      debug_msg("WORLD:dude " + d + "|");
+   end
+
+   if (g_moving) then begin
+      if (anim_busy(dude_obj)) then begin
+         g_stillticks := 0;
+      end else begin
+         g_stillticks := g_stillticks + 1;
+         if (g_stillticks >= 10) then begin
+            g_moving := 0;
+            g_stillticks := 0;
+            debug_msg("WORLD:arrive " + d + " dist "
+               + tile_distance(g_movestart, d) + "|");
+         end
       end
    end
 
@@ -291,7 +299,8 @@ end
 procedure map_enter_p_proc begin
    g_cursor := tile_num(dude_obj);
    g_lastdude := g_cursor;
-   g_movesettle := 0;
+   g_moving := 0;
+   g_stillticks := 0;
    g_lastunder := -1;
    debug_msg("WORLD:map " + g_cursor + " elev " + elevation(dude_obj));
 end

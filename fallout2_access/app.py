@@ -65,16 +65,35 @@ SELECT_HELP = (
 
 
 class Announcer:
+    """Speaks, and decides what may cut off what.
+
+    The rule is the one screen readers have always used: **what you asked for
+    interrupts, what the world did queues up.**
+
+    Pressing a key is a question, and the answer to your latest question should
+    arrive immediately -- stepping the scanner five times fast should read the
+    fifth item, not the first four and then the fifth. But events are a stream,
+    and cutting one off with the next loses it entirely. Announcing everything
+    as urgent left only the last line of any burst alive: a miss was reliably
+    erased by the action-point count that followed it a moment later, so combat
+    read as "3." "6." with no idea what had happened in between.
+    """
+
     def __init__(self, speaker: Speaker) -> None:
         self.speaker = speaker
         self._last = ""
 
-    def say(self, text: str, interrupt: bool = True, force: bool = False) -> None:
+    def say(self, text: str, interrupt: bool = False, force: bool = False) -> None:
+        """Queue `text`. Set interrupt=True only for something the player asked for."""
         text = " ".join(text.split())
         if not text or (text == self._last and not force):
             return
         self._last = text
         self.speaker.speak(text, interrupt=interrupt)
+
+    def answer(self, text: str) -> None:
+        """A reply to a keypress: cuts off whatever is still being said."""
+        self.say(text, interrupt=True, force=True)
 
     def reset(self) -> None:
         self._last = ""
@@ -108,10 +127,10 @@ class MainMenuWatcher(Watcher):
     key = screens.MAIN_MENU
 
     def enter(self, ann: Announcer) -> None:
-        ann.say(MAIN_MENU_HELP, force=True)
+        ann.answer(MAIN_MENU_HELP)
 
     def repeat(self, ann: Announcer) -> None:
-        ann.say(MAIN_MENU_HELP, force=True)
+        ann.answer(MAIN_MENU_HELP)
 
     summary = repeat
     describe = repeat
@@ -135,17 +154,14 @@ class SelectWatcher(Watcher):
     def enter(self, ann: Announcer) -> None:
         info = self.premade.read()
         if not info:
-            ann.say("Character selection.", force=True)
+            ann.answer("Character selection.")
             return
         # Leave _prev unset: the premade data can still be settling a frame
         # after the screen appears, and seeding it here made the first poll
         # see a "change" and repeat the whole announcement.
         self._prev = None
-        ann.say(
-            "Character selection. {} {}".format(
-                info.full(self.premade.stat_names()), SELECT_HELP
+        ann.answer("Character selection. {} {}".format(info.full(self.premade.stat_names()), SELECT_HELP
             ),
-            force=True,
         )
 
     def poll(self, ann: Announcer) -> None:
@@ -158,17 +174,17 @@ class SelectWatcher(Watcher):
             return
         if key != self._prev:
             self._prev = key
-            ann.say(info.full(self.premade.stat_names()))
+            ann.answer(info.full(self.premade.stat_names()))
 
     def repeat(self, ann: Announcer) -> None:
         info = self.premade.read()
         if info:
-            ann.say(info.announce(), force=True)
+            ann.answer(info.announce())
 
     def describe(self, ann: Announcer) -> None:
         info = self.premade.read()
         if info:
-            ann.say(info.full(self.premade.stat_names()), force=True)
+            ann.answer(info.full(self.premade.stat_names()))
 
     summary = describe
 
@@ -198,9 +214,9 @@ class CharGenWatcher(Watcher):
         self._prev = self.snapshot() or {}
         item = self.chargen.current()
         if item:
-            ann.say("Character creation. " + item.announce(), force=True)
+            ann.answer("Character creation. " + item.announce())
         else:
-            ann.say("Character creation.", force=True)
+            ann.answer("Character creation.")
 
     def poll(self, ann: Announcer) -> None:
         snap = self.snapshot()
@@ -214,21 +230,15 @@ class CharGenWatcher(Watcher):
         if prev.get("tags") != snap.get("tags"):
             used = len(snap.get("tags") or ())
             item = self.chargen.current()
-            ann.say(
-                "{}. {} of 3 tags used.".format(
-                    item.announce() if item else "", used
+            ann.answer("{}. {} of 3 tags used.".format(item.announce() if item else "", used
                 ),
-                force=True,
             )
             return
         if prev.get("traits") != snap.get("traits"):
             used = len(snap.get("traits") or ())
             item = self.chargen.current()
-            ann.say(
-                "{}. {} of 2 traits chosen.".format(
-                    item.announce() if item else "", used
+            ann.answer("{}. {} of 2 traits chosen.".format(item.announce() if item else "", used
                 ),
-                force=True,
             )
             return
 
@@ -239,28 +249,28 @@ class CharGenWatcher(Watcher):
             text = item.announce() if item else ""
             if points is not None:
                 text += ", {} points left".format(points)
-            ann.say(text, force=True)
+            ann.answer(text)
             return
 
         if prev.get("selection") != snap.get("selection"):
             item = self.chargen.current()
             if item:
-                ann.say(item.announce())
+                ann.answer(item.announce())
 
     def repeat(self, ann: Announcer) -> None:
         item = self.chargen.current()
         if item:
-            ann.say(item.announce(), force=True)
+            ann.answer(item.announce())
 
     def describe(self, ann: Announcer) -> None:
         item = self.chargen.current()
         if item and item.description:
-            ann.say("{}. {}".format(item.label, item.description), force=True)
+            ann.answer("{}. {}".format(item.label, item.description))
         elif item:
-            ann.say("{}. No description.".format(item.label), force=True)
+            ann.answer("{}. No description.".format(item.label))
 
     def summary(self, ann: Announcer) -> None:
-        ann.say(self.chargen.summary(), force=True)
+        ann.answer(self.chargen.summary())
 
 
 WORLD_HELP = (
@@ -323,29 +333,31 @@ class WorldWatcher(Watcher):
         logged it, and no one ever said so.
         """
         for line in self.log.poll():
+            # (text, urgent) -- urgent means "you pressed a key and this is
+            # the answer", so it may cut off whatever is still being said.
             if line.startswith("SCAN:obj"):
                 # Furniture survey: pid, flags and type for every object the
                 # scanner considered. Logged so the filter can be derived from
                 # real data instead of guessed at. Never spoken.
                 continue
             elif line.startswith("SCAN:"):
-                self._queue.extend(self.scanner.handle(line))
+                self._queue.extend((t, True) for t in self.scanner.handle(line))
             elif line.startswith("COMBAT:"):
                 # Combat speaks even when the mod thinks another screen is up.
                 # Being attacked is not something to withhold because a screen
                 # detector is unsure.
-                self._queue.extend(self.combat.handle(line))
+                self._queue.extend((t, False) for t in self.combat.handle(line))
             elif line.startswith("WORLD:hex") and self.log.last_hex:
-                self._queue.append(self.log.last_hex)
+                self._queue.append((self.log.last_hex, True))
             elif line.startswith("WORLD:gamemode"):
                 if self._mode is not None and self.log.game_mode != self._mode:
-                    self._queue.append(screens.mode_name(self.log.game_mode))
+                    self._queue.append((screens.mode_name(self.log.game_mode), False))
                 self._mode = self.log.game_mode
             elif line.startswith("WORLD:map"):
                 # Changed map. Worth saying out loud on its own: an exit grid
                 # moves you somewhere entirely different, and the only other
                 # cue is the music changing.
-                self._queue.append("New area.")
+                self._queue.append(("New area.", False))
             elif line.startswith("WORLD:arrive"):
                 # You walked and stopped. This is the confirmation that a click
                 # did what it was meant to -- and its absence was why a working
@@ -354,14 +366,15 @@ class WorldWatcher(Watcher):
                 parts = line.split()
                 dist = parts[3] if len(parts) > 3 else "?"
                 self._queue.append(
-                    "Moved {} hex{}.".format(dist, "" if dist == "1" else "es")
+                    ("Moved {} hex{}.".format(dist, "" if dist == "1" else "es"),
+                     False)
                 )
             elif line.startswith("WORLD:cursorok"):
                 # Numpad 0 pressed when the cursor was already in that mode.
                 # Confirm briefly rather than repeating the full explanation,
                 # which is what it sounds like when you press it twice.
                 if time.time() >= self._mute_cursor_until:
-                    self._queue.append("Already the movement cursor.")
+                    self._queue.append(("Already the movement cursor.", True))
             elif line.startswith("WORLD:cursormode"):
                 if time.time() < self._mute_cursor_until:
                     continue
@@ -371,7 +384,7 @@ class WorldWatcher(Watcher):
                 # Skilldex pick stays armed until something clears it.
                 what = screens.cursor_name(self.log.cursor_mode)
                 if what:
-                    self._queue.append(what)
+                    self._queue.append((what, False))
             elif not any(line.startswith(p) for p in WORLD_QUIET):
                 # Everything else is spoken verbatim. Note the direction of the
                 # default: unrecognised script output is AUDIBLE, and silence
@@ -380,32 +393,29 @@ class WorldWatcher(Watcher):
                 # numpad 2 look dead, and it would have done it again here --
                 # calibrate emits a "WORLD:mode" line that an enumerated
                 # allow-list did not cover.
-                self._queue.append(line[len("WORLD:"):])
+                self._queue.append((line[len("WORLD:"):], False))
 
     def enter(self, ann: Announcer) -> None:
-        ann.say("Exploring. " + WORLD_HELP, force=True)
+        ann.answer("Exploring. " + WORLD_HELP)
 
     def poll(self, ann: Announcer) -> None:
         while self._queue:
-            item = self._queue.pop(0)
-            # force=True, deliberately. The Announcer suppresses a line
-            # identical to the one before it, which is right for a 20Hz memory
-            # poll but wrong for anything the player asked for by pressing a
-            # key: numpad 5 re-reads the hex you are already on and therefore
-            # produces the identical string every time, so it was swallowed
-            # every time. Two neighbouring empty hexes at the same distance had
-            # the same problem. Pressing a key and hearing nothing is
-            # indistinguishable from the key not arriving.
-            ann.say(
-                item.announce() if isinstance(item, HexReading) else str(item),
-                force=True,
-            )
+            item, urgent = self._queue.pop(0)
+            text = item.announce() if isinstance(item, HexReading) else str(item)
+            # force=True throughout: the Announcer suppresses a line identical
+            # to the one before, which is right for a 20Hz memory poll and
+            # wrong for anything that actually happened. Numpad 5 re-reads the
+            # hex you are already on and so produces the identical string every
+            # time; two neighbouring empty hexes at the same distance do too.
+            # Pressing a key and hearing nothing is indistinguishable from the
+            # key not arriving.
+            ann.say(text, interrupt=urgent, force=True)
 
     def repeat(self, ann: Announcer) -> None:
         if self.log.last_hex:
-            ann.say(self.log.last_hex.announce(), force=True)
+            ann.answer(self.log.last_hex.announce())
         else:
-            ann.say("No hex read yet. Press numpad 5.", force=True)
+            ann.answer("No hex read yet. Press numpad 5.")
 
     def describe(self, ann: Announcer) -> None:
         self.repeat(ann)
@@ -414,16 +424,13 @@ class WorldWatcher(Watcher):
         # In a fight, "where am I" means AP and whose turn it is. The hex-cursor
         # key reminder is not what you need while something is biting you.
         if self.combat.in_combat:
-            ann.say(self.combat.summary(), force=True)
+            ann.answer(self.combat.summary())
             return
         cursor = screens.cursor_name(self.log.cursor_mode)
-        ann.say(
-            "{}. {}{}".format(
-                screens.mode_name(self.log.game_mode),
+        ann.answer("{}. {}{}".format(screens.mode_name(self.log.game_mode),
                 (cursor + ". ") if cursor else "",
                 WORLD_HELP,
             ),
-            force=True,
         )
 
 
@@ -538,11 +545,9 @@ class App:
                 if on_map and self.aimer is not None:
                     ok, reading, why = self.aimer.aim()
                     if not ok:
-                        self.ann.say(
+                        self.ann.answer(
                             "Cannot aim at that hex: {}.".format(
-                                why or "unknown reason"
-                            ),
-                            force=True,
+                                why or "unknown reason")
                         )
                         return
                 # Swallow the acknowledgement this provokes -- the player
@@ -565,13 +570,11 @@ class App:
                     # really on, and nothing is clicked until it answers.
                     name, _dy = self.aimer.confirm_target()
                     if not name:
-                        self.ann.say(
-                            "No target there.", force=True
-                        )
+                        self.ann.answer("No target there.")
                         return
             guarded_click(self.hwnd, button)
         except FocusLost:
-            self.ann.say("Game is not focused.", force=True)
+            self.ann.answer("Game is not focused.")
         except Exception as exc:  # never let a hotkey kill the loop
             print("[app] click: {}".format(exc), flush=True)
 
@@ -618,7 +621,7 @@ class App:
             return
         watcher = self.current_watcher()
         if watcher is None:
-            self.ann.say("No screen recognised.", force=True)
+            self.ann.answer("No screen recognised.")
             return
         getattr(watcher, what, lambda _a: None)(self.ann)
 
