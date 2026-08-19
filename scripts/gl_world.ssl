@@ -1094,6 +1094,15 @@ procedure describe_cursor begin
       if (obj) then begin
          ty := obj_type(obj);
 
+         // Art identity for EVERY object, named or not. The ones filtered out
+         // below are precisely the ones nothing else can identify, and they are
+         // what a future art-id-to-name table has to cover.
+         if (ty != OBJ_TYPE_SPATIAL) then begin
+            debug_msg("WORLD:artobj fid=" + obj_art_fid(obj) + " ty=" + ty
+               + " vis=" + obj_is_visible_flag(obj)
+               + " nm=" + obj_name(obj) + "|");
+         end
+
          if (obj == dude_obj) then begin
             if (count > 0) then names := names + ", ";
             names := names + "you";
@@ -1163,6 +1172,24 @@ procedure describe_cursor begin
    // Trailing '|' terminates the line: the engine appends its own debug output
    // to ours without always starting a new line, and object names are the last
    // field here. Everything after the bar is discarded.
+   // Art identifiers for everything on this hex, logged and never spoken.
+   //
+   // Fallout's floors and much of its walls are TILE art rather than objects,
+   // so no amount of asking what objects are here will ever name them -- and
+   // the invisible blocker that does exist is deliberately filtered out. These
+   // numbers are the only handle on what a hex actually looks like.
+   //
+   // The plan they serve: collect them while playing, then ship a table mapping
+   // art id to a human name. It has to be a data file rather than words in this
+   // script, because the names are ours rather than the game's and would
+   // otherwise be untranslatable -- the one thing this mod has refused to do
+   // everywhere else.
+   debug_msg("WORLD:art tile=" + g_cursor
+      + " ground=" + get_tile_ground_fid(g_cursor, elev)
+      + " roof=" + get_tile_roof_fid(g_cursor, elev)
+      + " blocked=" + (obj_blocking_tile(g_cursor, elev, BLOCKING_TYPE_BLOCK) != 0)
+      + "|");
+
    debug_msg("WORLD:hex " + g_cursor + " dist " + dist + " : " + names + "|");
 
    // Reading the world moves the cursor. Several of the engine's query

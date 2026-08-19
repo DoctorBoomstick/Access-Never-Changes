@@ -299,6 +299,8 @@ WORLD_QUIET = (
     "WORLD:under",    # which hex the pointer is over; diagnostic
     "WORLD:prepare",  # the click setting its own cursor; internal
     "WORLD:skillused",  # the engine spent the armed skill
+    "WORLD:art",      # art identifiers for a hex; collected, not spoken
+    "WORLD:artobj",   # art identifier for one object; likewise
     # Calibration output. Numpad 2 is no longer a key anyone presses on
     # purpose -- the aimer presses it several times per click to find out where
     # the pointer is, and narrating that would bury the click in numbers.
