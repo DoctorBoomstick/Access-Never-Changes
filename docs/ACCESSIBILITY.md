@@ -118,7 +118,19 @@ somewhere you didn't choose, and you would have no way to see it happen.
 
 When you stop, it tells you how far you went: `Moved 3 hexes.`
 
-Readings sound like `Tree, 12 hexes` or `Radscorpion, 3 hexes`. Invisible engine
+Readings sound like `Tree, 12 hexes` or `Radscorpion, 3 hexes`. A hex with
+nothing named on it is either **empty** — you can walk there — or **blocked**,
+meaning you cannot.
+
+That distinction matters more than it looks. Fallout's floors and much of its
+walls are drawn as tile art rather than as objects, so asking what objects are
+on a hex returns nothing at all for a solid wall. The only thing present is an
+invisible blocker, which is exactly what the mod refuses to read out. So the
+hex is asked whether it can be walked into instead — which is the question you
+were really asking when you ran the cursor along a wall looking for the gap.
+
+`empty` and `blocked` are the mod's own words. Everything that names a *thing*
+comes from the game. Invisible engine
 objects (scroll blockers, script triggers) are filtered out — a sighted player
 doesn't see those either.
 

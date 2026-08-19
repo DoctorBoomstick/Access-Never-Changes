@@ -1141,7 +1141,24 @@ procedure describe_cursor begin
    // the engine the first time this ran.
 
    if (count == 0) then begin
-      names := "empty";
+      // Nothing worth naming here -- but "nothing named" and "nothing there"
+      // are different facts, and only one of them is useful for mapping.
+      //
+      // Fallout's floors and much of its walls are TILE art, not objects, so
+      // tile_get_objs returns nothing for them however solid they look. What
+      // does exist is an invisible blocker object, drawn with the blank
+      // placeholder art -- which the furniture filter quite correctly refuses
+      // to read out as "Wall s.t.", and which was the only sign that the hex
+      // was solid at all. So a wall reported as "empty", and a doorway looked
+      // exactly like the wall beside it.
+      //
+      // Ask whether it can be walked into instead. That is the question being
+      // asked anyway when someone traces a wall looking for the gap.
+      if (obj_blocking_tile(g_cursor, elev, BLOCKING_TYPE_BLOCK)) then begin
+         names := "blocked";
+      end else begin
+         names := "empty";
+      end
    end
    // Trailing '|' terminates the line: the engine appends its own debug output
    // to ours without always starting a new line, and object names are the last
