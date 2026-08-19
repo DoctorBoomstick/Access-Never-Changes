@@ -88,6 +88,32 @@ class TestWorldLog(unittest.TestCase):
         log = WorldLog(os.path.join(self.f.dir, "nope.log"))
         self.assertEqual(log.poll(), [])
 
+    def _pumped(self, *lines):
+        """Feed lines and let a WorldWatcher consume them.
+
+        Written straight to the file rather than through the fixture, because
+        the fixture polls as it writes and would eat the line first.
+        """
+        from fallout2_access.app import WorldWatcher
+
+        w = WorldWatcher(self.f.log)
+        with open(self.f.path, "a", encoding="utf-8") as fh:
+            for line in lines:
+                fh.write(line + "\n")
+        w.pump()
+        return w
+
+    def test_arrive_distance_drops_the_terminator(self):
+        """Heard as "Moved 2| hexes." -- the line gained a trailing separator
+        to keep engine noise out, and the parse took the bar with the number."""
+        w = self._pumped("WORLD:arrive 17686 dist 2|")
+        self.assertEqual([t for t, _u in w._queue], ["Moved 2 hexes."])
+
+    def test_prepare_lines_are_not_spoken(self):
+        """Heard as "prepare 6|". It is the click setting its own cursor."""
+        w = self._pumped("WORLD:prepare 6|Door, locked|")
+        self.assertEqual(w._queue, [])
+
     def test_unrelated_lines_are_ignored(self):
         out = self.f.write("Gsound: playing ambient map sfx: animal1")
         self.assertEqual(out, [])

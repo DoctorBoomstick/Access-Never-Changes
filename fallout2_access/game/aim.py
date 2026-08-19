@@ -39,6 +39,7 @@ from ..input.send import guarded_tap, move_mouse_relative, park_pointer
 TILES_PER_ROW = 200
 
 _TARGET = re.compile(r"COMBAT:target (\d+)\|(\d+)\|([^|]*)")
+_PREPARE = re.compile(r"WORLD:prepare (-?\d+)\|([^|]*)\|")
 
 # How far above a hex to look for the critter standing on it, in pixels. Fallout
 # picks critters by their drawn sprite rather than by the tile they occupy, so
@@ -147,42 +148,44 @@ class Aimer:
             time.sleep(0.03)
         return None
 
-    def confirm_object(self):
-        """Nudge upward until the engine says a click would act on something.
+    def prepare(self, want_object: bool, per_step: float = 0.6):
+        """Set the cursor for the click, and say what the click would act on.
 
-        DISABLED while `obj=` is empty. Calibration no longer asks
-        obj_under_cursor, because that query changes the action cursor as a side
-        effect and calibration is what the aim servo runs several times per
-        click -- so verifying an object cost every click its cursor mode. The
-        combat path still verifies through HOOK_TARGETOBJECT, which is a hook
-        rather than a query and disturbs nothing.
+        Presses the script's prepare key, which chooses the cursor mode from
+        what the player expressed -- an armed skill, an enemy on the chosen hex,
+        or neither -- and reports whatever the pointer is really over.
 
-        Returns (name, dy), or (None, dy) if nothing was ever reported. The
-        caller must not click on (None, ...) when it expected an object: an
-        unconfirmed click acts on empty ground and, in combat, spends the action
-        points anyway.
+        When the hex holds something, the pointer is walked up the sprite until
+        the engine agrees it is on it. Fallout picks objects by the figure drawn
+        above the tile, so a click dead centre on a door's hex lands on the
+        floor in front of the door and does nothing at all. The offset is
+        searched for rather than assumed: it was 12 pixels for one ant and 0 for
+        another.
 
-        Fallout picks objects by their drawn sprite, which stands above the hex
-        they occupy, so a pointer sitting dead centre on a hex is aimed at the
-        ground beneath whatever is standing there. The offset is searched for
-        rather than assumed -- a fixed 12 pixels landed on one ant and sailed
-        clean over the next.
+        Asking what is under the pointer changes the action cursor as a side
+        effect, which made it unusable inside the aiming loop. It is safe here
+        because the script sets the cursor immediately afterwards, so the side
+        effect is overwritten by the very thing we wanted set.
 
-        This asks `obj_under_cursor`, which answers in every cursor mode, so the
-        same routine serves walking, attacking and using a skill. The earlier
-        version asked HOOK_TARGETOBJECT, which only fires for the combat
-        targeting cursor and so could never have verified a lockpick.
+        Returns (name, dy): the object the engine named, or None.
         """
         prev = 0
-        for dy in TARGET_STEPS:
+        steps = TARGET_STEPS if want_object else (0,)
+        for dy in steps:
             if dy != prev:
                 move_mouse_relative(0, dy - prev, settle=0.05, hwnd=self.hwnd)
                 prev = dy
-            r = self.read()
-            if r is None:
-                return None, prev
-            if r.obj:
-                return r.obj, dy
+            self._tail()
+            guarded_tap(self.hwnd, "backslash", settle=0.08)
+            deadline = time.time() + per_step
+            while time.time() < deadline:
+                found = _PREPARE.findall(self._tail())
+                if found:
+                    name = found[-1][1].strip()
+                    if name or not want_object:
+                        return (name or None), dy
+                    break
+                time.sleep(0.03)
         return None, prev
 
     # -- solving --------------------------------------------------------

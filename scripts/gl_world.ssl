@@ -80,6 +80,7 @@ variable g_lastdude := -1;
 variable g_lastbtn := -1;
 variable g_lastunder := -1;
 variable g_hascritter := 0;
+variable g_hasobject := 0;
 variable g_scan_cat := 0;
 variable g_scan_type := 0;
 variable g_scan_inst := 0;
@@ -834,26 +835,41 @@ end
  * disarms a skill.
  */
 procedure prepare_cursor begin
-   variable want;
+   variable want, ou, ouname;
 
    g_hascritter := 0;
-   if (combat_is_initialized) then begin
-      call live_critter_at_cursor;
-   end
+   g_hasobject := 0;
+   call live_critter_at_cursor;
 
    if (g_armedskill > 0) then begin
       want := g_armedskill;
-   end else if (g_hascritter) then begin
+   end else if (g_hascritter and combat_is_initialized) then begin
       want := CURSOR_TARGETING;
+   end else if (g_hascritter or g_hasobject) then begin
+      // A door, a container, a person to talk to. The COMMAND cursor is what
+      // performs the default action on a thing; the movement cursor merely
+      // tries to walk onto its hex, which a door blocks -- so clicking a
+      // perfectly ordinary unlocked door appeared to do nothing whatsoever.
+      want := CURSOR_COMMAND;
    end else begin
       want := CURSOR_MOVEMENT;
+   end
+
+   // What would this click actually act on? obj_under_cursor is usable here,
+   // unlike inside the aim loop, because the cursor is set immediately
+   // afterwards and that overwrites the side effect the query leaves behind.
+   ou := obj_under_cursor(0, 0);
+   ouname := "";
+   if (ou) then begin
+      call obj_label(ou);
+      ouname := g_label;
    end
 
    set_cursor_mode(want);
    g_playercursor := want;
    g_restore_ticks := 0;
    g_lastcursormode := get_cursor_mode;
-   debug_msg("WORLD:prepare " + want + "|");
+   debug_msg("WORLD:prepare " + want + "|" + ouname + "|");
 end
 
 /*
@@ -880,6 +896,7 @@ end
 
 procedure live_critter_at_cursor begin
    variable objs, total, i, obj;
+   g_hasobject := 0;
    objs := tile_get_objs(g_cursor, elevation(dude_obj));
    total := 0;
    if (objs) then begin
@@ -895,7 +912,13 @@ procedure live_critter_at_cursor begin
             // would waste a turn's action points on nothing.
             if (not is_critter_dead(obj)) then begin
                g_hascritter := 1;
-               return;
+            end
+         end else if (obj_type(obj) != OBJ_TYPE_SPATIAL) then begin
+            // Something you could act on -- a door, a container, scenery.
+            // The engine's invisible furniture is drawn with the blank
+            // placeholder art and is not a thing anyone can touch.
+            if ((obj_art_fid(obj) bwand 0xFFF) != ART_INVISIBLE) then begin
+               g_hasobject := 1;
             end
          end
       end

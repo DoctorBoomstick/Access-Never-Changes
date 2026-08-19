@@ -297,6 +297,7 @@ WORLD_QUIET = (
     "WORLD:btn",      # mouse-button telemetry; read from the log, not aloud
     "WORLD:dude",     # the player's tile changed -- "Moved n hexes" covers it
     "WORLD:under",    # which hex the pointer is over; diagnostic
+    "WORLD:prepare",  # the click setting its own cursor; internal
     # Calibration output. Numpad 2 is no longer a key anyone presses on
     # purpose -- the aimer presses it several times per click to find out where
     # the pointer is, and narrating that would bury the click in numbers.
@@ -362,7 +363,7 @@ class WorldWatcher(Watcher):
                 # did what it was meant to -- and its absence was why a working
                 # click read as a broken one: the mod said nothing at all while
                 # the player walked three hexes across the map.
-                parts = line.split()
+                parts = line.rstrip("|").split()
                 dist = parts[3] if len(parts) > 3 else "?"
                 self._queue.append(
                     ("Moved {} hex{}.".format(dist, "" if dist == "1" else "es"),
@@ -548,19 +549,16 @@ class App:
                 expects_object = bool(
                     last and last.contents and last.contents not in ("empty", "you")
                 )
-                # Object-level verification is on hold: the engine query that
-                # answered "what would this click act on" also changed the
-                # cursor mode, and it sat in the servo loop. Aiming still
-                # verifies the HEX with the game, which is what movement needs.
-                del expects_object
-
                 # Set the cursor for what this click is about to do, AFTER
-                # aiming. Aiming reads the world several times and every read
-                # disturbs the cursor, so this has to be the last thing before
-                # the button: a skill if one is armed, the targeting cursor if
-                # a living enemy is on the chosen hex, the movement cursor
-                # otherwise. All three are things the player told us.
-                guarded_tap(self.hwnd, "backslash", settle=0.10)
+                # aiming, because every read during the aim disturbs it. If the
+                # hex holds something, walk the pointer up its sprite until the
+                # engine agrees it is pointing at it -- Fallout picks objects by
+                # the figure drawn above the tile, so a click dead centre on a
+                # door's hex hits the floor in front of it and does nothing.
+                name, _dy = self.aimer.prepare(expects_object)
+                if expects_object and not name:
+                    self.ann.answer("Cannot point at that.")
+                    return
                 time.sleep(CURSOR_SETTLE)
             guarded_click(self.hwnd, button)
         except FocusLost:
