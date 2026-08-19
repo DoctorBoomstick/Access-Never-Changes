@@ -896,6 +896,11 @@ procedure prepare_cursor begin
       // Something lying on the ground. Items do not block, so the hex is
       // walkable -- but you want to pick it up, not stand on it.
       want := CURSOR_COMMAND;
+   end else if (g_cursor == tile_num(dude_obj)) then begin
+      // Your own hex counts as blocked -- by you. Walking to where you already
+      // are is harmless, and treating it as something to interact with is not
+      // what anyone meant.
+      want := CURSOR_MOVEMENT;
    end else if (obj_blocking_tile(g_cursor, elevation(dude_obj), BLOCKING_TYPE_BLOCK)) then begin
       // Cannot walk there, so interacting is the only thing a click could
       // sensibly mean: a door to open, a container to search, a wall to look at.
@@ -912,7 +917,8 @@ procedure prepare_cursor begin
    g_playercursor := want;
    g_restore_ticks := 0;
    g_lastcursormode := get_cursor_mode;
-   debug_msg("WORLD:prepare " + want + "|" + ouname + "|");
+   debug_msg("WORLD:prepare " + want + "|" + ouname + "|"
+      + tile_under_cursor + "|" + g_cursor + "|");
 end
 
 /*

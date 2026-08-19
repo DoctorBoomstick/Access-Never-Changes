@@ -556,9 +556,14 @@ class App:
                 # engine agrees it is pointing at it -- Fallout picks objects by
                 # the figure drawn above the tile, so a click dead centre on a
                 # door's hex hits the floor in front of it and does nothing.
-                name, _dy = self.aimer.prepare(expects_object)
+                name, _at = self.aimer.prepare(expects_object)
                 if expects_object and not name:
                     self.ann.answer("Cannot point at that.")
+                    return
+                if not expects_object and name is False:
+                    # Every part of the hex is underneath something else's
+                    # sprite, so a click would act on that instead of walking.
+                    self.ann.answer("That hex is behind something.")
                     return
                 time.sleep(CURSOR_SETTLE)
             guarded_click(self.hwnd, button)

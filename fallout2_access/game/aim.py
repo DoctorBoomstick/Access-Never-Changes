@@ -39,7 +39,7 @@ from ..input.send import guarded_tap, move_mouse_relative, park_pointer
 TILES_PER_ROW = 200
 
 _TARGET = re.compile(r"COMBAT:target (\d+)\|(\d+)\|([^|]*)")
-_PREPARE = re.compile(r"WORLD:prepare (-?\d+)\|([^|]*)\|")
+_PREPARE = re.compile(r"WORLD:prepare (-?\d+)\|([^|]*)\|(-?\d+)\|(-?\d+)\|")
 
 # How far above a hex to look for the critter standing on it, in pixels. Fallout
 # picks critters by their drawn sprite rather than by the tile they occupy, so
@@ -50,6 +50,16 @@ _PREPARE = re.compile(r"WORLD:prepare (-?\d+)\|([^|]*)\|")
 # asked at each step whether it can see a target, so critter size, stance and
 # screen position stop mattering.
 TARGET_STEPS = (0, -4, -8, -12, -16, -20, -26, -32)
+
+# Where to look for a spot inside the hex that is not covered by something
+# else's sprite. Fallout draws tall objects over the hexes in front of them, so
+# the centre of a perfectly walkable tile can be underneath a wall -- the
+# pointer is on the right tile and the click lands on the wall. A sighted player
+# solves this without noticing, by clicking a part of the hex they can see.
+# Downwards first, because sprites lean upwards and the low edge of a hex is
+# usually the clear part.
+CLEAR_STEPS = ((0, 0), (0, 4), (0, 8), (-10, 4), (10, 4),
+               (-10, 0), (10, 0), (0, 12), (-14, 8), (14, 8))
 
 _CALIB = re.compile(
     r"WORLD:calib mouse=(-?\d+),(-?\d+) btns=(-?\d+) under=(-?\d+) "
@@ -148,45 +158,59 @@ class Aimer:
             time.sleep(0.03)
         return None
 
-    def prepare(self, want_object: bool, per_step: float = 0.25):
-        """Set the cursor for the click, and say what the click would act on.
+    def _probe(self, per_step: float = 0.25):
+        """Ask the script to set the cursor, and report what it found there.
 
-        Presses the script's prepare key, which chooses the cursor mode from
-        what the player expressed -- an armed skill, an enemy on the chosen hex,
-        or neither -- and reports whatever the pointer is really over.
-
-        When the hex holds something, the pointer is walked up the sprite until
-        the engine agrees it is on it. Fallout picks objects by the figure drawn
-        above the tile, so a click dead centre on a door's hex lands on the
-        floor in front of the door and does nothing at all. The offset is
-        searched for rather than assumed: it was 12 pixels for one ant and 0 for
-        another.
-
-        Asking what is under the pointer changes the action cursor as a side
-        effect, which made it unusable inside the aiming loop. It is safe here
-        because the script sets the cursor immediately afterwards, so the side
-        effect is overwritten by the very thing we wanted set.
-
-        Returns (name, dy): the object the engine named, or None.
+        Returns (mode, object_name, hex_under_pointer, look_hex) or None.
         """
-        prev = 0
-        steps = TARGET_STEPS if want_object else (0,)
-        for dy in steps:
-            if dy != prev:
-                move_mouse_relative(0, dy - prev, settle=0.05, hwnd=self.hwnd)
-                prev = dy
-            self._tail()
-            guarded_tap(self.hwnd, "backslash", settle=0.08)
-            deadline = time.time() + per_step
-            while time.time() < deadline:
-                found = _PREPARE.findall(self._tail())
-                if found:
-                    name = found[-1][1].strip()
-                    if name or not want_object:
-                        return (name or None), dy
-                    break
-                time.sleep(0.03)
-        return None, prev
+        self._tail()
+        guarded_tap(self.hwnd, "backslash", settle=0.08)
+        deadline = time.time() + per_step
+        while time.time() < deadline:
+            found = _PREPARE.findall(self._tail())
+            if found:
+                mode, name, under, look = found[-1]
+                return int(mode), name.strip(), int(under), int(look)
+            time.sleep(0.03)
+        return None
+
+    def prepare(self, want_object: bool, per_step: float = 0.25):
+        """Set the cursor for the click, and find a spot where it will land.
+
+        Being on the right hex is not enough. Fallout draws tall objects over
+        the hexes in front of them, so the middle of a walkable tile can sit
+        underneath a wall: the pointer is on the correct tile and the click hits
+        the wall. Measured on an ordinary empty hex -- aim matched, and the
+        engine reported "Wall" under the pointer.
+
+        So the pointer is walked around inside the hex until the engine agrees.
+        For an object, upwards, onto its sprite. For bare ground, downwards and
+        sideways, off whatever is leaning over it.
+
+        Returns (name, offset). `name` is the object the click would act on, or
+        None. For bare ground, None with an offset found is success; None with
+        no clear spot means the caller should not click.
+        """
+        prev = (0, 0)
+        steps = TARGET_STEPS if want_object else None
+        candidates = [(0, dy) for dy in steps] if steps else list(CLEAR_STEPS)
+
+        for dx, dy in candidates:
+            if (dx, dy) != prev:
+                move_mouse_relative(dx - prev[0], dy - prev[1],
+                                    settle=0.05, hwnd=self.hwnd)
+                prev = (dx, dy)
+            probe = self._probe(per_step)
+            if probe is None:
+                continue
+            _mode, name, under, look = probe
+            if under != look:
+                continue          # drifted off the hex entirely
+            if want_object and name:
+                return name, prev
+            if not want_object and not name:
+                return None, prev
+        return (None, prev) if want_object else (False, prev)
 
     # -- solving --------------------------------------------------------
 
