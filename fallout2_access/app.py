@@ -298,6 +298,7 @@ WORLD_QUIET = (
     "WORLD:dude",     # the player's tile changed -- "Moved n hexes" covers it
     "WORLD:under",    # which hex the pointer is over; diagnostic
     "WORLD:prepare",  # the click setting its own cursor; internal
+    "WORLD:skillused",  # the engine spent the armed skill
     # Calibration output. Numpad 2 is no longer a key anyone presses on
     # purpose -- the aimer presses it several times per click to find out where
     # the pointer is, and narrating that would bury the click in numbers.

@@ -112,6 +112,7 @@ procedure scan_type(variable delta);
 procedure scan_category(variable delta);
 procedure scan_jump;
 procedure prepare_cursor;
+procedure on_useskill;
 
 /*
  * start  --  init once, then poll.
@@ -138,6 +139,7 @@ procedure start begin
       set_global_script_type(1);   // run wherever the cursor is visible
       set_global_script_repeat(2); // ~30 polls/sec; fast enough to catch a click
       register_hook_proc(HOOK_KEYPRESS, on_key);
+      register_hook_proc(HOOK_USESKILLON, on_useskill);
       g_cursor := tile_num(dude_obj);
       g_lastdude := g_cursor;
       // Print a beacon into the interface bar's display window. The Python
@@ -834,35 +836,58 @@ end
  * which hex. Numpad 0 remains the explicit reset, and is the only thing that
  * disarms a skill.
  */
+/*
+ * on_useskill  --  HOOK_USESKILLON, fired when a skill is applied to something.
+ *
+ * Disarms our record of it. The engine drops its own skill cursor after a use,
+ * and if we did not follow suit the mod would keep re-arming it: a lockpick
+ * readied for a door was still armed when the next fight started, so every
+ * attack was issued as an attempt to pick the lock on a scorpion.
+ */
+procedure on_useskill begin
+   g_armedskill := 0;
+   debug_msg("WORLD:skillused|");
+end
+
 procedure prepare_cursor begin
    variable want, ou, ouname;
 
-   g_hascritter := 0;
-   g_hasobject := 0;
-   call live_critter_at_cursor;
-
-   if (g_armedskill > 0) then begin
-      want := g_armedskill;
-   end else if (g_hascritter and combat_is_initialized) then begin
-      want := CURSOR_TARGETING;
-   end else if (g_hascritter or g_hasobject) then begin
-      // A door, a container, a person to talk to. The COMMAND cursor is what
-      // performs the default action on a thing; the movement cursor merely
-      // tries to walk onto its hex, which a door blocks -- so clicking a
-      // perfectly ordinary unlocked door appeared to do nothing whatsoever.
-      want := CURSOR_COMMAND;
-   end else begin
-      want := CURSOR_MOVEMENT;
+   // Decide from what is UNDER THE POINTER, not from what is on the look hex.
+   // Those are not the same thing: the pointer is walked up an object's sprite
+   // to reach it, and a tall sprite belongs to a tile behind the one the
+   // pointer ends up over. Judging by the look hex chose the movement cursor
+   // while the pointer sat squarely on a Giant Ant, so every attack in a fight
+   // was issued as an order to walk.
+   //
+   // Critters are asked for first and separately. obj_under_cursor with
+   // onlyCritter set ignores their cover; without it the engine "can't check
+   // critters under objects", so an enemy standing in scenery goes unseen.
+   ou := obj_under_cursor(1, 0);
+   if (not ou) then begin
+      ou := obj_under_cursor(0, 0);
    end
 
-   // What would this click actually act on? obj_under_cursor is usable here,
-   // unlike inside the aim loop, because the cursor is set immediately
-   // afterwards and that overwrites the side effect the query leaves behind.
-   ou := obj_under_cursor(0, 0);
    ouname := "";
    if (ou) then begin
       call obj_label(ou);
       ouname := g_label;
+   end
+
+   if (g_armedskill > 0) then begin
+      want := g_armedskill;
+   end else if (ou and obj_type(ou) == OBJ_TYPE_CRITTER and not is_critter_dead(ou)) then begin
+      if (combat_is_initialized) then begin
+         want := CURSOR_TARGETING;   // a click attacks
+      end else begin
+         want := CURSOR_COMMAND;     // a click talks, or whatever is default
+      end
+   end else if (ou) then begin
+      // A door, a container, scenery. COMMAND performs a thing's default
+      // action; MOVEMENT merely tries to walk onto its hex, which a door
+      // blocks -- so an ordinary unlocked door appeared to do nothing at all.
+      want := CURSOR_COMMAND;
+   end else begin
+      want := CURSOR_MOVEMENT;
    end
 
    set_cursor_mode(want);

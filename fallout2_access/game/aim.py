@@ -148,7 +148,7 @@ class Aimer:
             time.sleep(0.03)
         return None
 
-    def prepare(self, want_object: bool, per_step: float = 0.6):
+    def prepare(self, want_object: bool, per_step: float = 0.25):
         """Set the cursor for the click, and say what the click would act on.
 
         Presses the script's prepare key, which chooses the cursor mode from
