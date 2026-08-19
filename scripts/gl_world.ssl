@@ -71,7 +71,7 @@
 #define ACT_SCAN_INSTNEXT  (-10)
 #define ACT_SCAN_INSTPREV  (-11)
 #define ACT_SCAN_JUMP      (-12)
-#define ACT_MSG_MARKER     (-13)
+#define ACT_PREPARE        (-13)
 
 variable g_cursor := CURSOR_UNSET;
 variable g_lastmode := -1;
@@ -85,6 +85,7 @@ variable g_scan_type := 0;
 variable g_scan_inst := 0;
 variable g_restore_ticks := 0;
 variable g_playercursor := 0;
+variable g_armedskill := 0;
 variable g_label := "";
 variable g_movestart := -1;
 variable g_moving := 0;
@@ -109,7 +110,7 @@ procedure scan_instance(variable delta);
 procedure scan_type(variable delta);
 procedure scan_category(variable delta);
 procedure scan_jump;
-procedure msg_marker;
+procedure prepare_cursor;
 
 /*
  * start  --  init once, then poll.
@@ -316,6 +317,20 @@ procedure on_key begin
    variable key   := get_sfall_arg;
    if (event != 1) then return;          // key-up: ignore
 
+   // The Skilldex number keys, observed but not swallowed -- the game still
+   // needs them to arm the skill. We only record WHICH, because reading the
+   // world clobbers the cursor and it has to be put back to the player's
+   // intention before a click, not to whatever the engine last decided.
+   // Measured mapping; Sneak is a toggle with no cursor of its own.
+   if (key == DIK_1) then begin g_armedskill := 0;  return; end   // Sneak
+   if (key == DIK_2) then begin g_armedskill := 6;  return; end   // Lockpick
+   if (key == DIK_3) then begin g_armedskill := 7;  return; end   // Steal
+   if (key == DIK_4) then begin g_armedskill := 8;  return; end   // Traps
+   if (key == DIK_5) then begin g_armedskill := 4;  return; end   // First Aid
+   if (key == DIK_6) then begin g_armedskill := 5;  return; end   // Doctor
+   if (key == DIK_7) then begin g_armedskill := 9;  return; end   // Science
+   if (key == DIK_8) then begin g_armedskill := 10; return; end   // Repair
+
    variable dir := -1;
    if      (key == DIK_NUMPAD9) then dir := DIR_NE;
    else if (key == DIK_NUMPAD6) then dir := DIR_E;
@@ -351,7 +366,7 @@ procedure on_key begin
          dir := ACT_SCAN_TYPENEXT;
    end
    else if (key == DIK_SLASH) then dir := ACT_SCAN_JUMP;
-   else if (key == DIK_BACKSLASH) then dir := ACT_MSG_MARKER;
+   else if (key == DIK_BACKSLASH) then dir := ACT_PREPARE;
    else return;
 
    // Log arrival before doing any work. When this crashed the engine,
@@ -370,7 +385,7 @@ procedure on_key begin
    else if (dir == ACT_SCAN_CATNEXT)  then call scan_category(1);
    else if (dir == ACT_SCAN_CATPREV)  then call scan_category(-1);
    else if (dir == ACT_SCAN_JUMP)     then call scan_jump;
-   else if (dir == ACT_MSG_MARKER)    then call msg_marker;
+   else if (dir == ACT_PREPARE)       then call prepare_cursor;
    else                               call step_cursor(dir);
 
    set_sfall_return(0);   // swallow the key so the game does not also act
@@ -800,20 +815,45 @@ procedure scan_jump begin
 end
 
 /*
- * msg_marker  --  print a known string into the interface bar, to find it.
+ * prepare_cursor  --  set the cursor to match what the click is about to do.
  *
- * The display window along the bottom of the screen is where Fallout tells the
- * player everything in words: "You see: a door", "It's locked", what hit whom
- * for how much. Nothing in sfall can read it back, so it has to be found in
- * memory -- and the easy way to find a buffer is to put something recognisable
- * in it and go looking for that.
+ * The mod points; it does not get to decide what a click means. But it turns
+ * out it must SET the mode all the same, because reading the world changes the
+ * cursor as a side effect and aiming reads the world several times. Leaving the
+ * player to set it themselves and preserving their choice cannot be made to
+ * work: the restore that undoes the engine's meddling also undoes theirs.
  *
- * Diagnostic, and temporary. Once the buffer is located and read, the game's
- * own words replace the sentences this mod currently assembles for itself.
+ * So the mode is chosen from what the player has actually expressed:
+ *   a skill armed from the number row  -> that skill
+ *   a living enemy on the look hex     -> the targeting cursor, so it attacks
+ *   anything else                      -> the movement cursor, so it walks
+ *
+ * This is the choice a sighted player makes by looking at what they are
+ * pointing at, and every part of it is something they told us: which skill,
+ * which hex. Numpad 0 remains the explicit reset, and is the only thing that
+ * disarms a skill.
  */
-procedure msg_marker begin
-   display_msg("ANCPROBE7F3C9D51");
-   debug_msg("WORLD:marker ANCPROBE7F3C9D51|");
+procedure prepare_cursor begin
+   variable want;
+
+   g_hascritter := 0;
+   if (combat_is_initialized) then begin
+      call live_critter_at_cursor;
+   end
+
+   if (g_armedskill > 0) then begin
+      want := g_armedskill;
+   end else if (g_hascritter) then begin
+      want := CURSOR_TARGETING;
+   end else begin
+      want := CURSOR_MOVEMENT;
+   end
+
+   set_cursor_mode(want);
+   g_playercursor := want;
+   g_restore_ticks := 0;
+   g_lastcursormode := get_cursor_mode;
+   debug_msg("WORLD:prepare " + want + "|");
 end
 
 /*
@@ -897,6 +937,7 @@ procedure force_action_cursor begin
       want := CURSOR_MOVEMENT;
    end
 
+   g_armedskill := 0;   // the explicit reset: numpad 0 disarms a skill
    before := get_cursor_mode;
    set_cursor_mode(want);
    g_playercursor := want;

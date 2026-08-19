@@ -500,17 +500,18 @@ class App:
     def click(self, button: str = "left") -> None:
         """Press a mouse button on the hex the look cursor is on.
 
-        The mod moves the pointer; it does not decide what the click means.
-        That split matters. Pointing is the part you physically cannot do, so
-        the mod does it and verifies it. What a click then *does* -- walk,
-        interact, attack, pick a lock -- belongs to the cursor mode, which is
-        yours to set with right click or a Skilldex key, exactly as it is for a
-        sighted player. The mod announces the mode whenever it changes, so you
-        have the same information they read off the cursor's shape.
+        The mod moves the pointer, and sets the cursor mode to match what you
+        have chosen. It would be tidier to leave the mode alone and let you set
+        it yourself, and that was tried -- it cannot be made to work. Reading
+        the world changes the cursor as a side effect, aiming reads the world
+        several times, and the restore that undoes the engine's meddling also
+        undoes yours. Your right click would be quietly reverted before the
+        button ever went down.
 
-        An earlier version chose the mode for you and it was a mistake in both
-        directions: it disarmed a skill the moment you tried to use one, and it
-        guessed wrong about intent in cases nobody had enumerated.
+        So the mode is derived from what you actually expressed: a skill you
+        armed from the number row, or an enemy on the hex you selected, or
+        neither, which means walking. That is the same choice a sighted player
+        makes by looking at what they are pointing at.
 
         What does NOT change is the refusal to click on a maybe. If the look
         hex holds something and the engine will not confirm the pointer is on
@@ -553,12 +554,13 @@ class App:
                 # verifies the HEX with the game, which is what movement needs.
                 del expects_object
 
-                # Let the script put the cursor mode back before clicking.
-                # Reading the world disturbs it and the engine applies that a
-                # frame or two later, so the script restores it over a short
-                # window -- and aiming's last act is a read. Clicking inside
-                # that window is what made every click land with the wrong
-                # cursor and do nothing at all.
+                # Set the cursor for what this click is about to do, AFTER
+                # aiming. Aiming reads the world several times and every read
+                # disturbs the cursor, so this has to be the last thing before
+                # the button: a skill if one is armed, the targeting cursor if
+                # a living enemy is on the chosen hex, the movement cursor
+                # otherwise. All three are things the player told us.
+                guarded_tap(self.hwnd, "backslash", settle=0.10)
                 time.sleep(CURSOR_SETTLE)
             guarded_click(self.hwnd, button)
         except FocusLost:
