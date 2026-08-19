@@ -892,12 +892,19 @@ procedure prepare_cursor begin
       end else begin
          want := CURSOR_COMMAND;     // a click talks, or whatever is default
       end
-   end else if (ou) then begin
-      // A door, a container, scenery. COMMAND performs a thing's default
-      // action; MOVEMENT merely tries to walk onto its hex, which a door
-      // blocks -- so an ordinary unlocked door appeared to do nothing at all.
+   end else if (ou and obj_type(ou) == OBJ_TYPE_ITEM) then begin
+      // Something lying on the ground. Items do not block, so the hex is
+      // walkable -- but you want to pick it up, not stand on it.
+      want := CURSOR_COMMAND;
+   end else if (obj_blocking_tile(g_cursor, elevation(dude_obj), BLOCKING_TYPE_BLOCK)) then begin
+      // Cannot walk there, so interacting is the only thing a click could
+      // sensibly mean: a door to open, a container to search, a wall to look at.
       want := CURSOR_COMMAND;
    end else begin
+      // Walkable. This is the case the previous rule got wrong -- an exit grid
+      // is a MISC object sitting on perfectly ordinary ground, and "there is an
+      // object here" chose the command cursor, so standing in a doorway out of
+      // the map you could not step into it.
       want := CURSOR_MOVEMENT;
    end
 
@@ -1092,7 +1099,8 @@ procedure describe_cursor begin
          // announcing them would both mislead and drown out real content.
          // obj_is_visible_flag is a plain flag read, so unlike obj_can_see_obj
          // it is safe to call on any object type.
-         end else if (ty != OBJ_TYPE_SPATIAL and obj_is_visible_flag(obj)) then begin
+         end else if (ty != OBJ_TYPE_SPATIAL and obj_is_visible_flag(obj)
+                      and (obj_art_fid(obj) bwand 0xFFF) != ART_INVISIBLE) then begin
 
             if (ty == OBJ_TYPE_CRITTER) then begin
                // Only critters get the line-of-sight and stealth test, and
