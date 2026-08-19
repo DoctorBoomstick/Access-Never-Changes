@@ -71,9 +71,29 @@ why the six directions sit on the numpad's corners and sides:
 | Key | Action |
 |---|---|
 | Numpad 7 9 4 6 1 3 | move the look cursor one hex |
-| Numpad 5 | re-read the current hex |
-| Numpad 8 | bring the cursor back to you |
+| Numpad 8 | **north** |
+| Numpad 2 | **south** |
+| Numpad 5 | bring the cursor back to you |
 | Numpad 0 | force the movement cursor |
+
+### North and south, which the grid does not have
+
+A hex has six neighbours and no north or south. Going "up" means alternating
+north east and north west — and which one you need next depends on the row, so
+doing it by hand drifts. Alternating north east and *west* very nearly cancels:
+some pairs climb and some do not, so tracing a wall slides you a few hexes off
+it without any sign that it happened.
+
+Numpad 8 and 2 do it for you. They remember which way the staircase leans and
+take the step that cancels it, so holding north traces a straight line up the
+screen and every second press returns to the starting column. Put the cursor on
+a wall, press north repeatedly, and the readout stops saying "Wall" exactly
+where the opening is.
+
+Each press is still one ordinary hex step. It is only the choice between two
+legal steps — the one a sighted player makes by eye.
+
+(Numpad / repeats the last thing said, which covers re-reading a hex.)
 | Numpad + | **left click on the hex the look cursor is on** |
 
 (Numpad 2 is used internally — the mod presses it several times per click to

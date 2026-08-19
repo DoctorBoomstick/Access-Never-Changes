@@ -130,7 +130,7 @@ class Aimer:
     def read(self, timeout: float = 0.8) -> Optional[Reading]:
         """Ask the game where the pointer is. None if it did not answer."""
         self._tail()  # discard anything stale first
-        guarded_tap(self.hwnd, "numpad2", settle=0.06)
+        guarded_tap(self.hwnd, "apostrophe", settle=0.06)
         deadline = time.time() + timeout
         found = None
         while time.time() < deadline:

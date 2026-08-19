@@ -52,8 +52,8 @@ what gets announced. The short version:
 | Key | Action |
 |---|---|
 | Numpad 7 9 4 6 1 3 | move the look cursor one hex |
-| Numpad 5 | re-read the hex |
-| Numpad 8 | bring the cursor back to you |
+| Numpad 8 / 2 | north / south — the directions a hex grid lacks |
+| Numpad 5 | bring the cursor back to you |
 | Numpad + | left click on the look cursor's hex — walk, or attack |
 | Numpad - | right click — cycles the cursor mode |
 | Numpad ✳ | where am I / whose turn is it |

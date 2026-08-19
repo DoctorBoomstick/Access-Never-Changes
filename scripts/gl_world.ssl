@@ -72,6 +72,8 @@
 #define ACT_SCAN_INSTPREV  (-11)
 #define ACT_SCAN_JUMP      (-12)
 #define ACT_PREPARE        (-13)
+#define ACT_NORTH          (-14)
+#define ACT_SOUTH          (-15)
 
 variable g_cursor := CURSOR_UNSET;
 variable g_lastmode := -1;
@@ -87,6 +89,8 @@ variable g_scan_inst := 0;
 variable g_restore_ticks := 0;
 variable g_playercursor := 0;
 variable g_armedskill := 0;
+// Which way the north/south staircase currently leans. See step_north.
+variable g_ndrift := 0;
 variable g_label := "";
 variable g_movestart := -1;
 variable g_moving := 0;
@@ -100,6 +104,8 @@ procedure recenter_view;
 procedure describe_cursor;
 procedure step_cursor(variable dir);
 procedure snap_to_dude;
+procedure step_north;
+procedure step_south;
 procedure calibrate;
 procedure force_action_cursor;
 procedure live_critter_at_cursor;
@@ -341,9 +347,12 @@ procedure on_key begin
    else if (key == DIK_NUMPAD1) then dir := DIR_SW;
    else if (key == DIK_NUMPAD4) then dir := DIR_W;
    else if (key == DIK_NUMPAD7) then dir := DIR_NW;
-   else if (key == DIK_NUMPAD5) then dir := ACT_DESCRIBE;
-   else if (key == DIK_NUMPAD8) then dir := ACT_SNAP;
-   else if (key == DIK_NUMPAD2) then dir := ACT_CALIB;
+   else if (key == DIK_NUMPAD8) then dir := ACT_NORTH;
+   else if (key == DIK_NUMPAD2) then dir := ACT_SOUTH;
+   else if (key == DIK_NUMPAD5) then dir := ACT_SNAP;
+   // Calibration is the aimer's own business, pressed several times per click
+   // and never by a player, so it sits on a key nobody reaches for.
+   else if (key == DIK_APOSTROPHE) then dir := ACT_CALIB;
    else if (key == DIK_NUMPAD0) then dir := ACT_MOVEMODE;
    // The brackets carry all three scanner levels, chosen so the frequent
    // action needs no modifier at all:
@@ -377,7 +386,9 @@ procedure on_key begin
    // even been delivered. Now that is always answerable.
    debug_msg("WORLD:key " + key + " dir " + dir);
 
-   if      (dir == ACT_SNAP)     then call snap_to_dude;
+   if      (dir == ACT_NORTH)    then call step_north;
+   else if (dir == ACT_SOUTH)    then call step_south;
+   else if (dir == ACT_SNAP)     then call snap_to_dude;
    else if (dir == ACT_DESCRIBE) then call describe_cursor;
    else if (dir == ACT_CALIB)    then call calibrate;
    else if (dir == ACT_MOVEMODE) then call force_action_cursor;
@@ -1002,6 +1013,43 @@ procedure force_action_cursor begin
       debug_msg("WORLD:cursorok " + g_lastcursormode);
    end else begin
       debug_msg("WORLD:cursormode " + g_lastcursormode);
+   end
+end
+
+/*
+ * step_north / step_south  --  the directions a hex grid does not have.
+ *
+ * There is no north. The two upward neighbours are NE and NW, mirror images
+ * about the vertical, so going "up" means alternating them -- and which one you
+ * need next depends on the row's parity. Doing that by hand is what makes
+ * tracing a wall drift: pressing NE and W alternately very nearly cancels, so
+ * some pairs climb and some do not, and after a few you are several hexes off
+ * the wall without having noticed.
+ *
+ * g_ndrift remembers which way the staircase currently leans and takes the
+ * step that cancels it, so repeated presses trace a straight line up the screen
+ * and every second one returns to the starting column.
+ *
+ * Nothing here is a liberty: each press is one ordinary hex step. It is the
+ * choice between two legal steps that a sighted player makes by eye.
+ */
+procedure step_north begin
+   if (g_ndrift > 0) then begin
+      g_ndrift := g_ndrift - 1;
+      call step_cursor(DIR_NW);
+   end else begin
+      g_ndrift := g_ndrift + 1;
+      call step_cursor(DIR_NE);
+   end
+end
+
+procedure step_south begin
+   if (g_ndrift > 0) then begin
+      g_ndrift := g_ndrift - 1;
+      call step_cursor(DIR_SW);
+   end else begin
+      g_ndrift := g_ndrift + 1;
+      call step_cursor(DIR_SE);
    end
 end
 
