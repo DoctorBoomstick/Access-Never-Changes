@@ -14,12 +14,17 @@ quick keys and the save screen alike, and reports a save that *happened* rather
 than a key that was *sent* -- which is the distinction this mod keeps insisting
 on everywhere else.
 
-Slot descriptions are deliberately not parsed yet. They live inside SAVE.DAT in
-a layout nobody here has confirmed against a real file, and a confidently wrong
-save description is exactly the kind of statement that gets someone to overwrite
-the wrong game. Until it is checked, a slot is named by its number and its time,
-both of which are certain. `sample()` dumps the header of a real save so the
-format can be settled from data.
+**The header is read, now that there were real saves to read it from.** SAVE.DAT
+opens with the signature "FALLOUT SAVE FILE", then the character name at offset
+29 and the save's own description at offset 61, both NUL-terminated. Confirmed
+identical across five separate saves rather than inferred from one.
+
+That matters more here than anywhere else in this project. A save slot is the
+one thing a player can destroy by acting on a wrong description, so the rule is
+strict: a header that does not start with the signature is not described at all,
+and a slot whose text cannot be read falls back to its number and its time,
+which are certain because they come from the filesystem rather than from parsing
+anything.
 """
 
 from __future__ import annotations
@@ -36,22 +41,60 @@ SAVE_DIR = os.path.join("data", "SAVEGAME")
 SLOT_RE = re.compile(r"^SLOT(\d+)$", re.IGNORECASE)
 SAVE_FILE = "SAVE.DAT"
 
+# The header, confirmed identical across five real saves. Anything that does not
+# open with the signature is not a save file we understand, and is described by
+# its number and time alone rather than by bytes we guessed the meaning of.
+SIGNATURE = b"FALLOUT SAVE FILE"
+OFF_CHARACTER = 29      # the character's name, NUL terminated
+OFF_DESCRIPTION = 61    # what the save calls itself, NUL terminated
+HEADER = 256
+
 # Slots are polled rather than watched with a filesystem notification: this runs
 # beside a 20Hz loop that must never block, and ten stat calls twice a second is
 # far cheaper than the machinery for the alternative.
 POLL_SECONDS = 0.5
 
 
+def _text_at(header: bytes, offset: int, limit: int = 32) -> str:
+    """A NUL-terminated string out of the header, or "" if it is not there."""
+    if len(header) < offset + 1:
+        return ""
+    raw = header[offset:offset + limit]
+    end = raw.find(b"\x00")
+    if end >= 0:
+        raw = raw[:end]
+    try:
+        text = raw.decode("cp1252")
+    except Exception:
+        return ""
+    # Anything unprintable means the offset is wrong for this build, and a
+    # mangled description on a save slot is worse than no description at all.
+    if any(ord(c) < 32 for c in text):
+        return ""
+    return text.strip()
+
+
 class Slot(NamedTuple):
     number: int
     written: float      # mtime, seconds since the epoch
     size: int
+    character: str = ""
+    description: str = ""
 
     def when(self) -> str:
         """A time a person can act on, not a timestamp."""
         return time.strftime("%H:%M", time.localtime(self.written))
 
     def announce(self) -> str:
+        """What the slot is, leading with whatever the save calls itself.
+
+        The description is the game's own text -- what was typed when saving, or
+        what quick save wrote -- so it is preferred over anything assembled
+        here. The time is kept as well, because two saves can carry the same
+        description and the clock is what tells them apart.
+        """
+        if self.description:
+            return "Slot {}, {}.".format(self.number, self.description)
         return "Slot {}, saved {}.".format(self.number, self.when())
 
 
@@ -82,10 +125,31 @@ class SaveWatcher:
                 st = os.stat(path)
             except OSError:
                 continue      # an empty slot folder is not a saved game
+            character, description = self._header(path)
             out.append(Slot(number=int(m.group(1)), written=st.st_mtime,
-                            size=st.st_size))
+                            size=st.st_size, character=character,
+                            description=description))
         out.sort(key=lambda s: s.number)
         return out
+
+    def _header(self, path: str):
+        """(character, description) from a save's header, or ("", "")."""
+        try:
+            with open(path, "rb") as fh:
+                head = fh.read(HEADER)
+        except OSError:
+            return "", ""
+        if not head.startswith(SIGNATURE):
+            return "", ""
+        return (_text_at(head, OFF_CHARACTER),
+                _text_at(head, OFF_DESCRIPTION))
+
+    def slot(self, number: int):
+        """One slot by number, or None if nothing is saved there."""
+        for s in self.scan():
+            if s.number == number:
+                return s
+        return None
 
     def summary(self) -> str:
         """What is saved, for reading out on the save or load screen."""

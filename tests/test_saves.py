@@ -1,10 +1,14 @@
-"""Noticing that a game was saved.
+"""Noticing that a game was saved, and reading what a save calls itself.
 
 Quick save and quick load already work in the engine -- F6 and F7, no pointer
 and no screen -- so the only thing missing was any sign that they had happened.
-These tests are mostly about that: a save must be heard, and a save that was
-already on disk when the mod started must not be announced as though it had
-just occurred.
+Much of this is about that: a save must be heard, and a save that was already on
+disk when the mod started must not be announced as though it had just occurred.
+
+The header tests are stricter than the rest of this project, on purpose. A save
+slot is the one thing a player can destroy by acting on a wrong description, so
+the rule is that anything not positively understood is not described at all --
+the number and the time come from the filesystem and cannot be misparsed.
 """
 
 import os
@@ -12,7 +16,15 @@ import tempfile
 import time
 import unittest
 
-from fallout2_access.game.saves import SAVE_FILE, SaveWatcher
+from fallout2_access.game.saves import (
+    OFF_CHARACTER,
+    OFF_DESCRIPTION,
+    SAVE_FILE,
+    SIGNATURE,
+    SaveWatcher,
+)
+
+NUL = chr(0)
 
 
 class SaveTestCase(unittest.TestCase):
@@ -27,12 +39,19 @@ class SaveTestCase(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def write(self, number, when=None):
+    def write(self, number, when=None, character="Narg", description="",
+              signature=SIGNATURE):
+        """A save file with a header laid out the way the engine writes one."""
         folder = os.path.join(self.root, "SLOT{:02d}".format(number))
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, SAVE_FILE)
+        head = bytearray(256)
+        head[0:len(signature)] = signature
+        head[OFF_CHARACTER:OFF_CHARACTER + len(character)] = character.encode("cp1252")
+        body = description.encode("cp1252")
+        head[OFF_DESCRIPTION:OFF_DESCRIPTION + len(body)] = body
         with open(path, "wb") as fh:
-            fh.write(b"FALLOUT SAVE FILE\x00" + b"\x00" * 64)
+            fh.write(bytes(head))
         if when is not None:
             os.utime(path, (when, when))
         return path
@@ -124,12 +143,54 @@ class TestWatching(SaveTestCase):
         self.assertEqual(self.w.poll(now=self.clock + 10), [])
 
 
+class TestHeaders(SaveTestCase):
+    """Reading what a save calls itself.
+
+    The layout was taken from five real saves, all of which agreed: the
+    signature at the start, the character name at 29, the description at 61.
+    """
+
+    def test_the_description_is_read_and_led_with(self):
+        self.write(3, description="QUICK: 20/08/2026 - 01:42:25")
+        self.assertEqual(self.w.slot(3).announce(),
+                         "Slot 3, QUICK: 20/08/2026 - 01:42:25.")
+
+    def test_the_character_name_is_read(self):
+        self.write(3, character="Narg")
+        self.assertEqual(self.w.slot(3).character, "Narg")
+
+    def test_a_slot_with_no_description_falls_back_to_its_time(self):
+        self.write(6)
+        self.assertIn("Slot 6, saved", self.w.slot(6).announce())
+
+    def test_a_file_without_the_signature_is_not_described(self):
+        """Better the number and the time -- which come from the filesystem and
+        cannot be misparsed -- than bytes whose meaning was assumed."""
+        self.write(4, description="not a real save", signature=b"NOPE")
+        slot = self.w.slot(4)
+        self.assertEqual(slot.description, "")
+        self.assertIn("Slot 4, saved", slot.announce())
+
+    def test_an_unprintable_description_is_refused(self):
+        """A wrong offset on some other build would produce exactly this, and a
+        mangled description on a save slot is worse than none."""
+        self.write(5, description="bad" + chr(1) + chr(2) + "text")
+        self.assertEqual(self.w.slot(5).description, "")
+
+    def test_the_name_stops_at_its_terminator(self):
+        """Fixed-width fields padded with NULs -- reading the whole field would
+        drag the next one in behind it."""
+        self.write(7, character="Narg", description="Temple")
+        self.assertEqual(self.w.slot(7).character, "Narg")
+
+    def test_a_missing_slot_is_none_not_a_guess(self):
+        self.assertIsNone(self.w.slot(9))
+
+
 class TestSample(SaveTestCase):
-    def test_a_real_save_can_be_sampled_for_its_layout(self):
-        """Groundwork: the slot description lives in here somewhere, and it
-        will be read off a real file rather than guessed at."""
+    def test_a_real_save_can_be_sampled(self):
         self.write(1)
-        self.assertTrue(self.w.sample(1).startswith(b"FALLOUT SAVE FILE"))
+        self.assertTrue(self.w.sample(1).startswith(SIGNATURE))
 
     def test_sampling_an_empty_slot_is_not_an_error(self):
         self.assertEqual(self.w.sample(9), b"")

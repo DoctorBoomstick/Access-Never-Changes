@@ -45,6 +45,7 @@ DIK = {
     "c": (0x2E, False),
     "d": (0x20, False),
     "i": (0x17, False),
+    "l": (0x26, False),
     "p": (0x19, False),
     "m": (0x32, False),
     "n": (0x31, False),
