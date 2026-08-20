@@ -1,0 +1,483 @@
+/*
+ * gl_inven.ssl  --  make the inventory, loot and barter windows legible.
+ *
+ * These four windows are the same window wearing different hats -- sfall gives
+ * them all one WINTYPE_INVENTORY -- and all four are pure drag-and-drop. There
+ * is no keyboard selection of an item anywhere in them, so a blind player gets
+ * nothing at all: a pot with three things in it and a screen reader that says
+ * nothing is indistinguishable from an empty pot.
+ *
+ * This script reads the lists out of the engine and reports them. It sends no
+ * input and moves no item. Pointing at a slot and clicking it is the Python
+ * side's job, for the same reason walking is: putting the mouse somewhere is
+ * the part a blind player cannot do, and deciding what happens when it lands is
+ * the part the game should keep deciding.
+ *
+ * WHY NOT JUST MOVE THE ITEMS FROM HERE. add_obj_to_inven and friends would
+ * make this a twenty-line script with no aiming in it at all. They would also
+ * step straight past every rule the inventory window enforces -- carry weight,
+ * the action point cost of an inventory action in combat, whatever else is in
+ * there that nobody has thought of. Going through the real UI means those rules
+ * apply because they are the same code, rather than because we remembered to
+ * reimplement them. The goal is access to Fallout 2, not an easier Fallout 2.
+ *
+ * The keys mirror the hex cursor's, so there is one spatial idea to learn:
+ *
+ *      8 / 2   previous / next item in this list
+ *      4 / 6   previous / next list -- yours, theirs, what you are wearing
+ *      5       re-read the selected item
+ *      0       what is open, and what is in it
+ *
+ * Output goes to debug.log as "INVEN:" lines. The engine's own prose along the
+ * bottom of the screen ("You have no room", weight refusals) is read separately
+ * out of memory, so nothing here needs to reproduce it.
+ *
+ * Compile from data/scripts (two steps -- packaged compiler preprocessor bug):
+ *   compile.exe -P gl_inven.ssl
+ *   compile.exe gl_inven.preprocessed.ssl -o gl_inven.int
+ */
+
+#include "sfall/sfall.h"
+#include "sfall/dik.h"
+#include "sfall/define_lite.h"
+#include "sfall/define_extra.h"
+
+// Fields are separated by '|' because item names contain spaces, and every
+// line also ENDS with one: the engine appends its own debug output to ours
+// without always starting a new line, so the terminator gives that noise a
+// final field nobody reads instead of letting it corrupt an item's name.
+#define SEP                 ("|")
+
+// The windows this script owns the keyboard for. get_game_mode is a bitmask,
+// so membership is tested with bwand -- the same lesson gl_world.ssl learned
+// three times over.
+#define INVEN_MODES         (INVENTORY bwor INTFACELOOT bwor INTFACEUSE bwor BARTER)
+
+#define SIDE_MINE           (0)
+#define SIDE_THEIRS         (1)
+#define SIDE_WORN           (2)
+#define SIDES               (3)
+
+// Worn and wielded slots, in the order the window draws them down the middle.
+#define WORN_SLOTS          (3)
+
+variable g_lastmode := -1;
+variable g_side := SIDE_MINE;
+variable g_index := 0;
+variable g_label := "";
+variable g_count := 0;
+variable g_item := 0;
+variable g_other := 0;
+
+procedure start;
+procedure poll_inven;
+procedure on_key;
+procedure side_owner(variable side);
+procedure side_count(variable side);
+procedure side_usable(variable side);
+procedure side_item(variable side, variable index);
+procedure describe_item;
+procedure describe_side;
+procedure announce_open;
+procedure summarise;
+procedure step_item(variable delta);
+procedure step_side(variable delta);
+procedure other_obj;
+
+/*
+ * start  --  init once, then poll.
+ *
+ * Same shape as the other two scripts: game_loaded is true only on the first
+ * call, so the true branch sets up and the false branch is the periodic poll.
+ * set_global_script_repeat is what makes the false branch happen at all --
+ * without it the script runs exactly once per session and every watcher below
+ * is dead code, which cost gl_world.ssl a whole debugging round.
+ */
+procedure start begin
+   if game_loaded then begin
+      set_global_script_type(1);
+      set_global_script_repeat(2);   // ~30 polls/sec; only watching a mode flag
+      register_hook_proc(HOOK_KEYPRESS, on_key);
+      debug_msg("INVEN:ready" + SEP);
+   end else begin
+      call poll_inven;
+   end
+end
+
+/*
+ * poll_inven  --  notice the window opening and closing.
+ *
+ * Opening is the moment that matters. A sighted player sees a pot's contents
+ * the instant the window appears; announcing on entry is what makes that the
+ * same event rather than something the player has to go and ask for.
+ */
+procedure poll_inven begin
+   variable m, was;
+
+   m := get_game_mode bwand INVEN_MODES;
+   if (m == g_lastmode) then return;
+
+   was := g_lastmode;
+   g_lastmode := m;
+
+   if (m) then begin
+      // A fresh window starts at the top of the most interesting list. When
+      // there is a container, that is the container: you opened it to find out
+      // what was in it.
+      g_index := 0;
+      g_side := SIDE_MINE;
+      if (side_count(SIDE_THEIRS) > 0) then g_side := SIDE_THEIRS;
+      call announce_open;
+      call describe_side;
+   end else if (was) then begin
+      debug_msg("INVEN:close" + SEP);
+   end
+end
+
+/*
+ * load_other  --  whatever is on the far side of this window, into g_other.
+ *
+ * loot_obj is the engine's own answer for a container or a corpse, which saves
+ * guessing from what the player last clicked -- and it stays right if the
+ * window was opened some way the mod did not drive. In barter the far side is
+ * the person you are trading with, which is dialog_obj.
+ *
+ * Sets a global rather than returning, because a procedure that takes no
+ * arguments and returns a value is the one shape of SSL procedure nothing else
+ * in this project relies on, and an inventory window is not the place to find
+ * out whether the compiler treats it as a call or as a name.
+ */
+procedure load_other begin
+   g_other := loot_obj;
+   if (not g_other) then g_other := dialog_obj;
+end
+
+procedure side_owner(variable side) begin
+   if (side == SIDE_THEIRS) then begin
+      call load_other;
+      return g_other;
+   end
+   return dude_obj;
+end
+
+/*
+ * inven_size  --  how many things are in an inventory.
+ *
+ * Counted by walking it, which looks wasteful next to get_current_inven_size
+ * and is the only thing that is actually true. That function does NOT return
+ * an item count: measured against a live game, a character carrying one Spear
+ * of weight 4 reported a size of 4. Trusting it invented three items that were
+ * not there, and stepping onto each of them read out nothing at all -- which is
+ * indistinguishable from the key not working, and was reported as exactly that.
+ *
+ * Walking to the first null is the pattern sfall's own lib.inven.h uses, and it
+ * works the same for a critter and for a pot.
+ */
+procedure inven_size(variable owner) begin
+   variable n;
+   n := 0;
+   // Bounded. An unbounded while over an engine call that might not terminate
+   // the way we expect is a hang inside the game's own loop, with no way out.
+   while (n < 250) do begin
+      if (not inven_ptr(owner, n)) then return n;
+      n := n + 1;
+   end
+   return n;
+end
+
+procedure side_count(variable side) begin
+   variable owner;
+   owner := side_owner(side);
+   if (not owner) then return 0;
+   if (side == SIDE_WORN) then return WORN_SLOTS;
+   return inven_size(owner);
+end
+
+/*
+ * side_item  --  the object at `index` on a side, or 0.
+ *
+ * The worn side is a fixed three slots rather than a list, because that is what
+ * it is: armour, and the two hands. An empty slot is a real answer there --
+ * "ITEM2, empty" tells you that you have a free hand -- so it returns 0 without
+ * that meaning the index was out of range.
+ */
+procedure side_item(variable side, variable index) begin
+   variable owner;
+   owner := side_owner(side);
+   if (not owner) then return 0;
+   if (side == SIDE_WORN) then begin
+      variable slot, a, b;
+      if (index == 0) then slot := INVEN_TYPE_WORN;
+      else if (index == 1) then slot := INVEN_TYPE_RIGHT_HAND;
+      else slot := INVEN_TYPE_LEFT_HAND;
+
+      /*
+       * Two ways of asking, because the obvious one is wrong for hands.
+       *
+       * critter_inven_obj reports a hand's contents only while that hand is the
+       * ACTIVE one. A spear dragged into Item 1 read back as an empty slot, and
+       * pressing B in the world -- which switches the active hand -- made it
+       * appear, and pressing B again made it vanish. So the mod called a
+       * successful equip a failure and then described the slot as empty while
+       * the character was holding the thing.
+       *
+       * critter_inven_obj2 is sfall's replacement and does not have that
+       * behaviour. Both are read and both are logged, so if the replacement is
+       * ever the one that is wrong, the log says so rather than the player
+       * having to notice.
+       */
+      a := critter_inven_obj2(owner, slot);
+      b := critter_inven_obj(owner, slot);
+      if (a != b) then begin
+         debug_msg("INVEN:slotdbg " + index + SEP + slot
+            + SEP + (a != 0) + SEP + (b != 0) + SEP);
+      end
+      if (a) then return a;
+      return b;
+   end
+   if (index < 0) then return 0;
+   return inven_ptr(owner, index);
+end
+
+/*
+ * describe_item  --  name, how many, and what it weighs.
+ *
+ * The name is the game's own, so translations and content mods come along
+ * untouched. The quantity is the engine's count of that prototype in the same
+ * inventory, which is what a stack in the window means. Weight is the engine's
+ * per-item figure.
+ *
+ * Everything is logged rather than assembled into a sentence here: the Python
+ * side does the wording, as it does for hexes and the scanner, so that the
+ * phrasing lives in one place and can be changed without a game restart.
+ */
+procedure describe_item begin
+   variable owner, qty;
+
+   g_label := "";
+   g_count := 0;
+   if (not g_item) then return;
+
+   g_label := obj_name(g_item);
+   owner := side_owner(g_side);
+   qty := 0;
+   if (owner and g_side != SIDE_WORN) then begin
+      qty := obj_is_carrying_obj_pid(owner, obj_pid(g_item));
+   end
+   g_count := qty;
+end
+
+procedure describe_side begin
+   variable total, slot, weight;
+
+   total := side_count(g_side);
+   if (total <= 0) then begin
+      debug_msg("INVEN:none " + g_side + SEP);
+      return;
+   end
+
+   if (g_index >= total) then g_index := total - 1;
+   if (g_index < 0) then g_index := 0;
+
+   g_item := side_item(g_side, g_index);
+   call describe_item;
+
+   // An empty worn slot is a legitimate selection -- a free hand is worth
+   // knowing about -- so g_item can be 0 here and every engine call below has
+   // to survive it. item_weight(0) is exactly the shape that null dereferenced
+   // at 0x004AA6AE when gl_world handed obj_can_see_obj a piece of scenery.
+   weight := 0;
+   if (g_item) then weight := item_weight(g_item);
+
+   // The worn side names its slots, because "nothing" in slot two and
+   // "nothing" in slot three are different facts about your hands.
+   slot := -1;
+   if (g_side == SIDE_WORN) then slot := g_index;
+
+   debug_msg("INVEN:entry " + g_side + SEP + g_index + SEP + total
+      + SEP + g_label + SEP + g_count + SEP + weight
+      + SEP + slot + SEP);
+end
+
+/*
+ * announce_open  --  which window, and what is on the far side of it.
+ *
+ * The container's name is the game's own. Whether it is a pot, a footlocker or
+ * a dead radscorpion is the single most useful thing to hear first, and it is
+ * the one thing the window makes obvious to everyone else.
+ */
+procedure announce_open begin
+   variable name;
+
+   call load_other;
+   name := "";
+   if (g_other) then name := obj_name(g_other);
+
+   debug_msg("INVEN:open " + get_game_mode + SEP + name
+      + SEP + side_count(SIDE_THEIRS) + SEP + side_count(SIDE_MINE) + SEP);
+
+   /*
+    * Where the window actually is, logged and not spoken.
+    *
+    * Groundwork for moving an item, which needs the pointer put on a specific
+    * row. All four windows share one WINTYPE_INVENTORY, so this is measured
+    * once and serves the inventory, loot, use-on and barter alike.
+    *
+    * Reported as x, y, width, height rather than as get_interface_rect's packed
+    * form, because four numbers that are each obviously one thing cannot be
+    * unpacked in the wrong order.
+    */
+   debug_msg("INVEN:rect " + get_interface_x(WINTYPE_INVENTORY)
+      + SEP + get_interface_y(WINTYPE_INVENTORY)
+      + SEP + get_interface_width(WINTYPE_INVENTORY)
+      + SEP + get_interface_height(WINTYPE_INVENTORY)
+      + SEP + get_interface_id(WINTYPE_INVENTORY)
+      + SEP + get_screen_width + "x" + get_screen_height + SEP);
+end
+
+/*
+ * summarise  --  what you are carrying against what you can carry.
+ *
+ * The window shows this as "Total Wt: 4/258". The maximum is the engine's own
+ * carry-weight stat. The current figure is a sum of the engine's own per-item
+ * weights rather than a formula of ours -- there is no call that reports it
+ * directly, and adding up numbers the engine gave us is a different thing from
+ * inventing a rule about how heavy something is.
+ */
+procedure summarise begin
+   variable i, total, carried, item;
+
+   total := inven_size(dude_obj);
+   carried := 0;
+   i := 0;
+   while (i < total) do begin
+      item := inven_ptr(dude_obj, i);
+      if (item) then carried := carried + item_weight(item);
+      i := i + 1;
+   end
+
+   debug_msg("INVEN:summary " + get_game_mode + SEP + carried
+      + SEP + get_critter_stat(dude_obj, STAT_carry_amt)
+      + SEP + total + SEP + side_count(SIDE_THEIRS)
+      + SEP + get_inven_ap_cost + SEP);
+end
+
+procedure step_item(variable delta) begin
+   variable total;
+   total := side_count(g_side);
+   if (total <= 0) then begin
+      debug_msg("INVEN:none " + g_side + SEP);
+      return;
+   end
+   g_index := g_index + delta;
+   // Wrap rather than stop. A list you can walk off the end of silently is a
+   // list you cannot tell the end of.
+   if (g_index >= total) then g_index := 0;
+   if (g_index < 0) then g_index := total - 1;
+   call describe_side;
+end
+
+/*
+ * side_usable  --  is this list part of the window that is open?
+ *
+ * A side is offered when it EXISTS, not when it has anything in it.
+ *
+ * Skipping empty sides seemed tidy and made the mod unusable in the one case
+ * that matters most: unequipping. Take your only weapon out of a hand and the
+ * carried list is empty, so the list you need to put it back into is precisely
+ * the one that was being skipped -- the equipment panel became a room with no
+ * door, and the item could never be taken off.
+ *
+ * The container side is the only genuinely conditional one: there is no such
+ * list in your own inventory window, and offering it would be offering nothing.
+ */
+procedure side_usable(variable side) begin
+   if (side == SIDE_WORN) then return 1;
+   if (side == SIDE_MINE) then return 1;
+   call load_other;
+   if (g_other) then return 1;
+   return 0;
+end
+
+procedure step_side(variable delta) begin
+   variable tries, next;
+
+   tries := 0;
+   next := g_side;
+   while (tries < SIDES) do begin
+      next := next + delta;
+      if (next >= SIDES) then next := 0;
+      if (next < 0) then next := SIDES - 1;
+      if (side_usable(next)) then begin
+         g_side := next;
+         g_index := 0;
+         call describe_side;
+         return;
+      end
+      tries := tries + 1;
+   end
+   call describe_side;
+end
+
+/*
+ * on_key  --  the numpad, but only while one of these windows is up.
+ *
+ * The mode test is the whole reason this can be a separate script. gl_world
+ * declines the same keys whenever a panel covers the map, so exactly one of the
+ * two acts on any given press and neither has to know about the other.
+ */
+procedure on_key begin
+   variable event, key, act;
+
+   event := get_sfall_arg;
+   key := get_sfall_arg;
+   if (event != 1) then return;
+   if (not (get_game_mode bwand INVEN_MODES)) then return;
+
+   /*
+    * The engine's own list keys, watched and deliberately NOT swallowed.
+    *
+    * The manual documents Home, End, Page Up and Page Down as scrolling the
+    * inventory lists. If they really do, then reaching a given row needs no
+    * memory address at all: press Home and the list is at the top, press Page
+    * Down a known number of times and it is at a known place. The scroll
+    * position becomes something we CAUSED rather than something we have to go
+    * and read out of the engine.
+    *
+    * That is worth a great deal here. Every absolute address in this project is
+    * a portability liability -- they are confirmed against one retail build and
+    * are the reason this does not yet run on GOG. A method built out of keys
+    * the manual documents has no address in it and cannot drift.
+    *
+    * So: log them, pass them through, and let the next session say whether the
+    * engine acts on them. If it does, the scroll hunt is unnecessary.
+    */
+   if (key == DIK_HOME or key == DIK_END
+       or key == DIK_PRIOR or key == DIK_NEXT) then begin
+      debug_msg("INVEN:listkey " + key + SEP + g_side + SEP
+         + side_count(g_side) + SEP);
+      return;          // no set_sfall_return: the window must still see it
+   end
+
+   act := 0;
+   if      (key == DIK_NUMPAD8) then act := 1;
+   else if (key == DIK_NUMPAD2) then act := 2;
+   else if (key == DIK_NUMPAD4) then act := 3;
+   else if (key == DIK_NUMPAD6) then act := 4;
+   else if (key == DIK_NUMPAD5) then act := 5;
+   else if (key == DIK_NUMPAD0) then act := 6;
+   else return;
+
+   // Log arrival before doing any work, so that if a call in here ever takes
+   // the engine down, the last line written names the key that did it.
+   debug_msg("INVEN:key " + key + " act " + act + SEP);
+
+   if      (act == 1) then call step_item(-1);
+   else if (act == 2) then call step_item(1);
+   else if (act == 3) then call step_side(-1);
+   else if (act == 4) then call step_side(1);
+   else if (act == 5) then call describe_side;
+   else if (act == 6) then call summarise;
+
+   set_sfall_return(0);   // swallow it: the window has no use for the numpad
+end
