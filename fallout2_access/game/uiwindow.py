@@ -65,7 +65,16 @@ B_NEXT = 0x78
 B_SIZE = 0x7C
 
 # An event code below this is a keyboard code, and the key that produces it
-# presses the button. Above it, the code is synthetic and only a click will do.
+# presses the button.
+#
+# Above it does NOT mean "only a click will do", which this comment used to say.
+# Fallout keeps the nav cluster at 256 + scancode -- 328 up, 331 left, 333
+# right, 336 down, 329 and 337 the page keys -- so those are keyboard codes too.
+# The save screen's page arrows carry exactly those as their mouse-UP codes,
+# which is a fact about how the buttons were built and not an invitation to
+# press the key: tried on the live screen, left and right arrow did nothing
+# while the same buttons clicked worked. Read it as a hint to test, never as a
+# route to assume.
 KEY_CODE_MAX = 256
 
 # Sanity bounds. A window cannot be bigger than any screen the game runs at,
@@ -275,6 +284,21 @@ class WindowFinder:
             return None
         return _window_from(self.proc, blob, addr, 0)
 
+    def sized(self, width: int, height: int) -> Optional[Window]:
+        """A window found by its size, cached the same way as by rectangle."""
+        key = ("size", width, height)
+        remembered = self._addr.get(key)
+        if remembered is not None:
+            win = self._read(remembered)
+            if win and (win.width, win.height) == (width, height) and win.buttons:
+                return win
+        win = find_window_sized(self.proc, width, height,
+                                first_region=self._region)
+        if win is not None:
+            self._addr[key] = win.addr
+            self._region = win.addr & ~0xFFFFF
+        return win
+
     def at(self, left: int, top: int, width: int, height: int) -> Optional[Window]:
         key = (left, top, width, height)
 
@@ -293,6 +317,42 @@ class WindowFinder:
     def forget(self) -> None:
         self._addr.clear()
         self._region = None
+
+
+def find_window_sized(proc, width: int, height: int,
+                      first_region: Optional[int] = None) -> Optional[Window]:
+    """The window of exactly this size, wherever it is, richest match winning.
+
+    For panels whose position is not known in advance. Computing it from the
+    game's client area does NOT work: Windows reports the client as 1536x864
+    while the engine draws and places its windows in 1024x768 coordinates, so a
+    panel worked out that way lands hundreds of pixels from the real thing --
+    which is how the page buttons went unclickable while the same screen read
+    perfectly.
+
+    Searched on the packed width and height, which sit next to each other in the
+    struct, so this is one more byte search rather than a walk.
+    """
+    size = struct.pack("<2i", width, height)
+    best: Optional[Window] = None
+    regions = list(proc.regions(writable_only=True))
+    if first_region is not None:
+        regions.sort(key=lambda r: not (r.base <= first_region < r.base + r.size))
+    for index, region in enumerate(regions):
+        data = proc.read_chunked(region.base, region.size)
+        if len(data) >= W_SIZE:
+            at = data.find(size)
+            while at >= 0:
+                start = at - W_WIDTH      # width sits at +0x18 in the struct
+                if start >= 0 and start + W_SIZE <= len(data):
+                    win = _window_from(proc, data, region.base, start)
+                    if win is not None and (best is None
+                                            or len(win.buttons) > len(best.buttons)):
+                        best = win
+                at = data.find(size, at + 1)
+        if index == 0 and first_region is not None and best is not None and best.buttons:
+            return best
+    return best
 
 
 def _window_from(proc, data: bytes, region_base: int, off: int

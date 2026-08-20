@@ -289,7 +289,39 @@ class Process:
                 return mod
         raise ProcessNotFound("could not identify the Fallout 2 main module")
 
-    def _modules_toolhelp(self) -> Dict[str, Module]:
+    def module_list(self) -> List[Module]:
+        """Every loaded module, duplicate names included.
+
+        `modules()` keys by base name, which is fine right up until two
+        different files share one -- and sfall is exactly that case. Its
+        ddraw.dll loads Windows' own ddraw.dll to forward DirectDraw calls to,
+        so the process has two modules called "ddraw.dll" and the dict keeps
+        whichever the walk saw last. That silently returned
+        C:\\WINDOWS\\SysWOW64\\ddraw.dll, and a search for sfall's variables
+        inside it found nothing at all -- which reads exactly like "sfall did
+        not react" and is really "we looked in the wrong file".
+
+        Ordered as the walk found them; callers that care which copy they want
+        must say so, usually by path.
+        """
+        return list(self._module_entries())
+
+    def module_at(self, name: str, directory: str) -> Optional[Module]:
+        """The module with this base name loaded from under `directory`.
+
+        The way to ask for sfall rather than Windows' DirectDraw.
+        """
+        want = name.lower()
+        root = os.path.normcase(os.path.abspath(directory))
+        for mod in self.module_list():
+            if mod.name.lower() != want:
+                continue
+            path = os.path.normcase(os.path.abspath(mod.path or ""))
+            if path.startswith(root):
+                return mod
+        return None
+
+    def _module_entries(self) -> List[Module]:
         # Documented as returning ERROR_BAD_LENGTH while the target is still
         # loading its module list; MSDN's advice is simply to retry.
         for _ in range(8):
@@ -299,28 +331,31 @@ class Process:
             if snap != INVALID_HANDLE_VALUE:
                 break
             if ctypes.get_last_error() != ERROR_BAD_LENGTH:
-                return {}
+                return []
         else:
-            return {}
+            return []
 
-        out: Dict[str, Module] = {}
+        out: List[Module] = []
         try:
             entry = MODULEENTRY32W()
             entry.dwSize = ctypes.sizeof(MODULEENTRY32W)
             if not kernel32.Module32FirstW(snap, ctypes.byref(entry)):
-                return {}
+                return []
             while True:
-                out[entry.szModule.lower()] = Module(
+                out.append(Module(
                     name=entry.szModule,
                     base=entry.modBaseAddr or 0,
                     size=entry.modBaseSize,
                     path=entry.szExePath,
-                )
+                ))
                 if not kernel32.Module32NextW(snap, ctypes.byref(entry)):
                     break
         finally:
             kernel32.CloseHandle(snap)
         return out
+
+    def _modules_toolhelp(self) -> Dict[str, Module]:
+        return {m.name.lower(): m for m in self._module_entries()}
 
     def _modules_psapi(self) -> Dict[str, Module]:
         needed = wt.DWORD()

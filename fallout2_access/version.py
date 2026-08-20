@@ -9,7 +9,7 @@ Each MINOR release carries a name. This one is "gadget" -- the release where
 the inventory became something you could operate rather than only listen to.
 """
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 NAME = "gadget"
 
 

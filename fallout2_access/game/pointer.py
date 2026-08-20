@@ -72,6 +72,10 @@ TOLERANCE = 2
 MAX_STEPS = 60
 MAX_NUDGE = 48
 
+# How far to step off a target the pointer already sits on, so that the
+# engine sees motion arriving at it rather than a click out of nowhere.
+NUDGE_OFF = 12
+
 
 class GameMouse:
     """Where the engine thinks its pointer is."""
@@ -246,6 +250,7 @@ def aim_to(proc, hwnd: int, x: int, y: int,
     # assumed; this is only a starting guess.
     scale = 1.5
     stalls = 0
+    moved_at_all = False
 
     for _ in range(MAX_STEPS):
         here = mouse.read()
@@ -253,7 +258,21 @@ def aim_to(proc, hwnd: int, x: int, y: int,
             return False, None, "cannot read the pointer position"
         dx, dy = x - here[0], y - here[1]
         if abs(dx) <= tolerance and abs(dy) <= tolerance:
-            return True, here, ""
+            if moved_at_all:
+                return True, here, ""
+            # Already there, and nothing has been sent. That is not the same as
+            # having arrived: GNW tracks which button the pointer entered, and a
+            # click with no motion in front of it lands on a button the engine
+            # does not think is hovered. Measured -- the pointer sat exactly on
+            # a page control, the click was sent, and the page did not turn.
+            #
+            # So step off and come back, which costs two nudges and makes
+            # "the pointer is on it" mean the engine agrees.
+            move_mouse_relative(-NUDGE_OFF, 0, settle=0.04, hwnd=hwnd)
+            time.sleep(0.03)
+            moved_at_all = True
+            continue
+        moved_at_all = True
 
         # Aim at the remaining distance, but never stride further than the cap.
         # There is deliberately no damping term: overshoot here comes from

@@ -156,9 +156,17 @@ class TestInGameDetectionUsesTheGameMode(unittest.TestCase):
     """
 
     class Proc:
-        """A process whose editor-window flag always claims the editor is up."""
+        """A process whose editor-window flag always claims the editor is up.
+
+        The save/load flag reads zero, because that screen is not showing --
+        without that distinction the fake claims every screen at once and tests
+        nothing.
+        """
 
         def read_i32(self, addr):
+            from fallout2_access.game import slotscreen
+            if addr == slotscreen.OPEN:
+                return 0
             return 6
 
     def setUp(self):
@@ -190,3 +198,34 @@ class TestInGameDetectionUsesTheGameMode(unittest.TestCase):
         the stale flag is still better than nothing."""
         self.assertEqual(
             screens.detect(self.proc, in_game=True, mode=None), screens.CHARGEN)
+
+
+class TestSlotScreenDetection(unittest.TestCase):
+    """The save and load screens are reachable from the main menu, where no
+    script runs -- so they are recognised from their own flag, which is the one
+    detector that works both before and during a game."""
+
+    class Proc:
+        def __init__(self, open_flag):
+            self.open_flag = open_flag
+
+        def read_i32(self, addr):
+            from fallout2_access.game import slotscreen
+            if addr == slotscreen.OPEN:
+                return self.open_flag
+            return -1        # nothing else claims a screen
+
+    def test_recognised_before_a_game_is_loaded(self):
+        self.assertEqual(screens.detect(self.Proc(1), in_game=False),
+                         screens.SLOTS)
+
+    def test_recognised_during_a_game_too(self):
+        """F4 opens it mid-game, and the mod must not go on describing the map
+        while the player is choosing a slot to overwrite."""
+        self.assertEqual(
+            screens.detect(self.Proc(1), in_game=True, mode=screens.MODE_SAVEGAME),
+            screens.SLOTS)
+
+    def test_not_claimed_when_the_flag_is_clear(self):
+        self.assertNotEqual(screens.detect(self.Proc(0), in_game=True, mode=0),
+                            screens.SLOTS)

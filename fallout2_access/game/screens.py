@@ -39,6 +39,7 @@ MAIN_MENU = "main_menu"
 SELECT = "select"
 CHARGEN = "chargen"
 WORLD = "world"
+SLOTS = "slots"          # the save or load screen
 UNKNOWN = "unknown"
 
 # Sub-modes reported by the in-game script's get_game_mode bitmask, from
@@ -227,6 +228,15 @@ def detect(proc: Process, in_game: bool = False,
     stale between uses; the game mode is a direct statement of what is on
     screen, and the mod already has it.
     """
+    # The save and load screens first, and from their own flag rather than from
+    # the game mode. They are reachable from the main menu, where no script runs
+    # and therefore no game mode exists -- so the one detector that works in
+    # both places is the one that does not depend on a script being alive.
+    from .slotscreen import OPEN  # local import: avoids a cycle
+
+    if proc.read_i32(OPEN):
+        return SLOTS
+
     if in_game:
         if mode is not None:
             # The character screen mid-game is a bit in the mask, and nothing

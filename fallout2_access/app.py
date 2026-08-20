@@ -30,10 +30,11 @@ from .game.aim import Aimer
 from .game.chargen import CharGen
 from .game.combat import CombatWatcher
 from .game.displaywin import DisplayWindow
-from .game import itemmove, uiwindow
+from .game import itemmove, slotscreen, uiwindow
 from .game.inventory import InventoryWatcher
 from .game.premade import PremadeScreen
 from .game.saves import SaveWatcher
+from .game.slotscreen import Pager, SlotScreen
 from .game.scanner import Scanner
 from .game import worldlog
 from .game.worldlog import HexReading, WorldLog
@@ -530,6 +531,133 @@ class WorldWatcher(Watcher):
         )
 
 
+class SlotScreenWatcher(Watcher):
+    """The save and load screens.
+
+    A save you cannot load is a slower way of losing an evening, so this is the
+    screen that makes the rest of saving worth anything. It needs no pointer to
+    navigate -- the arrow keys already move the highlight -- and never did. It
+    only ever needed a voice.
+
+    The one thing it must not get wrong is which slot a row IS. Everything here
+    is arranged around that: the engine says whether a row holds a game, the
+    savegame folder supplies the words, the page is counted rather than guessed,
+    and the count is checked against the folder whenever the two can disagree.
+    """
+
+    key = screens.SLOTS
+
+    def __init__(self, screen, saves: SaveWatcher, pager) -> None:
+        self.screen = screen
+        self.saves = saves
+        self.pager = pager
+        self._selection: Optional[int] = None
+
+    def reset(self) -> None:
+        self._selection = None
+
+    def _saved(self):
+        return {s.number: s for s in self.saves.scan()}
+
+    def _row(self, index: int) -> str:
+        occupied = self.screen.occupied()
+        taken = occupied[index] if index < len(occupied) else False
+        page = self.screen.page()
+        if page is None:
+            # The row is real and readable; which slot on disk it is, is not.
+            # Say the honest half rather than a number that might be ninety out.
+            return "Row {}, {}.".format(index + 1,
+                                        "a saved game" if taken else "empty")
+        _character, description = self.screen.header(index)
+        return slotscreen.describe(self.screen.slot_number(page, index),
+                                   taken, description or "")
+
+    def enter(self, ann: Announcer) -> None:
+        # Name the screen at once, then do the slow part. Walking to the page
+        # holding the saves needs an aim and a few clicks, and the sentence
+        # covers it -- silence after a screen change reads as the mod dying.
+        ann.answer("{}.".format(self._title()))
+        self._selection = self.screen.selection()
+        moved = self._seek_saves()
+        ann.say(" ".join(x for x in (moved, self._page_line(), self._current())
+                         if x), interrupt=False, force=True)
+
+    def _seek_saves(self) -> str:
+        """On the load screen, go where the games are.
+
+        A thousand pages exist and a player's saves live on one or two of them,
+        so opening Load on page eight and being told ten empty slots is a true
+        answer to a question nobody asked. This only ever runs for LOADING: on
+        the save screen the page decides which slot gets overwritten, and moving
+        that without being asked is the one mistake here that destroys work.
+        """
+        if not self.screen.loading:
+            return ""
+        here = self.screen.page()
+        if here is None:
+            return ""
+        wanted = slotscreen.pages_holding(self._saved())
+        if not wanted or here in wanted:
+            return ""
+        landed = self.pager.goto(self.screen, wanted[0])
+        if landed != wanted[0]:
+            return ""
+        return "Went to the saved games."
+
+    def _title(self) -> str:
+        return "Load game" if self.screen.loading else "Save game"
+
+    def _panel(self):
+        return self.screen.panel
+
+    def _page_line(self) -> str:
+        page = self.screen.page()
+        if page is None:
+            # Read, not counted -- so failing to read it is a real answer and
+            # not an excuse to fall back on a tally that might be anywhere.
+            return "Page not known."
+        return "Page {}.".format(page + 1)
+
+    def _current(self) -> str:
+        index = self.screen.selection()
+        if index is None:
+            return "Cannot read the selection."
+        return self._row(index)
+
+    def poll(self, ann: Announcer) -> None:
+        index = self.screen.selection()
+        if index is None or index == self._selection:
+            return
+        self._selection = index
+        ann.answer(self._row(index))
+
+    def repeat(self, ann: Announcer) -> None:
+        ann.answer(self._current())
+
+    describe = repeat
+
+    def summary(self, ann: Announcer) -> None:
+        taken = sum(1 for x in self.screen.occupied() if x)
+        pages = slotscreen.pages_holding(self._saved())
+        where = ""
+        if pages:
+            where = "Saved games on {} {}.".format(
+                "page" if len(pages) == 1 else "pages",
+                ", ".join(str(p + 1) for p in pages))
+        ann.answer(" ".join(x for x in (
+            "{}.".format(self._title()),
+            "{} {} on this page.".format(taken, "game" if taken == 1 else "games"),
+            self._page_line(), where, self._current()) if x))
+
+    def page(self, ann: Announcer, delta: int) -> None:
+        landed = self.pager.step(self.screen, delta)
+        if landed is None:
+            ann.answer("Could not change page.")
+            return
+        self._selection = self.screen.selection()
+        ann.answer(self._page_line() + " " + self._current())
+
+
 class App:
     def __init__(self, speaker: Optional[Speaker] = None, require_focus: bool = True) -> None:
         self.ann = Announcer(speaker or get_speaker())
@@ -584,7 +712,12 @@ class App:
         # printed once a game is actually loaded.
         self.display = DisplayWindow(self.proc)
         self._session_epoch = 0
+        self.finder = uiwindow.WindowFinder(self.proc)
+        self.slots = SlotScreen(self.proc, self.hwnd)
+        pager = Pager(self.proc, self.hwnd, self.finder,
+                      slotscreen.page_count(game_dir))
         self.watchers = {
+            screens.SLOTS: SlotScreenWatcher(self.slots, self.saves, pager),
             screens.MAIN_MENU: MainMenuWatcher(),
             screens.SELECT: SelectWatcher(PremadeScreen(self.proc)),
             screens.CHARGEN: CharGenWatcher(CharGen(self.proc)),
@@ -827,6 +960,14 @@ class App:
             self._do_action(what)
 
     def _do_action(self, what: str) -> None:
+        if what in ("click", "rclick") and self.screen == screens.SLOTS:
+            # There is nothing to click at on this screen -- the arrow keys
+            # already move the highlight -- so the two mouse-button keys are
+            # given to the one thing that does need pointing at: the pages.
+            watcher = self.current_watcher()
+            if watcher:
+                watcher.page(self.ann, 1 if what == "click" else -1)
+            return
         if what in ("click", "rclick"):
             self.click("left" if what == "click" else "right")
             return
@@ -890,6 +1031,9 @@ class App:
         # a save that did not happen is how an evening's play is lost.
         for line in self.saves.poll():
             self.ann.say(line, force=True)
+        # The script's mode says whether this is Save or Load; before a game
+        # loads there is no script, and the only way here is Load.
+        self.slots.mode = self.world.log.game_mode if self.world.log.session_live else None
         detected = screens.detect(self.proc,
                                   in_game=self.world.log.session_live,
                                   mode=self.world.log.game_mode)

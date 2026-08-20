@@ -223,8 +223,8 @@ sighted player permanently:
 
     Health 48 of 48. 8 of 10 action points. Armor class 8.
 
-Health first, then action points, then armour class. It works everywhere — on
-the map, in a fight, with the inventory open — because those are exactly the
+Health first, then action points, then armour class. It works everywhere ï¿½ on
+the map, in a fight, with the inventory open ï¿½ because those are exactly the
 moments you want it, and a key that only worked on the map would be missing all
 of them.
 
@@ -233,7 +233,7 @@ maximum, worded as a capacity rather than a remainder: the engine keeps a
 running count out of combat, but it is not a number anyone is spending, so
 reading it back would be true of nothing.
 
-All three come from the engine. None is computed here — armour class in
+All three come from the engine. None is computed here ï¿½ armour class in
 particular has modifiers this mod knows nothing about.
 
 ## Saving and loading
@@ -275,18 +275,56 @@ distinction is the same one the mod draws before every click.
 uses the same slot repeatedly, so the interesting case is the one where you have
 landed on a slot that already held a game.
 
-Arriving at the save or load screen reads out what is on disk:
+### The save and load screens
 
-    Save game. 2 saved games. Slot 1, saved 20:14. Slot 3, saved 21:02.
+Arriving on either one names it, says which page you are on, and reads the
+highlighted row:
 
-**The slot descriptions you typed are not read yet.** They live inside
-`SAVE.DAT` in a layout nobody here has confirmed against a real file, and a
-confidently wrong save description is exactly the kind of statement that gets
-somebody to overwrite the wrong game. A slot is named by its number and the time
-it was written, both of which are certain.
+    Load game. Page 2 of 2. Slot 11, QUICK: 20/08/2026 - 01:06:20.
 
-**Picking a slot on those screens still needs the mouse.** F6 and F7 do not, so
-if you are saving and reloading to test something, use those.
+**The arrow keys already work.** Up and down move the highlight, and the mod
+speaks each row as you land on it â€” the screen was navigable all along and
+simply silent. Enter loads or saves the highlighted slot; Escape backs out.
+
+The description read is the one *you* typed when saving, taken from inside
+`SAVE.DAT` â€” confirmed byte-for-byte against five real saves. Whether a row
+holds a game at all is the **engine's** answer, not the folder's, because that
+is what the screen is showing and what you are about to act on.
+
+| Key | Action |
+|---|---|
+| Up / Down | move the highlight (the game's own keys) |
+| Numpad / | repeat the highlighted row |
+| Numpad * | the screen, the page, and how many games are on it |
+| Numpad + | next page |
+| Numpad - | previous page |
+
+Numpad + and - are the mouse-button keys everywhere else. On this screen there
+is nothing worth clicking at, so they are given to the one control that does
+need pointing at: the page arrows, which sfall only offers to the mouse.
+
+### Pages
+
+With `ExtraSaveSlots` on there are **a thousand** pages of ten slots, and quick
+saves live on page 2 by default. So opening the load screen can easily land you
+on an empty page a long way from your games.
+
+Two things stop that mattering:
+
+- **The load screen goes to your saves by itself.** If the page it opens on
+  holds nothing and another page does, the mod walks there and says *"Went to
+  the saved games."* first. The **save** screen never does this â€” there the page
+  decides which slot gets overwritten, so it is not moved unless you move it.
+- **Numpad \* tells you where they are** â€” *"Saved games on page 2."*
+
+The page is read out of sfall's own memory, not counted from clicks, so
+"Page 2" is a measurement. If it ever cannot be read, the mod says **"Page not
+known"** and names rows by position (*"Row 3, a saved game"*) rather than
+attaching a slot number it has not verified. On a screen that overwrites saved
+games, a slot number nobody checked is worse than no slot number at all.
+
+Descriptions are read from the row the engine is drawing, not looked up on disk
+by slot number â€” so what you hear is what that row *is*.
 
 ## Combat
 

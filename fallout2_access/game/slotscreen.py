@@ -28,16 +28,36 @@ quick saves in slots 11 to 15 it read all zeros on the first page and
 [1,1,1,1,1,0,0,0,0,0] on the second -- the engine stating exactly what the
 screen shows.
 
-**The page is caused, not read.** The page number does live in memory, but only
-on the heap, which moves every launch and cannot be addressed. It does not need
-to be: the page controls are buttons like any other, so clicking "first page"
-puts the list at page zero *by construction* and counting from there is exact.
-That is the same answer the inventory's scroll position got, for the same
-reason -- a state you can set is worth more than one you have to find.
+`SLOT_HEADERS` is the ten rows the screen is *displaying*, each one a verbatim
+copy of that save's `SAVE.DAT` header -- same layout, so the same two offsets
+read the character name and the description. Ten of them at 0x88 apart end at
+exactly `OCCUPIED`, which is what confirms the stride rather than a guess about
+it.
+
+Reading those beats going to disk. It removes the step that was wrong for weeks:
+the mod used to work out a slot number from a page it had counted, then look up
+that number in the savegame folder. Read the row instead and there is no
+arithmetic to be wrong about -- what is announced is what is on screen.
+
+**The page is read, not counted, and this file used to say the opposite.** It
+claimed the page number lived only on the heap and had to be caused by clicking.
+That was wrong, and expensively: it lives in sfall's own data, because extra
+pages are sfall's feature and not the engine's. The reason it went unfound is
+that the search looked inside `C:\\WINDOWS\\SysWOW64\\ddraw.dll` -- sfall's
+ddraw.dll loads Windows' ddraw.dll to forward to, two modules share the name,
+and the lookup returned the wrong one.
+
+The cost of counting instead of reading was not just clumsiness. Counting made
+the mod announce "Slot 1" through "Slot 10" while the screen was showing slots
+81 to 90, and report "Could not change page" on a page control that was working
+perfectly -- the evidence it used for "did the page turn?" was the occupancy
+flags, and stepping between two empty pages changes nothing. A page it could
+read would have settled all of that immediately.
 """
 
 from __future__ import annotations
 
+import os
 from typing import List, Optional
 
 # Non-zero while the save or load screen is showing.
@@ -49,14 +69,175 @@ SELECTION = 0x005193B8
 # Ten flags, one per visible row: does that row hold a saved game?
 OCCUPIED = 0x00614280
 
+# The ten headers the screen is displaying, one per row, each a copy of that
+# save's SAVE.DAT header. Ten at HEADER_SIZE apart land exactly on OCCUPIED,
+# which is the check that makes the stride a measurement and not a guess.
+SLOT_HEADERS = 0x00613D30
+HEADER_SIZE = 0x88
+
 SLOTS_PER_PAGE = 10
+
+# The page controls, by the event code each raises. All four measured, by
+# clicking each one and watching sfall's page offset: an earlier version of this
+# file guessed at the outer two and said so, and the guess was wrong -- they are
+# not "first" and "last" but ten-page jumps.
+PAGE_PREV = 1355          # -1 page
+PAGE_NEXT = 1357          # +1 page
+PAGE_BACK_TEN = 1353      # -10 pages
+PAGE_FORWARD_TEN = 1361   # +10 pages
+
+# Where sfall keeps the first slot number the page is showing, less one: page 0
+# reads 0, page 1 reads 10. An offset into the slots rather than a page number,
+# which is why a search for a small page-sized integer never turned it up.
+#
+# An offset from sfall's module base, never an absolute address -- a DLL can be
+# relocated, and the absolute 0x110EF4B8 it happened to load at is a fact about
+# one launch.
+PAGE_OFFSET_RVA = 0xEF4B8
+
+# The control wraps: stepping forward from the last page reaches the first.
+# Measured -- the offset went 9990 -> 0 -> 10 across two forward steps.
+MAX_PAGES = 1000
+
+# The window is a fixed 640x480 panel, centred. Computed from the client size
+# rather than hardcoded, so another resolution moves it correctly.
+PANEL_WIDTH = 640
+PANEL_HEIGHT = 480
+
+
+def panel_rect(client_width: int, client_height: int):
+    """Where the save/load panel sits, given the game's client area."""
+    return ((client_width - PANEL_WIDTH) // 2,
+            (client_height - PANEL_HEIGHT) // 2,
+            PANEL_WIDTH, PANEL_HEIGHT)
+
+
+def pages_holding(saved_numbers) -> List[int]:
+    """The pages that hold at least one saved game, in order.
+
+    With a thousand pages available and a player's saves usually on one or two
+    of them, stepping blindly is not navigation. This is what lets the mod say
+    where the games are and go straight there.
+    """
+    return sorted({(n - 1) // SLOTS_PER_PAGE for n in saved_numbers})
+
+
+# get_game_mode's SAVEGAME bit. Spelled out rather than imported, because
+# screens.py imports this file to detect the screen and the cycle is not worth
+# untangling for one constant.
+MODE_SAVEGAME = 0x10
+
+
+def page_count(game_dir: str) -> int:
+    """How many pages of slots the screen offers.
+
+    `ExtraSaveSlots` is a switch, not a count -- "Set to 1 to add additional
+    pages of save slots", in sfall's own words. Reading it as a number of extra
+    pages gave two, and two was wrong in the worst way available: it made the
+    mod refuse to step forward past the second page, and it let a page be
+    "identified" by elimination when the real answer was page 8.
+    """
+    path = os.path.join(game_dir, "ddraw.ini")
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                name, _, value = line.partition("=")
+                if name.strip().lower() == "extrasaveslots":
+                    return MAX_PAGES if int(value.strip() or 0) else 1
+    except (OSError, ValueError):
+        pass
+    return 1
+
+
+def page_offset_address(proc) -> Optional[int]:
+    """Where sfall keeps the page offset in this particular process.
+
+    Asked for by path, not by name. Two modules in this process are called
+    "ddraw.dll" -- sfall's, and the Windows one it forwards to -- and taking
+    whichever a name lookup returned is how this variable stayed hidden.
+    """
+    directory = proc.directory
+    if not directory:
+        return None
+    mod = proc.module_at("ddraw.dll", directory)
+    if mod is None or not mod.base:
+        return None
+    return mod.base + PAGE_OFFSET_RVA
 
 
 class SlotScreen:
     """Reads the save/load screen. Sends nothing and changes nothing."""
 
-    def __init__(self, proc) -> None:
+    def __init__(self, proc, hwnd: Optional[int] = None) -> None:
         self.proc = proc
+        self.hwnd = hwnd
+        # The script's game mode, when there is a script. None before a game is
+        # loaded, which is itself informative: the only way to this screen from
+        # the main menu is Load.
+        self.mode: Optional[int] = None
+        # Resolved once. sfall's base does not move while the process lives, and
+        # the module walk is far too slow to repeat on every keypress.
+        self._page_addr: Optional[int] = None
+        self._page_looked = False
+
+    def page_address(self) -> Optional[int]:
+        if not self._page_looked:
+            self._page_looked = True
+            self._page_addr = page_offset_address(self.proc)
+        return self._page_addr
+
+    def page(self) -> Optional[int]:
+        """Which page is showing, straight from sfall. None if unreadable.
+
+        None means unreadable, and callers must treat it as such rather than
+        falling back on a guess. The whole cost of the previous design was a
+        page the mod believed without being able to check.
+        """
+        addr = self.page_address()
+        if addr is None:
+            return None
+        value = self.proc.read_i32(addr)
+        if value is None or value < 0 or value % SLOTS_PER_PAGE:
+            return None
+        page = value // SLOTS_PER_PAGE
+        return page if page < MAX_PAGES else None
+
+    def header(self, index: int):
+        """(character, description) for a visible row, as the screen has them.
+
+        Read from the engine's own copy of the save header rather than from the
+        savegame folder, so no slot number has to be worked out to find it.
+        """
+        from .saves import OFF_CHARACTER, OFF_DESCRIPTION, SIGNATURE
+
+        blob = self.proc.read_chunked(
+            SLOT_HEADERS + HEADER_SIZE * index, HEADER_SIZE)
+        if not blob or not blob.startswith(SIGNATURE):
+            return None, None
+
+        def text(at: int) -> str:
+            end = blob.find(b"\x00", at)
+            raw = blob[at:end if end >= 0 else len(blob)]
+            return raw.decode("cp1252", "replace").strip()
+
+        return text(OFF_CHARACTER), text(OFF_DESCRIPTION)
+
+    @property
+    def loading(self) -> bool:
+        if self.mode is None:
+            return True
+        return not (self.mode & MODE_SAVEGAME)
+
+    @property
+    def panel(self):
+        """The panel's rectangle, from the game's own client size."""
+        if self.hwnd is None:
+            return None
+        from ..input.send import client_size
+        width, height = client_size(self.hwnd)
+        if width <= 0 or height <= 0:
+            return None
+        return panel_rect(width, height)
 
     @property
     def showing(self) -> bool:
@@ -93,21 +274,133 @@ class SlotScreen:
         return page * SLOTS_PER_PAGE + index + 1
 
 
-def describe(number: int, taken: bool, saved) -> str:
+class Pager:
+    """Moves the list between pages, checking the page after every click.
+
+    Every move is confirmed against sfall's page offset, which is the whole
+    difference from the version before it. That one read the occupancy flags to
+    decide whether a click had worked -- and stepping between two empty pages
+    changes no flag, so a page control that was working perfectly was reported
+    as "could not change page" every single time. The flags say what is on the
+    page; only the offset says which page it is.
+    """
+
+    # Four buttons, four strides. Ordered biggest first so `goto` spends its
+    # clicks on the ten-page jumps before walking the remainder.
+    STRIDES = ((10, PAGE_FORWARD_TEN), (-10, PAGE_BACK_TEN),
+               (1, PAGE_NEXT), (-1, PAGE_PREV))
+
+    # How long to let the engine redraw before calling a click lost.
+    SETTLE = 1.0
+
+    def __init__(self, proc, hwnd, finder, pages: int) -> None:
+        self.proc = proc
+        self.hwnd = hwnd
+        self.finder = finder
+        self.pages = max(1, pages)
+
+    def _click(self, code) -> bool:
+        from ..input.send import guarded_click
+        from .pointer import MenuMouse, aim_to
+
+        win = self.finder.sized(PANEL_WIDTH, PANEL_HEIGHT)
+        if win is None:
+            return False
+        button = win.by_press(code)
+        if button is None:
+            return False
+        ok, _where, _why = aim_to(self.proc, self.hwnd, *button.centre(win),
+                                  reader=MenuMouse(self.proc))
+        if not ok:
+            return False
+        # Let the arrival register before the button goes down. The engine
+        # decides what the pointer is over on its own schedule, and a click sent
+        # in the same breath as the last motion acts on where the pointer was --
+        # the same settle the inventory drag needs, for the same reason.
+        import time as _time
+        _time.sleep(0.12)
+        guarded_click(self.hwnd, "left", settle=0.3)
+        return True
+
+    def _await(self, screen, before):
+        """Wait for the page to actually change, then report it.
+
+        The page does not move in the same breath as the click -- reading it
+        immediately gives the old one, which reads exactly like a click that
+        did nothing.
+        """
+        import time as _time
+        deadline = _time.time() + self.SETTLE
+        while _time.time() < deadline:
+            now = screen.page()
+            if now != before:
+                return now
+            _time.sleep(0.03)
+        return screen.page()
+
+    def press(self, screen, code) -> Optional[int]:
+        """Click one page control and return the page it landed on.
+
+        None if it did not move. Retried once, because a click that goes astray
+        is cheap to repeat and a page the player did not ask for is not.
+        """
+        before = screen.page()
+        if before is None:
+            return None
+        for _ in range(2):
+            if not self._click(code):
+                return None
+            after = self._await(screen, before)
+            if after is not None and after != before:
+                return after
+        return None
+
+    def step(self, screen, delta: int) -> Optional[int]:
+        """Move by whole pages. Returns the new page, or None if it did not."""
+        for stride, code in self.STRIDES:
+            if stride == delta:
+                return self.press(screen, code)
+        return None
+
+    def goto(self, screen, page: int, budget: int = 60) -> Optional[int]:
+        """Drive the list to a specific page, the short way round.
+
+        The control wraps, so the distance between two pages is whichever way
+        round is shorter, and the ten-page jumps carry most of it. Bounded by
+        `budget`: with a thousand pages a pathological target would otherwise
+        click for a minute, and giving up honestly beats a screen that appears
+        to have hung.
+        """
+        for _ in range(budget):
+            here = screen.page()
+            if here is None:
+                return None
+            if here == page:
+                return here
+            gap = (page - here) % self.pages
+            if gap > self.pages // 2:
+                gap -= self.pages          # shorter the other way round
+            stride = 10 if gap >= 10 else -10 if gap <= -10 else (1 if gap > 0 else -1)
+            if self.step(screen, stride) is None:
+                return None
+        return screen.page()
+
+
+def describe(number: int, taken: bool, description: str = "") -> str:
     """What to say about one row.
 
-    `taken` is the engine's own answer; `saved` is the matching Slot from the
-    savegame folder, or None. The engine decides whether the row holds a game,
-    because that is what the screen shows and what the player is about to act
-    on; the folder only supplies the words.
+    Both halves come from the engine now: `taken` from the occupancy flags,
+    `description` from the header the screen is displaying. Nothing here is
+    looked up on disk, so there is no slot number to compute wrongly and no way
+    for the words to belong to a different save than the one on screen.
 
-    The disagreement is worth wording carefully rather than hiding. A row the
-    engine calls occupied with no readable file behind it is still a row that
-    will be overwritten, and saying "empty" there would be the most expensive
+    A row the engine calls occupied but whose header will not parse is still a
+    row that will be overwritten, so it is announced as holding a game without
+    claiming to know which. Saying "empty" there would be the most expensive
     wrong sentence this mod could produce.
     """
     if not taken:
         return "Slot {}, empty.".format(number)
-    if saved is None:
+    if not description:
         return "Slot {}, a saved game.".format(number)
-    return saved.announce()
+    return "Slot {}, {}.".format(number, description)
