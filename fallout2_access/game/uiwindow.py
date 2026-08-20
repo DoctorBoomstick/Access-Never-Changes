@@ -1,0 +1,307 @@
+"""Read the engine's own windows and buttons out of memory.
+
+Fallout 2 draws its interface with GNW, and GNW keeps, for every open window, a
+linked list of its buttons -- each with a rectangle and the event codes it
+raises. That list is the answer to the question this mod kept running into: a
+blind player cannot point at a thing, and until now the mod could not say where
+any UI thing *was*.
+
+It is worth being precise about why this beats the alternatives that were on
+the table:
+
+**Better than hardcoded pixels.** The rectangles are read from the running game,
+so a different resolution, a patch, or the high-res patch moving a window
+changes nothing here. Nothing is measured off a screenshot and frozen.
+
+**Better than a scroll-offset hunt.** The six rows of an inventory list turn out
+to be six separate buttons with consecutive event codes, so which row is which
+is something the engine states rather than something we work out from a scroll
+position we would have had to go and find.
+
+**And it found a keyboard route nobody expected.** Event codes below 256 are
+keyboard codes: GNW's input loop puts button presses and key presses in one
+stream, so a button whose code is 65 is a button that `A` already presses.
+Measured live -- the loot window's TAKE ALL carries code 65, and pressing `A`
+moved the pot's contents into the player's pack with no pointer involved at all.
+That is a whole class of interface that was assumed to need aiming and does not.
+
+**Layout**, confirmed against the live process by finding the interface bar --
+whose rectangle the in-game script reports independently through sfall -- and
+checking the struct that holds it. The bar reported 112,668 800x100 and id 4;
+the struct at that address reads id 4, flags 2, rect 112,668,911,767, 800, 100.
+Nothing here is inferred from a decompilation; it is inferred from a window the
+game itself told us the shape of.
+"""
+
+from __future__ import annotations
+
+import struct
+from typing import Dict, List, NamedTuple, Optional
+
+# -- Window --------------------------------------------------------------
+W_ID = 0x00
+W_FLAGS = 0x04
+W_LEFT = 0x08
+W_TOP = 0x0C
+W_RIGHT = 0x10
+W_BOTTOM = 0x14
+W_WIDTH = 0x18
+W_HEIGHT = 0x1C
+W_BUTTONS = 0x30      # head of the button list
+W_SIZE = 0x40
+
+# -- Button --------------------------------------------------------------
+B_ID = 0x00
+B_FLAGS = 0x04
+B_LEFT = 0x08
+B_TOP = 0x0C
+B_RIGHT = 0x10
+B_BOTTOM = 0x14
+B_ENTER = 0x18
+B_EXIT = 0x1C
+B_PRESS = 0x20        # the code raised when the button is pressed
+B_RELEASE = 0x24
+B_NEXT = 0x78
+B_SIZE = 0x7C
+
+# An event code below this is a keyboard code, and the key that produces it
+# presses the button. Above it, the code is synthetic and only a click will do.
+KEY_CODE_MAX = 256
+
+# Sanity bounds. A window cannot be bigger than any screen the game runs at,
+# and these bounds are what stop a heap coincidence being read as a window.
+MAX_SCREEN = 4096
+MAX_BUTTONS = 128
+
+
+class Button(NamedTuple):
+    id: int
+    flags: int
+    left: int         # window-relative
+    top: int
+    right: int
+    bottom: int
+    press: int        # event code raised on press
+    addr: int
+
+    @property
+    def width(self) -> int:
+        return self.right - self.left + 1
+
+    @property
+    def height(self) -> int:
+        return self.bottom - self.top + 1
+
+    @property
+    def key(self) -> Optional[int]:
+        """The keyboard code that presses this button, if one does.
+
+        This is the discovery that changes what is reachable without a pointer.
+        """
+        if 0 < self.press < KEY_CODE_MAX:
+            return self.press
+        return None
+
+    def centre(self, window: "Window") -> tuple:
+        """Absolute client coordinates of the middle of this button."""
+        return (window.left + (self.left + self.right) // 2,
+                window.top + (self.top + self.bottom) // 2)
+
+
+class Window(NamedTuple):
+    id: int
+    flags: int
+    left: int
+    top: int
+    width: int
+    height: int
+    addr: int
+    buttons: List[Button]
+
+    def by_press(self, code: int) -> Optional[Button]:
+        for b in self.buttons:
+            if b.press == code:
+                return b
+        return None
+
+    def keyed(self) -> Dict[int, Button]:
+        """Every button a key already presses, by keyboard code."""
+        return {b.key: b for b in self.buttons if b.key is not None}
+
+
+def _read_buttons(proc, head: int) -> List[Button]:
+    """Walk the button list from `head`."""
+    out: List[Button] = []
+    seen = set()
+    node = head
+    while node and node not in seen and len(out) < MAX_BUTTONS:
+        seen.add(node)
+        blob = proc.read_chunked(node, B_SIZE)
+        if not blob or len(blob) < B_SIZE:
+            break
+        bid, flags, l, t, r, b = struct.unpack_from("<6i", blob, B_ID)
+        press = struct.unpack_from("<i", blob, B_PRESS)[0]
+        nxt = struct.unpack_from("<I", blob, B_NEXT)[0]
+        # A button's rectangle is window-relative and cannot be inside out.
+        # This is what stops the walk following a stale pointer into noise.
+        if not (0 <= l <= r < MAX_SCREEN and 0 <= t <= b < MAX_SCREEN):
+            break
+        out.append(Button(id=bid, flags=flags, left=l, top=t, right=r,
+                          bottom=b, press=press, addr=node))
+        node = nxt
+    return out
+
+
+def _plausible(wid: int, l: int, t: int, r: int, b: int, w: int, h: int) -> bool:
+    """Does this look like a window rather than a heap coincidence?
+
+    The width and height fields must agree with the rectangle. That one check
+    does nearly all the work: four unrelated integers almost never satisfy it.
+    """
+    if not (0 < wid < 10000):
+        return False
+    if not (0 <= l < r < MAX_SCREEN and 0 <= t < b < MAX_SCREEN):
+        return False
+    if w != r - l + 1 or h != b - t + 1:
+        return False
+    return 0 < w < MAX_SCREEN and 0 < h < MAX_SCREEN
+
+
+def find_windows(proc, want_id: Optional[int] = None) -> List[Window]:
+    """Every open GNW window, newest allocations last.
+
+    Scanned for by shape rather than read from a fixed address, because the
+    window list is heap and moves every launch -- the same reason the message
+    ring has to be found rather than addressed.
+
+    **Slow, and not for the running mod.** This walks every four-byte offset of
+    every writable region, which on a live game is tens of millions of unpacks
+    and takes ten seconds or more. It exists for exploring an unfamiliar screen
+    from a tool. Anything that already knows the rectangle it wants -- which
+    means anything the script has reported -- must use `find_window_at`, which
+    searches for the rectangle as bytes and returns in a moment.
+    """
+    out: List[Window] = []
+    for region in proc.regions(writable_only=True):
+        data = proc.read_chunked(region.base, region.size)
+        if len(data) < W_SIZE:
+            continue
+        for off in range(0, len(data) - W_SIZE, 4):
+            wid, flags, l, t, r, b, w, h = struct.unpack_from("<8i", data, off)
+            if not _plausible(wid, l, t, r, b, w, h):
+                continue
+            if want_id is not None and wid != want_id:
+                continue
+            head = struct.unpack_from("<I", data, off + W_BUTTONS)[0]
+            buttons = _read_buttons(proc, head) if head else []
+            out.append(Window(id=wid, flags=flags, left=l, top=t, width=w,
+                              height=h, addr=region.base + off,
+                              buttons=buttons))
+    return out
+
+
+def find_window_at(proc, left: int, top: int, width: int, height: int,
+                   first_region: Optional[int] = None) -> Optional[Window]:
+    """The window with exactly this rectangle, and the most buttons.
+
+    Preferred over searching by id, because the in-game script can ask sfall for
+    a window's rectangle directly -- so matching on it means the struct we found
+    is *confirmed* by the engine rather than assumed from a layout guess. Ids
+    repeat across windows; a rectangle at a given moment does not.
+
+    More than one struct can carry the same rectangle: freed windows are left
+    behind in the heap with their fields intact, and taking the first match
+    found a dead one whose button list was a single degenerate entry. The live
+    window is the one with buttons in it, so the richest match wins.
+
+    **Searched as bytes, not by walking offsets.** The four rectangle fields are
+    a sixteen-byte needle, so `bytes.find` does the whole hunt inside C. The
+    obvious alternative -- step every four bytes and unpack a candidate struct --
+    is what `find_windows` does, and on a live game that is tens of millions of
+    unpacks: measured at ten to twelve seconds, during which the mod went
+    completely silent, which is precisely the failure this project treats as
+    worse than a wrong answer. It ran on every window open and every click.
+    """
+    rect = struct.pack("<4i", left, top, left + width - 1, top + height - 1)
+    best: Optional[Window] = None
+    regions = list(proc.regions(writable_only=True))
+    if first_region is not None:
+        # Look where it was last time first. Windows are reallocated constantly
+        # but tend to land back in the same arena, so this usually turns a
+        # 290 MB sweep into one small read.
+        regions.sort(key=lambda r: not (r.base <= first_region < r.base + r.size))
+    for index, region in enumerate(regions):
+        data = proc.read_chunked(region.base, region.size)
+        if len(data) >= W_SIZE:
+            at = data.find(rect)
+            while at >= 0:
+                start = at - W_LEFT      # the rect sits at +0x08 in the struct
+                if start >= 0 and start + W_SIZE <= len(data):
+                    win = _window_from(proc, data, region.base, start)
+                    if win is not None and (best is None
+                                            or len(win.buttons) > len(best.buttons)):
+                        best = win
+                at = data.find(rect, at + 1)
+        # If the hint paid off, stop. Reading the remaining quarter of a
+        # gigabyte to look for a better match than a live window with buttons
+        # in it is the whole cost this is trying to avoid.
+        if index == 0 and first_region is not None and best is not None and best.buttons:
+            return best
+    return best
+
+
+class WindowFinder:
+    """Finds windows by rectangle, and remembers where it looked last.
+
+    The search itself reads every writable region -- about 290 MB on a live
+    game, which is two seconds however fast the matching is. Two seconds is
+    nothing for a one-off tool and unacceptable inside a loop that is supposed
+    to answer a keypress, so this remembers two things: the exact address a
+    rectangle was found at, and the region it was in.
+
+    A repeat lookup then costs one 64-byte read. The address is re-validated
+    rather than trusted -- windows are freed and reallocated constantly, so a
+    remembered address is a hypothesis, and the rectangle it holds is the test.
+    """
+
+    def __init__(self, proc) -> None:
+        self.proc = proc
+        self._addr: dict = {}          # rect -> struct address
+        self._region: Optional[int] = None
+
+    def _read(self, addr: int) -> Optional[Window]:
+        blob = self.proc.read_chunked(addr, W_SIZE)
+        if not blob or len(blob) < W_SIZE:
+            return None
+        return _window_from(self.proc, blob, addr, 0)
+
+    def at(self, left: int, top: int, width: int, height: int) -> Optional[Window]:
+        key = (left, top, width, height)
+
+        remembered = self._addr.get(key)
+        if remembered is not None:
+            win = self._read(remembered)
+            if win and (win.left, win.top, win.width, win.height) == key and win.buttons:
+                return win
+
+        win = find_window_at(self.proc, *key, first_region=self._region)
+        if win is not None:
+            self._addr[key] = win.addr
+            self._region = win.addr & ~0xFFFFF
+        return win
+
+    def forget(self) -> None:
+        self._addr.clear()
+        self._region = None
+
+
+def _window_from(proc, data: bytes, region_base: int, off: int
+                 ) -> Optional[Window]:
+    """Build a Window from a candidate struct already in `data`."""
+    wid, flags, l, t, r, b, w, h = struct.unpack_from("<8i", data, off)
+    if not _plausible(wid, l, t, r, b, w, h):
+        return None
+    head = struct.unpack_from("<I", data, off + W_BUTTONS)[0]
+    buttons = _read_buttons(proc, head) if head else []
+    return Window(id=wid, flags=flags, left=l, top=t, width=w, height=h,
+                  addr=region_base + off, buttons=buttons)

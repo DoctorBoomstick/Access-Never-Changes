@@ -44,6 +44,8 @@ DIK = {
     "b": (0x30, False),
     "c": (0x2E, False),
     "d": (0x20, False),
+    "i": (0x17, False),
+    "p": (0x19, False),
     "m": (0x32, False),
     "n": (0x31, False),
     "o": (0x18, False),
@@ -68,6 +70,12 @@ DIK = {
     "numpad_dot": (0x53, False),
     "backslash": (0x2B, False),
     "apostrophe": (0x28, False),
+    # Left Ctrl, held rather than tapped. ddraw.ini binds
+    # ItemMoveSkipDragKey=29 to it, which makes a click move an item between
+    # inventory lists instead of starting a drag -- and a drag is not something
+    # this mod can do, because it would have to hold the button down across an
+    # aim it cannot verify half way through.
+    "lctrl": (0x1D, False),
 }
 
 
@@ -339,6 +347,38 @@ def park_pointer(hwnd: int) -> None:
     user32.SetCursorPos(int(sx), int(sy))
 
 
+# How long a held modifier gets to register before the button goes down.
+MODIFIER_LEAD = 0.18
+
+
+def mouse_click_with(modifier: str, button: str = "left", **kwargs) -> None:
+    """Click while holding a key down.
+
+    Used for the inventory's move-without-dragging modifier. The key is held
+    across the whole click and released in a `finally`, because a Ctrl left
+    stuck down would silently change what every later keystroke means -- sfall
+    binds Ctrl plus the numpad to the game speed controls, which is exactly the
+    numpad this mod's hex cursor lives on.
+    """
+    if modifier not in DIK:
+        raise ValueError("unknown modifier {!r}".format(modifier))
+    scancode, extended = DIK[modifier]
+    down = _key_event(scancode, extended, False)
+    up = _key_event(scancode, extended, True)
+    user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT))
+    # Give the engine time to notice the key is down BEFORE the button goes
+    # down. Fallout's input loop is slow -- the whole `settle` argument on tap()
+    # exists because of it -- and a modifier pressed thirty milliseconds ahead
+    # of the click was not registered at all: the click fell through as an
+    # ordinary one and picked the item up into a drag instead of moving it.
+    time.sleep(MODIFIER_LEAD)
+    try:
+        mouse_click(button, **kwargs)
+    finally:
+        user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT))
+        time.sleep(0.03)
+
+
 def mouse_click(button: str = "left", hold: float = 0.06, settle: float = 0.25) -> None:
     """Click at the pointer's current position.
 
@@ -358,6 +398,21 @@ def mouse_click(button: str = "left", hold: float = 0.06, settle: float = 0.25) 
     ev = _mouse_event(up)
     user32.SendInput(1, ctypes.byref(ev), ctypes.sizeof(INPUT))
     time.sleep(settle)
+
+
+def mouse_down(button: str = "left") -> None:
+    """Press and hold. The other half of a drag."""
+    flags = MOUSEEVENTF_LEFTDOWN if button == "left" else MOUSEEVENTF_RIGHTDOWN
+    ev = _mouse_event(flags)
+    user32.SendInput(1, ctypes.byref(ev), ctypes.sizeof(INPUT))
+
+
+def mouse_up(button: str = "left") -> None:
+    """Release. Always call this, even on a failed drag -- a button left down
+    leaves the game holding an item nobody can see."""
+    flags = MOUSEEVENTF_LEFTUP if button == "left" else MOUSEEVENTF_RIGHTUP
+    ev = _mouse_event(flags)
+    user32.SendInput(1, ctypes.byref(ev), ctypes.sizeof(INPUT))
 
 
 def require_focus(hwnd: int) -> None:
@@ -388,3 +443,9 @@ def guarded_click(hwnd: int, button: str = "left", **kwargs) -> None:
     """
     require_focus(hwnd)
     mouse_click(button, **kwargs)
+
+
+def guarded_click_with(hwnd: int, modifier: str, button: str = "left", **kwargs) -> None:
+    """mouse_click_with(), but verified to land in the game window."""
+    require_focus(hwnd)
+    mouse_click_with(modifier, button, **kwargs)
