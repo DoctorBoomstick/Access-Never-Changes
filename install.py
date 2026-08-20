@@ -36,10 +36,25 @@ REQUIRED = {
         # this they run correctly and say nothing, which is indistinguishable
         # from not running at all.
         "DebugMode": "2",
-        # gl_world.int and gl_combat.int are global scripts; this is the pattern
-        # sfall uses to find them. It is sfall's own default, but a hand-edited
-        # ini may have narrowed it.
+        # The gl_*.int files are global scripts; this is the pattern sfall uses
+        # to find them. It is sfall's own default, but a hand-edited ini may
+        # have narrowed it.
         "GlobalScriptPaths": r"data\scripts\gl*.int,scripts\gl*.int,scripts\sfall\gl*.int",
+        # Quick save. Not a convenience -- without it there is no way to save at
+        # all, because picking a slot on the save screen needs a mouse.
+        #
+        # sfall's own comment on this setting says it exactly: quick saving with
+        # the F6 key "without picking a slot beforehand" requires AutoQuickSave,
+        # and it ships disabled. So F6 fell back to opening the save screen, and
+        # a player who cannot use that screen could not make a first save, which
+        # meant replaying from character creation on every single test.
+        #
+        # Quick saves go on their own page so that the ten ordinary slots are
+        # left alone: F6 cycles through the page it is given, overwriting as it
+        # goes, and that is not something to point at saves anyone is keeping.
+        "ExtraSaveSlots": "1",
+        "AutoQuickSave": "1",
+        "AutoQuickSavePage": "1",
     },
     "f2_res.ini": {
         # Exclusive-fullscreen DirectX starves the low-level keyboard hook the
@@ -48,7 +63,11 @@ REQUIRED = {
     },
 }
 
-SCRIPTS = ("gl_world.int", "gl_combat.int")
+# Three separate global scripts on purpose. Each registers its own hooks and
+# repeat rate independently, so the split costs nothing -- and gl_world has hard
+# crashed the engine twice during development. A bug while reading a container
+# should not be able to take the hex cursor down with it.
+SCRIPTS = ("gl_world.int", "gl_combat.int", "gl_inven.int")
 
 GAME_MARKERS = ("fallout2.exe", "master.dat")
 

@@ -27,6 +27,8 @@ PREFIX = "WORLD:"
 COMBAT_PREFIX = "COMBAT:"
 # The scanner also writes on this channel, from gl_world.ssl.
 SCAN_PREFIX = "SCAN:"
+# gl_inven.ssl, a third script, for the inventory and loot windows.
+INVEN_PREFIX = "INVEN:"
 
 # "WORLD:hex 17488 dist 0 : you, Tree|"
 # Contents stop at the terminating bar. The engine appends its own debug output
@@ -38,6 +40,37 @@ _MODE_RE = re.compile(r"WORLD:gamemode\s+(-?\d+)")
 # "cursorok" when a press found it already correct. Parsing only the first left
 # the mode unknown exactly when nothing had changed, which is the common case.
 _CURSOR_RE = re.compile(r"WORLD:cursor(?:mode|ok)\s+(-?\d+)")
+
+
+# "WORLD:status 48|48|8|10|8|1|"
+_STATUS_RE = re.compile(
+    r"WORLD:status\s+(-?\d+)\|(-?\d+)\|(-?\d+)\|(-?\d+)\|(-?\d+)\|(-?\d+)\|"
+)
+
+
+def status_line(line: str) -> Optional[str]:
+    """Turn a WORLD:status line into the sentence to say, or None.
+
+    Health first, then action points, then armour class -- the order asked for,
+    and the order they matter in when something is biting you.
+
+    Action points are only a live figure during a fight. Outside one the engine
+    still reports a running count, but it is not a number anyone is spending, so
+    the maximum is given instead and worded as a capacity rather than a
+    remainder. Saying "3 action points" while walking around would be true of
+    nothing.
+    """
+    m = _STATUS_RE.match(line)
+    if not m:
+        return None
+    hp, max_hp, ap, max_ap, ac, fighting = (int(g) for g in m.groups())
+    parts = ["Health {} of {}.".format(hp, max_hp)]
+    if fighting:
+        parts.append("{} of {} action points.".format(ap, max_ap))
+    else:
+        parts.append("{} action points.".format(max_ap))
+    parts.append("Armor class {}.".format(ac))
+    return " ".join(parts)
 
 
 class HexReading(NamedTuple):
@@ -61,6 +94,12 @@ class WorldLog:
         self.cursor_mode: Optional[int] = None
         self.last_hex: Optional[HexReading] = None
         self.session_live = False
+        # Bumped every time the script announces itself, which it does once per
+        # game load. The display window's buffer is reallocated at the same
+        # moment, so this is what tells the reader its anchor has gone stale --
+        # loading a save without restarting the game left it pointing at freed
+        # heap, and the game's own words went quiet with nothing to show why.
+        self.ready_count = 0
 
     def reset(self) -> None:
         self._pos = 0
@@ -68,6 +107,7 @@ class WorldLog:
         self.cursor_mode = None
         self.last_hex = None
         self.session_live = False
+        self.ready_count = 0
 
     def poll(self) -> List[str]:
         """Return new WORLD: lines, updating cached state."""
@@ -99,6 +139,12 @@ class WorldLog:
                 if combat.startswith("COMBAT:ready"):
                     self.session_live = True
                 continue
+            if INVEN_PREFIX in line:
+                inven = line[line.index(INVEN_PREFIX):].strip()
+                out.append(inven)
+                if inven.startswith("INVEN:ready"):
+                    self.session_live = True
+                continue
             if PREFIX not in line:
                 continue
             line = line[line.index(PREFIX):].strip()
@@ -106,6 +152,7 @@ class WorldLog:
 
             if line.startswith("WORLD:ready"):
                 self.session_live = True
+                self.ready_count += 1
                 continue
 
             m = _MODE_RE.match(line)
