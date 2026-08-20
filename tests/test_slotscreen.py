@@ -117,6 +117,20 @@ class TestShowing(unittest.TestCase):
     def test_nothing_open_at_all_is_not_open(self):
         self.assertFalse(SlotScreen(fakes.memory_with_windows([])).showing)
 
+    def test_closing_it_is_noticed_even_though_the_pointer_remains(self):
+        """The failure that got shipped once already.
+
+        GNW does not clear a closed window's pointer, it drops the count -- and
+        the window that closes is usually the top one, so the stale entry is the
+        last, exactly where a walk-until-null reader still finds it. That made
+        the save screen refuse to go away, which is the same symptom as the flag
+        this whole approach replaced.
+        """
+        p = fakes.memory_with_windows([(800, 100, []), self.PANEL])
+        self.assertTrue(SlotScreen(p).showing)
+        fakes.close_top_window(p)
+        self.assertFalse(SlotScreen(p).showing)
+
     def test_unreadable_memory_is_not_open(self):
         self.assertFalse(SlotScreen(FakeProc()).showing)
 

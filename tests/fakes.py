@@ -99,9 +99,20 @@ def memory_with_windows(windows, values=None) -> FakeMemory:
         pointers.append(waddr)
 
     blob = b"".join(struct.pack("<I", p) for p in pointers)
-    # Padded to the full array, not just past the terminating null: the reader
-    # asks for the whole thing in one go, and a fake that supplies less makes
-    # the read fail rather than return a short list.
     blob = blob.ljust(4 * uiwindow.MAX_WINDOWS, b"\x00")
     mem.poke(uiwindow.WINDOW_LIST, blob)
+    mem.set_i32(uiwindow.WINDOW_COUNT, len(pointers))
+    return mem
+
+
+def close_top_window(mem: FakeMemory) -> FakeMemory:
+    """Close the last window the way GNW really closes one.
+
+    Not by clearing the pointer -- that is what the code wrongly assumed and
+    what a naive fake would do, agreeing with the bug. The engine drops the
+    count and leaves the pointer in place, so the struct stays readable and
+    valid for as long as nothing else reuses the slot.
+    """
+    count = mem.read_i32(uiwindow.WINDOW_COUNT) or 0
+    mem.set_i32(uiwindow.WINDOW_COUNT, max(0, count - 1))
     return mem

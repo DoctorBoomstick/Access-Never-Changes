@@ -188,20 +188,37 @@ def _plausible(wid: int, l: int, t: int, r: int, b: int, w: int, h: int) -> bool
 # been opened, a dead 640x480 struct sat in the heap for the rest of the session
 # and answered "yes, the save screen is showing" for ever after.
 WINDOW_LIST = 0x006ADE58
-MAX_WINDOWS = 64
+
+# How many of those entries are real. **Closing a window does not clear its
+# pointer** -- measured: the inventory was closed, the world resumed ticking,
+# and its slot still held a perfectly valid 499x377 window struct. GNW drops the
+# count and leaves the pointer where it lies.
+#
+# So a reader that walks until the first null reports windows that are shut, and
+# it does so exactly when it matters most: the window that closes is usually the
+# top one, which is the last entry, so its stale pointer is the one still there.
+# That is the same failure as the flag this list replaced -- a screen that will
+# not go away -- arrived at by a different route.
+#
+# It sits 204 bytes past the array, so the array is 51 entries.
+WINDOW_COUNT = 0x006ADF24
+MAX_WINDOWS = (WINDOW_COUNT - WINDOW_LIST) // 4
 
 
 def live_window_addresses(proc) -> List[int]:
     """The address of every window currently open, in draw order."""
-    blob = proc.read_chunked(WINDOW_LIST, 4 * MAX_WINDOWS)
+    count = proc.read_i32(WINDOW_COUNT)
+    if count is None or count <= 0:
+        return []
+    count = min(count, MAX_WINDOWS)
+    blob = proc.read_chunked(WINDOW_LIST, 4 * count)
     if not blob:
         return []
     out: List[int] = []
-    for i in range(min(MAX_WINDOWS, len(blob) // 4)):
+    for i in range(min(count, len(blob) // 4)):
         ptr = struct.unpack_from("<I", blob, i * 4)[0]
-        if not ptr:
-            break
-        out.append(ptr)
+        if ptr:
+            out.append(ptr)
     return out
 
 
