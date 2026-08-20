@@ -74,6 +74,7 @@
 #define ACT_PREPARE        (-13)
 #define ACT_NORTH          (-14)
 #define ACT_SOUTH          (-15)
+#define ACT_STATUS         (-16)
 
 variable g_cursor := CURSOR_UNSET;
 variable g_lastmode := -1;
@@ -119,6 +120,8 @@ procedure scan_category(variable delta);
 procedure scan_jump;
 procedure prepare_cursor;
 procedure on_useskill;
+procedure obj_is_real(variable obj);
+procedure report_status;
 
 /*
  * start  --  init once, then poll.
@@ -158,6 +161,22 @@ procedure start begin
       // finds hundreds of false positives. This finds exactly one thing.
       display_msg("Access Never Changes ready.");
       debug_msg("WORLD:ready");
+      /*
+       * Which slot F6 will write to. Read-only, and reported rather than set.
+       *
+       * Setting it from here was tried and does not work: the probe confirmed
+       * page 0, slot 0 was applied, and F6 still opened the save screen. That
+       * is not the flag F6 consults. sfall's own ddraw.ini says what is --
+       * "to use quick saving (F6 key) WITHOUT PICKING A SLOT BEFOREHAND, set
+       * the next two lines" -- and AutoQuickSave ships disabled, so F6 requires
+       * a slot chosen through the save screen, which is the one screen that
+       * cannot be operated without a mouse.
+       *
+       * So the fix belongs in the ini, where install.py can make it, back it up
+       * and explain it, rather than in a script quietly writing game state.
+       */
+      debug_msg("WORLD:quicksave page=" + get_current_quick_save_page
+         + " slot=" + get_current_quick_save_slot);
    end else begin
       call poll_state;
    end
@@ -324,7 +343,55 @@ end
 procedure on_key begin
    variable event := get_sfall_arg;
    variable key   := get_sfall_arg;
+   variable m;
    if (event != 1) then return;          // key-up: ignore
+
+   /*
+    * The map's keys belong to the map.
+    *
+    * There was no mode test here at all, and every key below was acted on
+    * whatever was on screen. With the loot window open, numpad 4 stepped a hex
+    * cursor nobody could see, scrolled the world behind the panel, and
+    * swallowed the key so the window never saw it either. Three wrong things
+    * from one press, none of them audible.
+    *
+    * This is also what lets gl_inven.ssl exist as a separate script: it claims
+    * exactly the modes this one declines, so one of the two handles any given
+    * press and neither needs to know about the other.
+    */
+   m := get_game_mode;
+   if (m bwand MAP_HIDDEN) then begin
+      /*
+       * Two exceptions.
+       *
+       * The pointer-position key has to work everywhere. A panel over the map
+       * is exactly where the mod needs to put the pointer on something -- a row
+       * in a container, a reply in a dialogue -- and it cannot aim at anything
+       * without being able to ask where the pointer currently is. The guard
+       * above was written to stop the hex cursor acting under a panel, and it
+       * also switched off the one question that has nothing to do with hexes.
+       */
+      if (key == DIK_APOSTROPHE) then begin
+         call calibrate;
+         set_sfall_return(0);
+         return;
+      end
+      /*
+       * And the status key. Health, action points and armour class are on
+       * screen at all times for a sighted player -- they are the numbers you
+       * glance at without thinking, in the middle of a fight or halfway through
+       * rearranging your pack. A key that only worked while nothing was open
+       * would be missing exactly the moments it is for.
+       */
+      if (key == DIK_SEMICOLON) then begin
+         call report_status;
+         set_sfall_return(0);
+         return;
+      end
+      // And the Skilldex is a way of arming a skill, so the digits below still
+      // matter there.
+      if (not (m bwand SKILLDEX)) then return;
+   end
 
    // The Skilldex number keys, observed but not swallowed -- the game still
    // needs them to arm the skill. We only record WHICH, because reading the
@@ -339,6 +406,9 @@ procedure on_key begin
    if (key == DIK_6) then begin g_armedskill := 5;  return; end   // Doctor
    if (key == DIK_7) then begin g_armedskill := 9;  return; end   // Science
    if (key == DIK_8) then begin g_armedskill := 10; return; end   // Repair
+
+   // The Skilldex has had its digits; nothing below is its business.
+   if (m bwand MAP_HIDDEN) then return;
 
    variable dir := -1;
    if      (key == DIK_NUMPAD9) then dir := DIR_NE;
@@ -377,6 +447,7 @@ procedure on_key begin
       else
          dir := ACT_SCAN_TYPENEXT;
    end
+   else if (key == DIK_SEMICOLON) then dir := ACT_STATUS;
    else if (key == DIK_SLASH) then dir := ACT_SCAN_JUMP;
    else if (key == DIK_BACKSLASH) then dir := ACT_PREPARE;
    else return;
@@ -386,7 +457,8 @@ procedure on_key begin
    // even been delivered. Now that is always answerable.
    debug_msg("WORLD:key " + key + " dir " + dir);
 
-   if      (dir == ACT_NORTH)    then call step_north;
+   if      (dir == ACT_STATUS)   then call report_status;
+   else if (dir == ACT_NORTH)    then call step_north;
    else if (dir == ACT_SOUTH)    then call step_south;
    else if (dir == ACT_SNAP)     then call snap_to_dude;
    else if (dir == ACT_DESCRIBE) then call describe_cursor;
@@ -460,6 +532,26 @@ procedure calibrate begin
    variable mx, my, under, btns, winid, barid, ou, ouname;
    mx := get_mouse_x;
    my := get_mouse_y;
+
+   /*
+    * With a panel over the map there are no hexes to ask about, so ask about
+    * none of them. Every map function below would be answering a question
+    * nobody posed, and calling engine functions on things they did not expect
+    * is precisely how this script has twice hard-crashed the game.
+    *
+    * What is still true, and still needed, is where the pointer is: that is the
+    * feedback an aim servo runs on, and it is the same servo whether the target
+    * is a hex or a row in a container. Also reported is the window the pointer
+    * is over, which is what will confirm a UI aim landed on the right panel --
+    * the same "ask the engine, do not assume" standard the hex aim is held to.
+    */
+   if (get_game_mode bwand MAP_HIDDEN) then begin
+      debug_msg("WORLD:uicalib mouse=" + mx + "," + my
+         + " win=" + get_window_under_mouse
+         + " screen=" + get_screen_width + "x" + get_screen_height + "|");
+      return;
+   end
+
    under := tile_under_cursor;
 
    // Which window is the pointer actually over? There is no WINTYPE_* for the
@@ -860,8 +952,63 @@ procedure on_useskill begin
    debug_msg("WORLD:skillused|");
 end
 
+/*
+ * obj_is_real  --  would a sighted player see this object at all?
+ *
+ * The same three tests describe_cursor uses to decide what to read out, pulled
+ * out so that the readout and the click cannot disagree about what is on a hex.
+ *
+ * They did disagree, and it was the strangest bug in the mod to be on the
+ * receiving end of: a hex reported "empty", with clear ground all the way to
+ * it, and the click refused with "that hex is behind something". describe_cursor
+ * filtered the engine's invisible furniture; prepare_cursor did not, so
+ * obj_under_cursor handed back a blocker named "<None>" and the click decided
+ * the ground was occupied. Twenty-one of those in a single session's log.
+ *
+ * Filtered structurally, by the blank placeholder art, never by the name. The
+ * name is the game's and belongs to whatever language it was translated into;
+ * "<None>" is a symptom, not a rule.
+ */
+/*
+ * report_status  --  the three numbers the interface bar shows all the time.
+ *
+ * Health, action points and armour class sit on screen permanently for a
+ * sighted player, who reads them with a glance and no keypress at all. This is
+ * the nearest equivalent: one key, always available, answering the question
+ * without disturbing anything.
+ *
+ * Action points are only meaningful in a fight -- outside one the engine's
+ * running count is not a number anyone is spending -- so whether combat is
+ * running is reported too, and the Python side words it accordingly rather than
+ * reading out a figure that means nothing at the time.
+ *
+ * All five values are the engine's own. Nothing here is computed, which matters
+ * because armour class in particular has modifiers this mod knows nothing about.
+ */
+procedure report_status begin
+   debug_msg("WORLD:status "
+      + get_critter_stat(dude_obj, STAT_current_hp) + "|"
+      + get_critter_stat(dude_obj, STAT_max_hit_points) + "|"
+      + get_critter_current_ap(dude_obj) + "|"
+      + get_critter_stat(dude_obj, STAT_max_move_points) + "|"
+      + get_critter_stat(dude_obj, STAT_ac) + "|"
+      + (combat_is_initialized != 0) + "|");
+end
+
+procedure obj_is_real(variable obj) begin
+   if (not obj) then return 0;
+   if (obj_type(obj) == OBJ_TYPE_SPATIAL) then return 0;
+   if (not obj_is_visible_flag(obj)) then return 0;
+   // Critters are exempt: a critter's fid encodes animation state rather than
+   // a scenery art index, so the comparison would be meaningless for them.
+   if (obj_type(obj) != OBJ_TYPE_CRITTER) then begin
+      if ((obj_art_fid(obj) bwand 0xFFF) == ART_INVISIBLE) then return 0;
+   end
+   return 1;
+end
+
 procedure prepare_cursor begin
-   variable want, ou, ouname;
+   variable want, ou, ouname, iscritter, isitem;
 
    // Decide from what is UNDER THE POINTER, not from what is on the look hex.
    // Those are not the same thing: the pointer is walked up an object's sprite
@@ -878,21 +1025,55 @@ procedure prepare_cursor begin
       ou := obj_under_cursor(0, 0);
    end
 
+   // Log what the engine handed back BEFORE filtering, so that the next thing
+   // it hands back that nobody expected is identifiable from the log rather
+   // than from a player reporting that a click felt wrong.
+   if (ou) then begin
+      debug_msg("WORLD:oudbg fid=" + obj_art_fid(ou) + " ty=" + obj_type(ou)
+         + " vis=" + obj_is_visible_flag(ou)
+         + " real=" + obj_is_real(ou) + " nm=" + obj_name(ou) + "|");
+   end
+
+   // Anything a sighted player could not see is not something the click is
+   // "behind". Without this the invisible blockers carpeting a Fallout map made
+   // ordinary walkable ground unclickable.
+   if (not obj_is_real(ou)) then ou := 0;
+
    ouname := "";
+   iscritter := 0;
+   isitem := 0;
    if (ou) then begin
       call obj_label(ou);
       ouname := g_label;
+      /*
+       * Classify here, in nested ifs, rather than in the conditions below.
+       *
+       * SSL's `and` does not short circuit. The test used to read
+       * `ou and obj_type(ou) == OBJ_TYPE_CRITTER and not is_critter_dead(ou)`,
+       * and with nothing under the pointer it still called is_critter_dead(0)
+       * -- which the live log caught as
+       *     op_critter_state: obj is NULL
+       * on every press of the prepare key over empty ground. The engine logged
+       * it and carried on, so it was invisible from inside the game, and it is
+       * the same shape as the null dereference that hard crashed this script
+       * during development.
+       */
+      if (obj_type(ou) == OBJ_TYPE_CRITTER) then begin
+         if (not is_critter_dead(ou)) then iscritter := 1;
+      end else if (obj_type(ou) == OBJ_TYPE_ITEM) then begin
+         isitem := 1;
+      end
    end
 
    if (g_armedskill > 0) then begin
       want := g_armedskill;
-   end else if (ou and obj_type(ou) == OBJ_TYPE_CRITTER and not is_critter_dead(ou)) then begin
+   end else if (iscritter) then begin
       if (combat_is_initialized) then begin
          want := CURSOR_TARGETING;   // a click attacks
       end else begin
          want := CURSOR_COMMAND;     // a click talks, or whatever is default
       end
-   end else if (ou and obj_type(ou) == OBJ_TYPE_ITEM) then begin
+   end else if (isitem) then begin
       // Something lying on the ground. Items do not block, so the hex is
       // walkable -- but you want to pick it up, not stand on it.
       want := CURSOR_COMMAND;

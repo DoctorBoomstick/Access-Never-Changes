@@ -100,6 +100,31 @@ MODE_NAMES = [
 # hexes still mean something while they are set.
 MAP_MODES = MODE_LOCALMAP | MODE_COMBAT | MODE_PCOMBAT
 
+# The four windows that are one window wearing different hats: sfall gives them
+# a single WINTYPE_INVENTORY, they share a layout, and gl_inven.ssl claims the
+# keyboard for all of them. Kept together because anything that learns to point
+# at a slot in one of them can point at a slot in all four.
+ITEM_WINDOW_MODES = (
+    MODE_INVENTORY | MODE_INTFACELOOT | MODE_INTFACEUSE | MODE_BARTER
+)
+
+
+def is_item_window(mode: Optional[int]) -> bool:
+    """True in the inventory, loot, use-item or barter window."""
+    if mode is None:
+        return False
+    return bool(mode & ITEM_WINDOW_MODES)
+
+
+SAVE_SCREEN_MODES = MODE_SAVEGAME | MODE_LOADGAME
+
+
+def is_save_screen(mode: Optional[int]) -> bool:
+    """True on the save or load screen, where the slot list is the question."""
+    if mode is None:
+        return False
+    return bool(mode & SAVE_SCREEN_MODES)
+
 
 def is_map_mode(mode: Optional[int]) -> bool:
     """True where the world exists in hexes, so aiming at one is meaningful.
@@ -183,7 +208,8 @@ def cursor_name(mode: Optional[int]) -> Optional[str]:
     return "cursor mode {}. Not the movement cursor. Press numpad 0 to walk".format(mode)
 
 
-def detect(proc: Process, in_game: bool = False) -> str:
+def detect(proc: Process, in_game: bool = False,
+           mode: Optional[int] = None) -> str:
     """Which screen is showing.
 
     `in_game` comes from the in-game script having reported a game mode. It
@@ -192,10 +218,22 @@ def detect(proc: Process, in_game: bool = False) -> str:
     the mod cheerfully announcing "character selection" while the player was
     standing on a map. The script only runs inside a live session, so its word
     is decisive.
+
+    `mode` is that game mode, and once a game is live it settles the question
+    outright. The editor's window handle used to be consulted here instead, and
+    it lies: opening the inventory sometimes left it reading as a live editor,
+    so the mod announced "Character creation. Strength, 4." over a player who
+    had just opened their pack. Window handles are recycled and the flag is
+    stale between uses; the game mode is a direct statement of what is on
+    screen, and the mod already has it.
     """
     if in_game:
-        # The character editor is reachable mid-game (the F1 screen), so still
-        # let a live editor window win.
+        if mode is not None:
+            # The character screen mid-game is a bit in the mask, and nothing
+            # else in a live session is the editor.
+            return CHARGEN if mode & MODE_CHARSCREEN else WORLD
+        # No mode reported yet. Fall back to the window handle, which is better
+        # than nothing at the very start of a session.
         window = proc.read_i32(EDITOR_WINDOW)
         if window is not None and window >= 0:
             return CHARGEN

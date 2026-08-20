@@ -121,3 +121,72 @@ class TestModeNames(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestItemWindows(unittest.TestCase):
+    """The four windows gl_inven.ssl claims, which the click key must decline
+    until it has something to aim at."""
+
+    def test_each_item_window_is_recognised(self):
+        for mode in (screens.MODE_INVENTORY, screens.MODE_INTFACELOOT,
+                     screens.MODE_INTFACEUSE, screens.MODE_BARTER):
+            self.assertTrue(screens.is_item_window(mode))
+
+    def test_the_map_is_not_an_item_window(self):
+        self.assertFalse(screens.is_item_window(0))
+        self.assertFalse(screens.is_item_window(screens.MODE_COMBAT))
+
+    def test_unknown_mode_is_not_an_item_window(self):
+        self.assertFalse(screens.is_item_window(None))
+
+    def test_an_item_window_is_never_a_map_mode(self):
+        """Both tests guard the same click, from opposite sides."""
+        for mode in (screens.MODE_INVENTORY, screens.MODE_INTFACELOOT,
+                     screens.MODE_INTFACEUSE, screens.MODE_BARTER):
+            self.assertFalse(screens.is_map_mode(mode))
+
+
+class TestInGameDetectionUsesTheGameMode(unittest.TestCase):
+    """The editor's window handle lies once a game is live.
+
+    Opening the inventory sometimes left it reading as a live editor, and the
+    mod announced "Character creation. Strength, 4." over a player who had just
+    opened their pack. Window handles are recycled and the flag is stale between
+    uses; the game mode is a direct statement of what is on screen.
+    """
+
+    class Proc:
+        """A process whose editor-window flag always claims the editor is up."""
+
+        def read_i32(self, addr):
+            return 6
+
+    def setUp(self):
+        self.proc = self.Proc()
+
+    def test_the_inventory_is_not_character_creation(self):
+        self.assertEqual(
+            screens.detect(self.proc, in_game=True, mode=screens.MODE_INVENTORY),
+            screens.WORLD,
+        )
+
+    def test_the_map_is_not_character_creation(self):
+        self.assertEqual(
+            screens.detect(self.proc, in_game=True, mode=0), screens.WORLD)
+
+    def test_looting_in_combat_is_not_character_creation(self):
+        mode = screens.MODE_INTFACELOOT | screens.MODE_COMBAT | screens.MODE_PCOMBAT
+        self.assertEqual(
+            screens.detect(self.proc, in_game=True, mode=mode), screens.WORLD)
+
+    def test_the_character_screen_still_is(self):
+        self.assertEqual(
+            screens.detect(self.proc, in_game=True, mode=screens.MODE_CHARSCREEN),
+            screens.CHARGEN,
+        )
+
+    def test_without_a_mode_it_falls_back_to_the_flag(self):
+        """At the very start of a session no mode has been reported yet, and
+        the stale flag is still better than nothing."""
+        self.assertEqual(
+            screens.detect(self.proc, in_game=True, mode=None), screens.CHARGEN)
