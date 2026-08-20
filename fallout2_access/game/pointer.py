@@ -123,6 +123,35 @@ SETTLE_TIMEOUT = 0.5
 SETTLE_POLL = 0.02
 
 
+# The cursor BEFORE a game is loaded -- the main menu and the load screen.
+#
+# A separate pair from the in-game one, and it has to be: in-game the mod reads
+# 0x006AC750, which at the menu sits frozen at dead centre for ever. These two
+# track properly there, and they are eight bytes apart rather than adjacent,
+# which is why they were disambiguated by moving one axis at a time instead of
+# assuming a neighbouring pair.
+#
+# They also update PROMPTLY, unlike the in-game one -- so the menu can be
+# servoed by reading memory, which is just as well, because there is no script
+# running to ask before a game loads.
+MENU_MOUSE_X = 0x006AC794
+MENU_MOUSE_Y = 0x006AC79C
+
+
+class MenuMouse:
+    """Where the pointer is, before a game is loaded."""
+
+    def __init__(self, proc) -> None:
+        self.proc = proc
+
+    def read(self) -> Optional[Tuple[int, int]]:
+        x = self.proc.read_i32(MENU_MOUSE_X)
+        y = self.proc.read_i32(MENU_MOUSE_Y)
+        if x is None or y is None:
+            return None
+        return x, y
+
+
 class ScriptMouse:
     """Where the pointer is, according to the game itself.
 
@@ -192,7 +221,8 @@ def _await_change(mouse, before: Tuple[int, int]
 
 
 def aim_to(proc, hwnd: int, x: int, y: int,
-           tolerance: int = TOLERANCE, log_path: Optional[str] = None) -> Tuple[bool, Optional[Tuple[int, int]], str]:
+           tolerance: int = TOLERANCE, log_path: Optional[str] = None,
+           reader=None) -> Tuple[bool, Optional[Tuple[int, int]], str]:
     """Move the pointer to a client-area point.
 
     Returns (ok, where_it_ended_up, why_not). `ok` is only True when the engine
@@ -209,7 +239,7 @@ def aim_to(proc, hwnd: int, x: int, y: int,
     # The script reader when we can have it: memory alone reads a value the
     # engine only refreshes when it processes input, so a pure nudge-and-read
     # servo watches a number that is many seconds behind the truth.
-    mouse = ScriptMouse(hwnd, log_path) if log_path else GameMouse(proc)
+    mouse = reader or (ScriptMouse(hwnd, log_path) if log_path else GameMouse(proc))
 
     # How much engine motion one pixel of commanded motion produces. Windows
     # acceleration makes this vary, so it is measured every step rather than

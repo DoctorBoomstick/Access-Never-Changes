@@ -1,6 +1,6 @@
 # Access Never Changes
 
-**0.1.1 "gadget"**
+**0.1.2 "gadget"**
 
 A screen reader accessibility mod for **Fallout 2**.
 
