@@ -294,9 +294,18 @@ procedure describe_side begin
    slot := -1;
    if (g_side == SIDE_WORN) then slot := g_index;
 
+   // The item's own pointer goes on the end, and it is the field that lets the
+   // mod stop doing arithmetic. Rows on screen are not in the order this script
+   // walks the inventory, so "the third item I listed" and "the third row the
+   // engine drew" are different things -- which is why moving one item moved
+   // its neighbour. An identity can be matched against what the engine is
+   // drawing; a position can only be assumed to line up.
+   //
+   // Appended rather than inserted: the reader's pattern is not anchored at the
+   // end, so an older reader still matches every field it already knew.
    debug_msg("INVEN:entry " + g_side + SEP + g_index + SEP + total
       + SEP + g_label + SEP + g_count + SEP + weight
-      + SEP + slot + SEP);
+      + SEP + slot + SEP + g_item + SEP);
 end
 
 /*

@@ -93,6 +93,35 @@ def _window(finder, rect: Tuple[int, int, int, int]) -> uiwindow.Window:
     return win
 
 
+def drawn_row(index: int, total: int) -> int:
+    """Which screen row holds the item the script calls `index`.
+
+    **The engine draws these lists backwards.** The script walks an inventory
+    with inven_ptr and reports what it finds in that order; the window draws the
+    same items bottom-to-top. So the mod's "first item" is the engine's LAST
+    row, and pressing row zero for index zero grabs a different object entirely.
+
+    That was the bug where moving one item moved its neighbour. It is worth
+    being precise about why it survived: the move was verified afterwards by
+    counting both lists, and the counts were always right -- something did leave
+    the carried list every time. Counting cannot tell you WHICH thing moved, so
+    a wrong row looked exactly like a correct one.
+
+    Measured twice, in opposite directions, with the same two items:
+
+      * carried [Healing Powder, Spear], dragged index 0 -> the Spear moved
+      * carried [Healing Powder, Spear], dragged index 1 -> the Powder moved
+
+    One rule fits both, and the second was run as a prediction rather than an
+    explanation: the reversal was inferred from the first, then used to say in
+    advance what the second would do.
+
+    Clamped at zero so a stale `total` cannot produce a negative row, which
+    would silently address a button belonging to some other control.
+    """
+    return max(0, total - 1 - index)
+
+
 def _row_button(win: uiwindow.Window, side: int, row: int):
     base = ROW_CODE.get(side)
     if base is None:
@@ -141,11 +170,16 @@ def _target(finder, hwnd, rect, side, index, total, log_path):
             raise CannotMove("cannot find that equipment slot")
     else:
         scroll_to_top(finder, hwnd, win, side, total, log_path)
-        row = index
+        row = drawn_row(index, total)
         if row >= VISIBLE_ROWS:
             # The list is at the top and the item is still off screen, so it
             # needs scrolling down by a known amount -- the next piece of work.
             # Refusing is the honest answer; clicking the wrong row is not.
+            #
+            # Note which items these are, now that the list is known to be drawn
+            # backwards: with more than six items it is the ones EARLY in the
+            # script's list that fall off the bottom of the screen, not the late
+            # ones. The refusal is the same; which items trip it is inverted.
             raise CannotMove(
                 "that item is item {} and only {} fit on screen"
                 .format(index + 1, VISIBLE_ROWS))
