@@ -71,6 +71,14 @@ DIK = {
     "numpad_dot": (0x53, False),
     "backslash": (0x2B, False),
     "apostrophe": (0x28, False),
+    # The rest of the keys gl_world.ssl already binds. The table only ever
+    # listed the ones something in Python happened to send, so driving the
+    # scanner from a tool failed on a missing entry rather than on anything
+    # real.
+    "semicolon": (0x27, False),     # read out health, AP and AC
+    "lbracket": (0x1A, False),      # previous scan category / entry
+    "rbracket": (0x1B, False),      # next scan category / entry
+    "slash": (0x35, False),         # jump the look cursor to the scanned object
     # Left Ctrl, held rather than tapped. ddraw.ini binds
     # ItemMoveSkipDragKey=29 to it, which makes a click move an item between
     # inventory lists instead of starting a drag -- and a drag is not something
