@@ -17,6 +17,10 @@ cursor around the hex grid. So this mod's own hotkeys live on the numpad
     Numpad /   repeat the current item
     Numpad .   full description
 
+Saving and loading use the game's own keys, not this mod's: F6 quick saves and
+F7 quick loads, with no screen and no pointer involved. The mod watches the
+savegame folder and says when one lands.
+
 Hotkeys need `pip install pynput`; without it everything else still works.
 
 The game must run WINDOWED (WINDOWED=1 in f2_res.ini). Exclusive-fullscreen
@@ -30,6 +34,7 @@ import sys
 import threading
 
 from fallout2_access.app import App
+from fallout2_access.version import banner
 from fallout2_access.speech.backends import get_speaker
 
 # Numpad 0-9 are claimed by the in-game script (hex cursor movement), so the
@@ -89,6 +94,7 @@ def main() -> int:
     ap.add_argument("--no-hotkeys", action="store_true")
     args = ap.parse_args()
 
+    print(banner(), flush=True)
     speaker = get_speaker(prefer=args.speech)
     app = App(speaker=speaker, require_focus=not args.any_focus)
 

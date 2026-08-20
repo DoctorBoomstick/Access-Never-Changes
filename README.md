@@ -1,5 +1,7 @@
 # Access Never Changes
 
+**0.1.0 "gadget"**
+
 A screen reader accessibility mod for **Fallout 2**.
 
 It runs alongside the retail game — no source port, no patched executable — and
@@ -17,6 +19,14 @@ Built for NVDA, with SAPI and accessible_output2 as fallbacks.
   on each hex, and one key walks you there.
 - **Melee combat.** Turn order, action points, hits, misses, damage and deaths.
   One key attacks the enemy your look cursor is on.
+- **Containers, looting and the inventory.** What is in the pot, what you are
+  carrying, what is in your hands, and what it all weighs. `A` takes everything
+  in a container; two presses of numpad + move or equip a single item, by
+  dragging it the way the engine expects.
+- **How you are doing.** `;` reads health, action points and armour class.
+- **Saving and loading.** F6 and F7 are the engine's own quick keys and need no
+  screen; the mod watches the savegame folder and says when a save lands. The
+  save and load screens read out which slots hold a game.
 
 ## Installing
 
@@ -27,7 +37,7 @@ Python 3.8+.
 python install.py
 ```
 
-That finds the game, copies two compiled scripts into it, and makes sure the few
+That finds the game, copies the compiled scripts into it, and makes sure the few
 settings the mod depends on are set. It patches individual settings rather than
 overwriting your `ddraw.ini`, backs up anything it touches, and `--check` shows
 you what it would do without doing it.
@@ -38,7 +48,7 @@ Then, with the game running:
 python f2access.py
 ```
 
-Run that **from this folder**. Only the two compiled scripts belong in the game
+Run that **from this folder**. Only the compiled scripts belong in the game
 directory; the Python half stays here.
 
 Optional: `pip install pynput` for the hotkeys, `pip install pywin32` for SAPI
@@ -54,6 +64,8 @@ what gets announced. The short version:
 | Numpad 7 9 4 6 1 3 | move the look cursor one hex |
 | Numpad 8 / 2 | north / south — the directions a hex grid lacks |
 | Numpad 5 | bring the cursor back to you |
+| Numpad 8 / 2 / 4 / 6 | in a container or the inventory: walk the item lists |
+| `A` | in a container: take everything — the game's own TAKE ALL |
 | Numpad + | left click on the look cursor's hex — walk, or attack |
 | Numpad - | right click — cycles the cursor mode |
 | Numpad ✳ | where am I / whose turn is it |
@@ -61,6 +73,7 @@ what gets announced. The short version:
 | `Shift+[` / `Shift+]` | scanner: which one of that type |
 | `Ctrl+[` / `Ctrl+]` | scanner: category |
 | `/` | move the look cursor to the scanned thing |
+| F6 / F7 | quick save / quick load — the game's own keys, now announced |
 
 **Do not hold Ctrl while using the numpad.** sfall binds Ctrl plus the numpad to
 the game speed controls. [docs/CONTROLS.md](docs/CONTROLS.md) covers that and
@@ -75,10 +88,16 @@ never writes to the game. It polls real state twenty times a second and reports
 differences rather than remembering what it thinks is true, which is why the
 speech cannot drift out of sync with the game.
 
-**In process**, two sfall scripts run inside Fallout 2 — `gl_world.ssl` for the
-map and `gl_combat.ssl` for fighting. They can ask the engine things Python
-cannot see: what is on a hex, whose turn it is, what the mouse is really
-pointing at. They report through `debug.log`, which the Python side tails.
+**In process**, three sfall scripts run inside Fallout 2 — `gl_world.ssl` for the
+map, `gl_combat.ssl` for fighting and `gl_inven.ssl` for containers and the
+inventory. They can ask the engine things Python cannot see: what is on a hex,
+whose turn it is, what is in the pot, what the mouse is really pointing at. They
+report through `debug.log`, which the Python side tails.
+
+They are separate scripts on purpose. Each registers its own hooks and repeat
+rate independently, so the split is free, and each claims the game modes the
+others decline — so exactly one of them acts on any given key press without any
+of them needing to know about the others.
 
 Scripts do not run before a game is loaded, so the menus and character creation
 are read from memory; everything in a live game comes from the scripts.
@@ -118,8 +137,12 @@ addresses in `fallout2_access/offsets/` were found.
 - Skill percentages and derived stats are computed, not read — the engine does
   not store them. The formulas are right for vanilla; a mod that changes them
   would make the numbers wrong while the names stayed right.
-- Dialogue, barter, inventory and the Pipboy are not covered yet. Dialogue is
-  mouse-only in the engine and is the largest remaining gap.
+- Dialogue and the Pipboy are not covered yet. Dialogue is mouse-only in the
+  engine and is the largest remaining gap.
+- Lists longer than six items cannot have their lower entries moved yet: the
+  mod scrolls a list to the top by construction, but not back down again.
+- Using an item on something in the world -- explosives on a door, say -- still
+  needs the timer window, which is not covered.
 - Body parts struck in combat are not spoken yet: the words live in the game's
   own `combat.msg`, and inventing English ones would break every translation.
 

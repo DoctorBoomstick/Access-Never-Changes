@@ -19,6 +19,7 @@ Adding a screen means adding a watcher and registering it. No new plumbing.
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Callable, Dict, Optional
 
@@ -29,8 +30,12 @@ from .game.aim import Aimer
 from .game.chargen import CharGen
 from .game.combat import CombatWatcher
 from .game.displaywin import DisplayWindow
+from .game import itemmove, uiwindow
+from .game.inventory import InventoryWatcher
 from .game.premade import PremadeScreen
+from .game.saves import SaveWatcher
 from .game.scanner import Scanner
+from .game import worldlog
 from .game.worldlog import HexReading, WorldLog
 from .input.send import (
     FocusLost,
@@ -67,6 +72,7 @@ SELECT_HELP = (
     "Left and right arrows cycle characters. Press T to take this one, "
     "M to modify it, C to create your own, or B to go back."
 )
+HELP_NOTHING = "Nothing selected."
 
 
 class Announcer:
@@ -278,10 +284,18 @@ class CharGenWatcher(Watcher):
         ann.answer(self.chargen.summary())
 
 
+# Kept in step with gl_world.ssl's on_key by hand, which is the only way -- the
+# script owns these keys and cannot tell us what it bound them to. This string
+# had been wrong since the keys were remapped: it still promised that numpad 8
+# returned the cursor to you and that numpad 5 re-read the hex, when 5 had
+# become the snap and 8 had become north. It is spoken on every entry to the
+# world and on every summary, so it was the most-heard sentence in the mod and
+# also one of the few untrue ones.
 WORLD_HELP = (
-    "Numpad 7 9 4 6 1 3 move the look cursor around the six hex "
-    "directions. Numpad 5 re-reads the hex, numpad 8 returns the cursor to you, "
-    "numpad plus clicks it."
+    "Numpad 7 9 4 6 1 3 move the look cursor around the six hex directions, "
+    "8 and 2 go north and south. Numpad 5 brings the cursor back to you. "
+    "Numpad plus clicks the hex it is on. Brackets scan for things nearby, "
+    "and slash moves the cursor to what you found."
 )
 
 
@@ -301,10 +315,13 @@ WORLD_QUIET = (
     "WORLD:skillused",  # the engine spent the armed skill
     "WORLD:art",      # art identifiers for a hex; collected, not spoken
     "WORLD:artobj",   # art identifier for one object; likewise
+    "WORLD:quicksave",  # which slot F6 writes to; groundwork, read from the log
+    "WORLD:oudbg",    # what the engine put under the pointer, before filtering
     # Calibration output. Numpad 2 is no longer a key anyone presses on
     # purpose -- the aimer presses it several times per click to find out where
     # the pointer is, and narrating that would bury the click in numbers.
     "WORLD:calib",
+    "WORLD:uicalib",  # the same question with a panel up; read, never spoken
     "WORLD:win",
     "WORLD:mode",
 )
@@ -315,15 +332,24 @@ class WorldWatcher(Watcher):
 
     key = screens.WORLD
 
-    def __init__(self, log: WorldLog) -> None:
+    def __init__(self, log: WorldLog, saves: Optional[SaveWatcher] = None,
+                 proc=None) -> None:
         self.log = log
+        self.saves = saves
+        # Only for reading the engine's window structures. Optional so the
+        # tests can drive this watcher with nothing but log lines.
+        self.proc = proc
+        self.finder = uiwindow.WindowFinder(proc) if proc is not None else None
+        self._dumped = False
         self.combat = CombatWatcher()
         self.scanner = Scanner()
+        self.inventory = InventoryWatcher()
         self._queue: list = []
         self._mode: Optional[int] = None
 
     def reset(self) -> None:
         self._queue = []
+        self.inventory.reset()
 
     def pump(self) -> None:
         """Consume script output. Runs every tick, whatever screen is active,
@@ -345,16 +371,35 @@ class WorldWatcher(Watcher):
                 continue
             elif line.startswith("SCAN:"):
                 self._queue.extend((t, True) for t in self.scanner.handle(line))
+            elif line.startswith("INVEN:rect"):
+                self._queue.extend((t, True) for t in self.inventory.handle(line))
+                self._dump_buttons()
+            elif line.startswith("INVEN:"):
+                # Urgent throughout: every one of these is the answer to
+                # something the player just did -- a key that stepped the list,
+                # or the click that opened the window. Stepping five items fast
+                # should read the fifth, not all five.
+                self._queue.extend((t, True) for t in self.inventory.handle(line))
             elif line.startswith("COMBAT:"):
                 # Combat speaks even when the mod thinks another screen is up.
                 # Being attacked is not something to withhold because a screen
                 # detector is unsure.
                 self._queue.extend((t, False) for t in self.combat.handle(line))
+            elif line.startswith("WORLD:status"):
+                # Urgent: the player pressed a key and this is the answer.
+                said = worldlog.status_line(line)
+                if said:
+                    self._queue.append((said, True))
             elif line.startswith("WORLD:hex") and self.log.last_hex:
                 self._queue.append((self.log.last_hex, True))
             elif line.startswith("WORLD:gamemode"):
                 if self._mode is not None and self.log.game_mode != self._mode:
                     self._queue.append((screens.mode_name(self.log.game_mode), False))
+                    # Arriving at the save or load screen, the slot list IS the
+                    # question. Naming the screen and stopping there leaves the
+                    # player on a list of ten identical-sounding nothings.
+                    if self.saves and screens.is_save_screen(self.log.game_mode):
+                        self._queue.append((self.saves.summary(), False))
                 self._mode = self.log.game_mode
             elif line.startswith("WORLD:map"):
                 # Changed map. Worth saying out loud on its own: an exit grid
@@ -395,6 +440,44 @@ class WorldWatcher(Watcher):
                 # allow-list did not cover.
                 self._queue.append((line[len("WORLD:"):], False))
 
+    def _dump_buttons(self) -> None:
+        """Print the item window's button table to the console, off the loop.
+
+        Never spoken -- this is for whoever is building the next piece. The worn
+        slots down the middle of the inventory window are the one set of targets
+        the mod cannot yet point at, and their rectangles are sitting in here
+        waiting to be read off a real session rather than guessed at.
+
+        Run ONCE per session and on its own thread. Run inline on every window
+        open, it froze the mod solid for ten to twelve seconds at a time -- and
+        a screen reader that goes silent is worse than one that says the wrong
+        thing, because silence is indistinguishable from the key never arriving.
+        Doing it in the background also warms the finder's cache, so the first
+        actual move does not pay the search cost either.
+        """
+        if self.finder is None or self.inventory.rect is None or self._dumped:
+            return
+        self._dumped = True
+        thread = threading.Thread(target=self._dump_buttons_now,
+                                  args=(self.inventory.rect,), daemon=True)
+        thread.start()
+
+    def _dump_buttons_now(self, rect) -> None:
+        try:
+            win = self.finder.at(*rect)
+        except Exception as exc:
+            print("[inven] cannot read the window: {}".format(exc), flush=True)
+            return
+        if win is None:
+            print("[inven] no window matching {}".format(rect), flush=True)
+            return
+        print("[inven] window id {} at {} with {} buttons".format(
+            win.id, self.inventory.rect, len(win.buttons)), flush=True)
+        for b in win.buttons:
+            key = " KEY {!r}".format(chr(b.press)) if b.key and 32 <= b.press < 127 else ""
+            print("[inven]   press={:<6} ({:>3},{:>3}) {:>3}x{:<3}{}".format(
+                b.press, b.left, b.top, b.width, b.height, key), flush=True)
+
     def enter(self, ann: Announcer) -> None:
         ann.answer("Exploring. " + WORLD_HELP)
 
@@ -412,6 +495,12 @@ class WorldWatcher(Watcher):
             ann.say(text, interrupt=urgent, force=True)
 
     def repeat(self, ann: Announcer) -> None:
+        # A panel over the map takes the question with it. "Repeat" while the
+        # loot window is open means the item under the list cursor, not the hex
+        # the player last looked at before they opened it.
+        if self.inventory.open:
+            ann.answer(self.inventory.repeat() or HELP_NOTHING)
+            return
         if self.log.last_hex:
             ann.answer(self.log.last_hex.announce())
         else:
@@ -421,6 +510,13 @@ class WorldWatcher(Watcher):
         self.repeat(ann)
 
     def summary(self, ann: Announcer) -> None:
+        # "Where am I" is answered by whatever currently owns the screen. Each
+        # of these is a different question wearing the same key.
+        if self.inventory.open:
+            ann.answer("{}. {}".format(
+                self.inventory.container or screens.mode_name(self.log.game_mode),
+                self.inventory.repeat() or HELP_NOTHING))
+            return
         # In a fight, "where am I" means AP and whose turn it is. The hex-cursor
         # key reminder is not what you need while something is biting you.
         if self.combat.in_combat:
@@ -446,6 +542,14 @@ class App:
         self._pending_screen: str = screens.UNKNOWN
         self._pending_ticks: int = 0
         self._pending: list = []  # hotkeys awaiting the main loop
+        self._session_epoch: int = 0
+        # (item name, list length before, deadline) while a move is awaiting
+        # the script's re-read. Nothing is claimed until that comes back.
+        self._moved: Optional[tuple] = None
+        # The item marked by the first press: (name, side, index, total).
+        # Nothing has been sent to the game while this is set -- it is the mod's
+        # own note of what the player chose, not a state the game is in.
+        self._holding: Optional[tuple] = None
 
     def connect(self) -> bool:
         try:
@@ -473,11 +577,13 @@ class App:
             print("[app] no debug.log in {} yet -- if nothing is ever announced "
                   "in game, check DebugMode=2 in ddraw.ini".format(game_dir),
                   flush=True)
-        self.world = WorldWatcher(WorldLog(log_path))
+        self.saves = SaveWatcher(game_dir)
+        self.world = WorldWatcher(WorldLog(log_path), self.saves, self.proc)
         self.aimer = Aimer(self.hwnd, log_path) if self.hwnd else None
         # The game's own prose. Located lazily: the beacon it keys off is only
         # printed once a game is actually loaded.
         self.display = DisplayWindow(self.proc)
+        self._session_epoch = 0
         self.watchers = {
             screens.MAIN_MENU: MainMenuWatcher(),
             screens.SELECT: SelectWatcher(PremadeScreen(self.proc)),
@@ -526,6 +632,9 @@ class App:
             return
         try:
             mode = self.world.log.game_mode
+            if button == "left" and screens.is_item_window(mode):
+                self.move_item()
+                return
             if button == "left" and not screens.is_map_mode(mode):
                 # Something is over the map, so there is no hex to aim at and
                 # the click goes to whatever panel is up. Say which -- an escape
@@ -549,6 +658,15 @@ class App:
                 # Was something meant to be there? The hex readout is the
                 # player's own last look at it.
                 last = self.world.log.last_hex
+                if last and last.contents == "blocked":
+                    # Nothing nameable on it and no way to walk into it, so
+                    # there is nothing a click could mean. Say the thing the
+                    # player was already told rather than making them decode
+                    # "cannot point at that", which is what they got when
+                    # "blocked" was added to the readout and this test, which
+                    # only knew "empty" and "you", was not told about it.
+                    self.ann.answer("That hex is blocked.")
+                    return
                 expects_object = bool(
                     last and last.contents and last.contents not in ("empty", "you")
                 )
@@ -573,6 +691,112 @@ class App:
             self.ann.answer("Game is not focused.")
         except Exception as exc:  # never let a hotkey kill the loop
             print("[app] click: {}".format(exc), flush=True)
+
+    def move_item(self) -> None:
+        """Move the item the list cursor is on, and say what actually moved.
+
+        The click key means the same thing here as it does on the map: act on
+        the thing you selected. On a hex that is walk or attack; in one of these
+        windows it is move the item across.
+
+        What differs is how it is checked. A hex can be verified BEFORE the
+        click, because the engine will say which hex the pointer is over; a row
+        cannot, because there is no such question to ask about a UI. So this
+        verifies afterwards instead, by counting both lists -- which is a
+        stronger claim anyway. It reports what happened rather than what was
+        intended.
+        """
+        inv = self.world.inventory
+        if not inv.open or inv.rect is None or inv.side is None:
+            self.ann.answer("Nothing selected.")
+            return
+        if self.world.finder is None:
+            self.ann.answer("Not attached to the game.")
+            return
+        # First press marks the item. Nothing is sent to the game at all: the
+        # move is a drag, and a drag begun on one keypress and finished on
+        # another would leave the game holding an item across however long the
+        # player takes to navigate -- a state they cannot see and the mod cannot
+        # reliably detect. So the whole drag happens on the second press.
+        if self._holding is None:
+            if not inv.selected:
+                self.ann.answer("No item selected.")
+                return
+            self._holding = (inv.selected, inv.side, inv.index, inv.total)
+            self.ann.answer(
+                "{}. Choose where to put it and press numpad plus again."
+                .format(inv.selected)
+            )
+            return
+
+        name, side, index, total = self._holding
+        before = inv.counts
+        # Say so before starting. The drag aims twice and each aim asks the
+        # game where the pointer is a dozen times, so this takes a few seconds
+        # -- and a few seconds of silence after a keypress reads exactly like
+        # the key never arrived, which is the misreading this whole project
+        # keeps having to design against.
+        self.ann.answer("Moving {}.".format(name))
+        try:
+            itemmove.drag(self.world.finder, self.hwnd, inv.rect,
+                          (side, index, total),
+                          (inv.side, inv.index, inv.total),
+                          log_path=self.world.log.path)
+        except itemmove.CannotMove as exc:
+            self._holding = None
+            self.ann.answer(str(exc).capitalize() + ".")
+            return
+        except FocusLost:
+            self._holding = None
+            self.ann.answer("Game is not focused.")
+            return
+
+        # Ask the script for the TOTALS, not for the selected item. An item
+        # equipped from the carried list changes the carried count and nothing
+        # at all about the slot it went into, so re-reading the selection --
+        # which is what this used to do -- reported every successful equip as a
+        # failure. Its reply arrives through the log on a later tick.
+        try:
+            guarded_tap(self.hwnd, "numpad0", settle=0.25)
+        except Exception:
+            pass
+        self._holding = None
+        self._moved = (name, before, time.time() + 1.5)
+
+    def _settle_move(self) -> None:
+        """Say what the click actually did, once the script has re-read the list.
+
+        Deliberately says nothing until the count comes back. Announcing "moved
+        the plastic explosives" straight after sending a click would be
+        reporting an intention as a fact, and an item that did not move is
+        exactly the case a player cannot see for themselves.
+
+        A count that did not change does NOT mean nothing happened. Fallout's
+        inventory picks an item up onto the cursor when it is clicked without
+        the move modifier, and the list length is the same either way -- so the
+        honest reading of "no change" is that the item is now being carried by
+        the pointer, waiting to be put down. Saying "did not move" there would
+        be worse than useless: it would leave the player holding something they
+        had been told they were not.
+        """
+        if not self._moved:
+            return
+        name, before, deadline = self._moved
+        inv = self.world.inventory
+        # Compare the whole reading, not just the count. Dropping something into
+        # an equipment slot changes no list length anywhere -- the slot's
+        # contents change -- so a count test called every successful equip a
+        # failure and told the player they were still holding it.
+        if inv.counts is not None and inv.counts != before:
+            self._moved = None
+            self.ann.answer("Moved {}.".format(name))
+        elif time.time() > deadline:
+            self._moved = None
+            # The drag ran and the reading did not change. Say so plainly. The
+            # earlier version guessed "you must be holding it" here, which was
+            # a story invented to explain silence -- and it was wrong, because
+            # what silence actually meant was that the clicks did nothing.
+            self.ann.answer("{} did not move.".format(name))
 
     def action(self, what: str) -> None:
         """Queue a hotkey. Called from the keyboard listener's thread.
@@ -619,6 +843,25 @@ class App:
         anything the mod could assemble: already written, already translated,
         and describing exactly what a sighted player was told.
         """
+        # A new game load reallocates the message ring, so the anchor from the
+        # last one points at freed heap. The script announces each load, which
+        # is the signal to go and find the buffer again. Until this existed,
+        # loading a save silenced the game's own words for good -- and because
+        # locating also switches the mod's own combat narration off, nothing
+        # narrated a blow at all.
+        if self.world.log.ready_count != self._session_epoch:
+            first = self._session_epoch == 0
+            self._session_epoch = self.world.log.ready_count
+            self.display.reset()
+            self.world.combat.narrate_damage = True
+            # A session beginning again, when one has already begun, is a game
+            # being loaded. F7 is the whole reason this matters: quick load
+            # needs no screen and no pointer, so it already worked -- it just
+            # made no sound, and a load that worked was indistinguishable from
+            # a key that never arrived.
+            if not first:
+                self.ann.answer("Game loaded.")
+
         if not self.display.located:
             # Only worth looking once a session is live; before a game loads
             # the beacon has not been printed and the scan is wasted work.
@@ -640,8 +883,16 @@ class App:
         # us a game session is live, and memory alone mistakes the map for the
         # premade-character screen.
         self.world.pump()
+        self._settle_move()
         self.pump_display()
-        detected = screens.detect(self.proc, in_game=self.world.log.session_live)
+        # A save is always worth hearing, whatever screen the mod thinks is up.
+        # It is also the one announcement that must never be dropped: acting on
+        # a save that did not happen is how an evening's play is lost.
+        for line in self.saves.poll():
+            self.ann.say(line, force=True)
+        detected = screens.detect(self.proc,
+                                  in_game=self.world.log.session_live,
+                                  mode=self.world.log.game_mode)
 
         if detected != self.screen:
             # Debounce: only believe a new screen once it has held steady.

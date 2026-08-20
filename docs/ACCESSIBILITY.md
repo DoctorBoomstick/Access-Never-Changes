@@ -93,11 +93,13 @@ where the opening is.
 Each press is still one ordinary hex step. It is only the choice between two
 legal steps — the one a sighted player makes by eye.
 
-(Numpad / repeats the last thing said, which covers re-reading a hex.)
 | Numpad + | **left click on the hex the look cursor is on** |
 
-(Numpad 2 is used internally — the mod presses it several times per click to
-ask the game where the pointer is. It isn't a key you need.)
+(Numpad / repeats the last thing said, which covers re-reading a hex.)
+
+The mod asks the game where the pointer is several times per click, using the
+apostrophe key. It isn't a key you need, and it is deliberately one nobody
+reaches for.
 
 ## Walking
 
@@ -128,6 +130,10 @@ on a hex returns nothing at all for a solid wall. The only thing present is an
 invisible blocker, which is exactly what the mod refuses to read out. So the
 hex is asked whether it can be walked into instead — which is the question you
 were really asking when you ran the cursor along a wall looking for the gap.
+
+A hex that reads `blocked` will not be clicked at all — there is nothing on it
+to interact with and no way to walk into it, so the mod says `That hex is
+blocked` rather than spending a click finding that out.
 
 `empty` and `blocked` are the mod's own words. Everything that names a *thing*
 comes from the game. Invisible engine
@@ -174,12 +180,21 @@ cursor.
 So a locked door is: find it with the scanner, `/` to put the cursor on it,
 press `2`, then numpad `+`.
 
-**The mod no longer decides what your click means.** It moves the pointer onto
-the hex you chose, because that is the part you cannot do yourself, and it
-refuses to click if the game will not confirm the pointer is really on the
-thing. What the click then *does* is the cursor mode's business, and the cursor
-mode is yours — right click cycles it, number keys arm skills, and every change
-is announced.
+**The mod sets the cursor mode for you, from what you told it.** Leaving that to
+you and preserving your choice was tried and cannot be made to work: reading the
+world changes the cursor as a side effect, aiming reads the world several times,
+and the restore that undoes the engine's meddling undoes yours along with it.
+Your right click would be quietly reverted before the button ever went down.
+
+So the mode is derived from things you actually expressed — a skill you armed
+from the number row, or an enemy on the hex you picked, or neither, which means
+walking. That is the same choice a sighted player makes by looking at what they
+are pointing at. Numpad 0 remains the explicit reset, and is the only thing that
+disarms a skill.
+
+What has not changed is the refusal to click on a maybe: the pointer goes onto
+the hex you chose, and if the game will not confirm it is really there, nothing
+is sent and the mod says so.
 
 Hexes and the scanner now say when something is **locked** or **open**, so you
 find out before walking across a room rather than by clicking and hearing
@@ -201,12 +216,84 @@ Once it's available the mod stops narrating blows itself and defers to it.
 Turn order and action points stay the mod's own, because the game never writes
 those anywhere.
 
+## How you are doing
+
+**Press `;` at any time** for the three numbers the interface bar shows a
+sighted player permanently:
+
+    Health 48 of 48. 8 of 10 action points. Armor class 8.
+
+Health first, then action points, then armour class. It works everywhere � on
+the map, in a fight, with the inventory open � because those are exactly the
+moments you want it, and a key that only worked on the map would be missing all
+of them.
+
+Action points are only a live figure during a fight. Outside one you get the
+maximum, worded as a capacity rather than a remainder: the engine keeps a
+running count out of combat, but it is not a number anyone is spending, so
+reading it back would be true of nothing.
+
+All three come from the engine. None is computed here � armour class in
+particular has modifiers this mod knows nothing about.
+
+## Saving and loading
+
+**Use F6 and F7.** They are the engine's own quick save and quick load, and they
+need no screen, no list and no pointer — which makes them the only way to save
+that works without sight.
+
+They did not work out of the box, and the reason is worth writing down. sfall's
+`AutoQuickSave` ships disabled, and its own comment explains what that costs:
+quick saving with F6 "without picking a slot beforehand" needs it turned on.
+With it off, F6 falls back to opening the save screen — and picking a slot there
+needs a mouse. So the only route to a first save ran through the one screen that
+cannot be used, and every test meant replaying from character creation.
+
+`install.py` turns it on, and puts the quick saves on **their own page** so the
+ten ordinary slots are left alone. F6 cycles through its page and overwrites as
+it goes, which is not something to point at saves you are keeping.
+
+| Key | Action |
+|---|---|
+| F6 | quick save |
+| F7 | quick load |
+| F4 or Ctrl-S | the save screen |
+| F5 or Ctrl-L | the load screen |
+
+The mod now watches the savegame folder and says what happened:
+
+    Saved to slot 1.
+    Slot 1 saved over.
+    Game loaded.
+
+That is deliberately read off the **disk** rather than asked of the engine.
+There is no sfall hook for saving, and what a save definitely does is write a
+file — so this reports a save that *happened*, not a key that was *sent*. The
+distinction is the same one the mod draws before every click.
+
+"Saved to slot 1" and "slot 1 saved over" are different on purpose. Quick save
+uses the same slot repeatedly, so the interesting case is the one where you have
+landed on a slot that already held a game.
+
+Arriving at the save or load screen reads out what is on disk:
+
+    Save game. 2 saved games. Slot 1, saved 20:14. Slot 3, saved 21:02.
+
+**The slot descriptions you typed are not read yet.** They live inside
+`SAVE.DAT` in a layout nobody here has confirmed against a real file, and a
+confidently wrong save description is exactly the kind of statement that gets
+somebody to overwrite the wrong game. A slot is named by its number and the time
+it was written, both of which are certain.
+
+**Picking a slot on those screens still needs the mouse.** F6 and F7 do not, so
+if you are saving and reloading to test something, use those.
+
 ## Combat
 
 ### Attacking
 
 Same key as walking. Put the look cursor on the enemy with the numpad, press
-numpad ✳.
+numpad **+**.
 
 Fallout decides what a left click does from the cursor mode, so the mod sets it
 to match what you selected: **a living enemy on the hex in combat gives you the
@@ -232,8 +319,8 @@ Combat announces itself as it happens — you don't press anything for this:
     Combat over.
 
 At the start of your turn you get the full action point figure; after that just
-the remainder as you spend it, since the total doesn't change. Numpad + reports
-whose turn it is and your AP, instead of the usual key reminder.
+the remainder as you spend it, since the total doesn't change. In a fight numpad
+✳ reports whose turn it is and your AP, instead of the usual key reminder.
 
 Names and numbers are the game's own. **Body parts aren't spoken yet** — the
 engine reports which was struck as a number, and the words for them live in the
@@ -296,7 +383,7 @@ player has ever seen one. They are recognised by the blank placeholder art they
 are drawn with, a rule derived from 81,000 logged objects rather than guessed
 at. On the Temple map that is 65% of everything you would otherwise have heard.
 
-## Hotkeys this mod adds## Hotkeys this mod adds
+## Hotkeys this mod adds
 
 These live on the numpad **operator** keys, since 0-9 belong to the in-game
 script:
@@ -314,13 +401,112 @@ feel. Everything else on the numpad is a readout, so a misfire costs you a
 sentence rather than an action.
 
 A left click acts on the hex your look cursor is on: the mod moves the pointer
-there first, because that is the part you cannot do yourself. What the click
-then *means* is up to you and the cursor mode, exactly as it is for a sighted
-player — right click cycles the mode and the mod tells you which one you landed
-on.
+there first, because that is the part you cannot do yourself, then sets the
+cursor mode to match what you selected.
 
-Off the map — in the inventory, Pipboy, a dialog — numpad ✳ doesn't aim. There
-are no hexes there, so it just clicks where the pointer already is.
+Off the map — in the inventory, Pipboy, a dialog — numpad + doesn't aim. There
+are no hexes there, so it just clicks where the pointer already is, and says
+which panel is currently eating your clicks.
+
+## Containers, looting and your inventory
+
+Open a container the ordinary way — put the look cursor on it, press numpad `+`
+— and the window announces itself with what is in it:
+
+    Loot: Pot. 3 items. You are carrying 2 items.
+
+The window has three lists, and the numpad walks them with the same spatial idea
+as the hex cursor, so there is only one layout to learn:
+
+| Key | Action |
+|---|---|
+| Numpad 8 / 2 | previous / next item in this list |
+| Numpad 4 / 6 | previous / next list |
+| Numpad 5 | re-read the selected item |
+| Numpad 0 | totals — what you are carrying, against what you can carry |
+| `A` | **take everything** in the container — the game's own TAKE ALL |
+
+The three lists are **yours**, **theirs** (the container, the corpse, or the
+person you are trading with) and **worn** — your armour and your two hands.
+Opening a container starts you on its contents, because that is what you opened
+it to find out.
+
+Items read as name, how many, what they weigh, and where they are in the list:
+
+    Knife, 1 pound. 1 of 3.
+    Bottle Caps, 24. 2 of 3.
+    Armor, Leather Armor.
+    Item 2, empty.
+
+An empty hand is announced rather than skipped. "Nothing in your right hand" is
+the answer to "can I pick this up", and a list that silently omitted it would
+leave that question unanswerable.
+
+Lists that have nothing in them are skipped as you press 4 and 6 — your own
+inventory window has no container list, and stepping onto an empty one to be
+told it is empty is a key press that achieved nothing.
+
+### Taking everything: press A
+
+**In a loot window, `A` takes everything in the container.** It is the engine's
+own TAKE ALL button, and it needs no pointer at all.
+
+That was not in any manual — it came out of reading the engine's window
+structures. Fallout draws its interface with GNW, which keeps a list of every
+button in a window along with the event code each raises, and GNW's input loop
+puts key presses and button presses in the *same stream*. So a button whose
+event code happens to be below 256 is a button that a key already presses. The
+loot window's TAKE ALL carries code 65, which is ASCII `A`.
+
+Verified on a live game: a pot holding one Healing Powder, `A` pressed, and the
+item was in the player's pack — no pointer involved.
+
+### Moving one item
+
+It takes two presses of **numpad +**, because a move has two ends:
+
+1. Select the item and press numpad + — it says the item's name back.
+2. Navigate to where it should go — the other list, or Armor, Item 1, Item 2 —
+   and press numpad + again.
+
+The first press sends nothing to the game at all; it is just the mod noting
+what you chose. Fallout moves items by *dragging*, and a drag begun on one
+keypress and finished on another would leave the game holding an item for
+however long you took to navigate — a state you cannot see and the mod cannot
+reliably detect. So the whole drag happens on the second press.
+
+The six rows of each list are buttons too, but their codes are 1000–1005 and
+2000–2005 — synthetic, far above the keyboard range — so unlike TAKE ALL these
+need a real click. The mod reads each row's rectangle out of the engine and puts
+the pointer there, which is the same job it does for a hex and for the same
+reason: pointing is the part you cannot do yourself.
+
+Three things about how it is done:
+
+**The rectangles are the engine's, read live.** Nothing is measured off a
+screenshot or computed from a layout table, so a different resolution or the
+high-res patch moving a window changes nothing.
+
+**The scroll position is caused, not read.** A list longer than six rows would
+need to know how far it has scrolled. Rather than hunt for that number in
+memory — another absolute address, in a project whose addresses are already why
+it will not run on GOG — the scroll-up arrow is itself a button, so clicking it
+more times than the list is long puts the list at the top *by construction*.
+
+**It tells you what actually moved, not what it meant to move.** There is no way
+to ask a UI "is the pointer on row three" the way the game will say which hex the
+pointer is over. So the check happens afterwards: both lists are re-read and the
+mod says `Moved Plastic Explosives` — or `Plastic Explosives did not move`, which
+is the case you would otherwise have no way to notice.
+
+Lists longer than six items are refused for now rather than guessed at, and say
+so.
+
+What the mod will *not* do is move items from inside the script. That would step
+straight past carry weight, the action point cost of an inventory action in
+combat, and whatever else the window enforces that nobody has thought of. Going
+through the real interface means those rules apply because they are the same
+code, not because we remembered to reimplement them.
 
 ## What gets announced
 
@@ -383,7 +569,10 @@ hardcoded. Translations and text-replacing content mods work with no changes.
 - **Addresses are absolute**, confirmed against the retail Steam
   `fallout2.exe`. They survive game restarts (verified), but AoB signatures are
   needed before this works on GOG or plain 1.02d.
-- Only the three named screens are covered. In-game play is not.
+- **Dialogue, the Pipboy and the world map are not covered.** Dialogue is the
+  largest remaining gap and is mouse-only in the engine.
+- **The inventory and loot windows are read but not operated.** You can hear
+  everything in them; moving an item still needs the mouse.
 
 ## Layout
 

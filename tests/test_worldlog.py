@@ -10,6 +10,7 @@ import os
 import tempfile
 import unittest
 
+from fallout2_access.game import worldlog
 from fallout2_access.game.worldlog import WorldLog
 
 
@@ -121,3 +122,33 @@ class TestWorldLog(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStatusLine(unittest.TestCase):
+    """Health, action points and armour class -- the three numbers a sighted
+    player reads off the interface bar without pressing anything."""
+
+    def test_order_is_health_then_action_points_then_armour(self):
+        said = worldlog.status_line("WORLD:status 48|48|8|10|8|1|")
+        self.assertLess(said.index("Health"), said.index("action"))
+        self.assertLess(said.index("action"), said.index("Armor"))
+
+    def test_in_combat_action_points_are_a_remainder(self):
+        said = worldlog.status_line("WORLD:status 31|48|3|10|8|1|")
+        self.assertIn("3 of 10 action points", said)
+
+    def test_out_of_combat_action_points_are_a_capacity(self):
+        """The engine keeps a running count outside a fight, but it is not a
+        number anyone is spending -- reporting it as a remainder would be true
+        of nothing."""
+        said = worldlog.status_line("WORLD:status 31|48|3|10|8|0|")
+        self.assertIn("10 action points", said)
+        self.assertNotIn("3 of", said)
+
+    def test_damage_shows_in_the_health_figure(self):
+        self.assertIn("Health 31 of 48",
+                      worldlog.status_line("WORLD:status 31|48|0|10|8|0|"))
+
+    def test_an_unparsable_line_is_not_spoken(self):
+        self.assertIsNone(worldlog.status_line("WORLD:status garbage"))
+        self.assertIsNone(worldlog.status_line("WORLD:hex 17488 dist 0 : you|"))
