@@ -432,11 +432,35 @@ script:
 | Numpad - | **right mouse button** — cycles the cursor mode |
 | Numpad ✳ | summary / where am I |
 | Numpad / | repeat the current item |
-| Numpad . | full description |
+| Numpad . | **what can I do to this?** (in a panel: full description) |
 
 The two mouse buttons sit next to each other on `+` and `-`, unmistakable by
 feel. Everything else on the numpad is a readout, so a misfire costs you a
 sentence rather than an action.
+
+### What can I do to this?
+
+Point at something with the numpad and press **numpad .** on the map:
+
+    Impenetrable Door. You can use it, look at it, use an item on it,
+    use a skill on it.
+
+That is not the mod's opinion. It is the list of icons Fallout itself would put
+on screen if you held the mouse button on that object — the eye, the hand, the
+backpack, the skilldex — read straight out of the engine, which decides it from
+the object's own flags. So it stays right for things this mod has never heard
+of.
+
+Two things worth knowing:
+
+- **It takes a couple of seconds**, because the pointer has to travel to the
+  object first. It says "Checking…" so you know the key landed.
+- **It only reads.** The menu is opened, the list is taken, and it is cancelled.
+  Nothing is chosen — knowing an item *can* be used on a door is the missing
+  piece; deciding to use one stays yours.
+
+Compare two objects and you can see the engine discriminating: a pot offers
+*use it*, a stone bench does not, because you cannot open a bench.
 
 A left click acts on the hex your look cursor is on: the mod moves the pointer
 there first, because that is the part you cannot do yourself, then sets the

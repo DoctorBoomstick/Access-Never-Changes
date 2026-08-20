@@ -30,7 +30,7 @@ from .game.aim import Aimer
 from .game.chargen import CharGen
 from .game.combat import CombatWatcher
 from .game.displaywin import DisplayWindow
-from .game import itemmove, slotscreen, uiwindow
+from .game import actions, itemmove, slotscreen, uiwindow
 from .game.inventory import InventoryWatcher
 from .game.premade import PremadeScreen
 from .game.saves import SaveWatcher
@@ -341,6 +341,12 @@ class WorldWatcher(Watcher):
         # tests can drive this watcher with nothing but log lines.
         self.proc = proc
         self.finder = uiwindow.WindowFinder(proc) if proc is not None else None
+        # Set by App once the game window is known. Asking the engine what can
+        # be done to an object means putting the pointer on it and holding the
+        # button, so this watcher needs the aimer -- but only for that one
+        # question, and the tests drive everything else with log lines alone.
+        self.aimer = None
+        self.hwnd: Optional[int] = None
         self._dumped = False
         self.combat = CombatWatcher()
         self.scanner = Scanner()
@@ -508,7 +514,41 @@ class WorldWatcher(Watcher):
             ann.answer("No hex read yet. Press numpad 5.")
 
     def describe(self, ann: Announcer) -> None:
-        self.repeat(ann)
+        """What the engine will let you do to the selected object.
+
+        This used to be a second copy of `repeat`, which made numpad dot say
+        exactly what numpad slash already said. It now asks the engine the
+        question a sighted player answers by holding the button and reading the
+        icons -- the eye, the hand, the backpack, the skilldex.
+
+        Read-only, deliberately. It opens the menu, reads what is on it, and
+        cancels; nothing is chosen. Knowing an item can be used on a door is
+        what was missing, and choosing to use one is a separate decision that
+        stays with the player.
+        """
+        if self.inventory.open:
+            # A panel over the map takes the question with it, the same way
+            # `repeat` does.
+            ann.answer(self.inventory.repeat() or HELP_NOTHING)
+            return
+        if self.aimer is None or self.proc is None:
+            ann.answer("Not attached to the game.")
+            return
+        if not screens.is_map_mode(self.log.game_mode):
+            ann.answer("{}.".format(
+                screens.mode_name(self.log.game_mode).capitalize()))
+            return
+
+        # Say so first. Pointing at the object takes a few seconds, and silence
+        # after a keypress reads as the key never having arrived -- the
+        # misreading this project keeps designing against.
+        target = self.log.last_hex.announce() if self.log.last_hex else "there"
+        ann.answer("Checking {}.".format(target))
+        what, codes, why = actions.probe(self.proc, self.aimer, self.hwnd)
+        if what is None:
+            ann.answer("Cannot check that: {}.".format(why or "no answer"))
+            return
+        ann.answer("{}. {}".format(what, actions.describe(codes)))
 
     def summary(self, ann: Announcer) -> None:
         # "Where am I" is answered by whatever currently owns the screen. Each
@@ -708,6 +748,10 @@ class App:
         self.saves = SaveWatcher(game_dir)
         self.world = WorldWatcher(WorldLog(log_path), self.saves, self.proc)
         self.aimer = Aimer(self.hwnd, log_path) if self.hwnd else None
+        # The world watcher needs these for the one question that
+        # requires a pointer: what can be done to the selected object.
+        self.world.aimer = self.aimer
+        self.world.hwnd = self.hwnd
         # The game's own prose. Located lazily: the beacon it keys off is only
         # printed once a game is actually loaded.
         self.display = DisplayWindow(self.proc)
