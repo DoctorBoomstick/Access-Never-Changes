@@ -6,7 +6,9 @@ one day, in two different files, and cost most of an evening both times.
 
 import unittest
 
-from fallout2_access.game import screens
+import fakes
+
+from fallout2_access.game import screens, slotscreen, uiwindow
 
 
 class TestMapMode(unittest.TestCase):
@@ -155,22 +157,14 @@ class TestInGameDetectionUsesTheGameMode(unittest.TestCase):
     uses; the game mode is a direct statement of what is on screen.
     """
 
-    class Proc:
-        """A process whose editor-window flag always claims the editor is up.
-
-        The save/load flag reads zero, because that screen is not showing --
-        without that distinction the fake claims every screen at once and tests
-        nothing.
-        """
-
-        def read_i32(self, addr):
-            from fallout2_access.game import slotscreen
-            if addr == slotscreen.OPEN:
-                return 0
-            return 6
-
     def setUp(self):
-        self.proc = self.Proc()
+        # A process whose editor-window handle always claims the editor is up,
+        # and with no save screen open -- without that second half the fake
+        # claims every screen at once and tests nothing.
+        self.proc = fakes.memory_with_windows(
+            [(800, 100, [])],
+            values={screens.EDITOR_WINDOW: 6, screens.MENU_FLAG: 6,
+                    screens.EDITOR_FLAG: 6})
 
     def test_the_inventory_is_not_character_creation(self):
         self.assertEqual(
@@ -202,30 +196,59 @@ class TestInGameDetectionUsesTheGameMode(unittest.TestCase):
 
 class TestSlotScreenDetection(unittest.TestCase):
     """The save and load screens are reachable from the main menu, where no
-    script runs -- so they are recognised from their own flag, which is the one
-    detector that works both before and during a game."""
+    script runs -- so they are recognised from their own window, which is the
+    one detector that works both before and during a game.
 
-    class Proc:
-        def __init__(self, open_flag):
-            self.open_flag = open_flag
+    This is tested harder than the other screens for a structural reason:
+    `detect` consults it FIRST, so a false yes here does not mis-name one
+    screen, it hides every other screen in the game behind it.
+    """
 
-        def read_i32(self, addr):
-            from fallout2_access.game import slotscreen
-            if addr == slotscreen.OPEN:
-                return self.open_flag
-            return -1        # nothing else claims a screen
+    PANEL = (640, 480, [slotscreen.PAGE_PREV, slotscreen.PAGE_NEXT])
+
+    def proc(self, windows):
+        return fakes.memory_with_windows(
+            windows, values={screens.EDITOR_WINDOW: -1,
+                             screens.MENU_FLAG: 1, screens.EDITOR_FLAG: 1})
 
     def test_recognised_before_a_game_is_loaded(self):
-        self.assertEqual(screens.detect(self.Proc(1), in_game=False),
-                         screens.SLOTS)
+        self.assertEqual(
+            screens.detect(self.proc([(800, 100, []), self.PANEL]),
+                           in_game=False),
+            screens.SLOTS)
 
     def test_recognised_during_a_game_too(self):
         """F4 opens it mid-game, and the mod must not go on describing the map
         while the player is choosing a slot to overwrite."""
         self.assertEqual(
-            screens.detect(self.Proc(1), in_game=True, mode=screens.MODE_SAVEGAME),
+            screens.detect(self.proc([self.PANEL]), in_game=True,
+                           mode=screens.MODE_SAVEGAME),
             screens.SLOTS)
 
-    def test_not_claimed_when_the_flag_is_clear(self):
-        self.assertNotEqual(screens.detect(self.Proc(0), in_game=True, mode=0),
-                            screens.SLOTS)
+    def test_not_claimed_when_the_panel_is_not_open(self):
+        self.assertNotEqual(
+            screens.detect(self.proc([(800, 100, [])]), in_game=True, mode=0),
+            screens.SLOTS)
+
+    def test_another_640_by_480_panel_is_not_the_save_screen(self):
+        """The character sheet and the Pipboy are 640x480 too, so size alone
+        would claim them -- and claiming them hides the whole game behind a
+        screen that is not there."""
+        self.assertNotEqual(
+            screens.detect(self.proc([(640, 480, [500, 501])]),
+                           in_game=True, mode=0),
+            screens.SLOTS)
+
+    def test_a_closed_panel_left_in_the_heap_is_not_open(self):
+        """The bug this replaced. A freed window keeps its fields, so searching
+        the heap by shape found the save screen for the rest of the session
+        once it had been opened -- and the mod answered "load game" to the map,
+        to character selection, to everything. Only GNW's list is asked now, so
+        a window nothing points at is closed."""
+        proc = self.proc([(800, 100, [])])
+        # The panel struct exists, byte for byte, but no pointer references it.
+        stray = fakes.memory_with_windows([self.PANEL])
+        for addr, byte in stray.bytes.items():
+            if addr < uiwindow.WINDOW_LIST or addr >= uiwindow.WINDOW_LIST + 256:
+                proc.bytes.setdefault(addr, byte)
+        self.assertNotEqual(screens.detect(proc, in_game=False), screens.SLOTS)

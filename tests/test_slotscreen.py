@@ -9,12 +9,13 @@ whether a row is occupied and the savegame folder only supplies the words.
 import struct
 import unittest
 
+import fakes
+
 from fallout2_access.game.saves import OFF_CHARACTER, OFF_DESCRIPTION, SIGNATURE
 from fallout2_access.game.slotscreen import (
     HEADER_SIZE,
     MAX_PAGES,
     OCCUPIED,
-    OPEN,
     PAGE_BACK_TEN,
     PAGE_FORWARD_TEN,
     PAGE_NEXT,
@@ -76,9 +77,9 @@ def header_bytes(character="Narg", description="a description"):
     return bytes(blob)
 
 
-def proc(open_=1, selection=0, occupied=(), page=None, headers=None,
+def proc(selection=0, occupied=(), page=None, headers=None,
          sfall=FAKE_SFALL_BASE):
-    values = {OPEN: open_, SELECTION: selection}
+    values = {SELECTION: selection}
     for i in range(SLOTS_PER_PAGE):
         values[OCCUPIED + 4 * i] = 1 if i < len(occupied) and occupied[i] else 0
     if page is not None:
@@ -90,13 +91,33 @@ def proc(open_=1, selection=0, occupied=(), page=None, headers=None,
 
 
 class TestShowing(unittest.TestCase):
-    def test_open_when_the_flag_is_set(self):
-        self.assertTrue(SlotScreen(proc(open_=1)).showing)
+    """Recognised by its window, not by a flag.
 
-    def test_closed_at_the_main_menu(self):
-        self.assertFalse(SlotScreen(proc(open_=0)).showing)
+    There was a flag, 0x00614858, and it never went back to zero once the
+    screen had been opened. Because `detect` tests this screen before any
+    other, that did not mis-name one screen -- it made every other screen in
+    the game unreachable for the rest of the session.
+    """
 
-    def test_an_unreadable_flag_is_not_open(self):
+    PANEL = (640, 480, [PAGE_PREV, PAGE_NEXT])
+
+    def test_open_when_the_panel_is_open(self):
+        p = fakes.memory_with_windows([(800, 100, []), self.PANEL])
+        self.assertTrue(SlotScreen(p).showing)
+
+    def test_closed_when_it_is_not_in_the_window_list(self):
+        p = fakes.memory_with_windows([(800, 100, []), (1024, 768, [])])
+        self.assertFalse(SlotScreen(p).showing)
+
+    def test_a_different_640_by_480_panel_is_not_this_screen(self):
+        """The character sheet and Pipboy are 640x480 as well."""
+        p = fakes.memory_with_windows([(640, 480, [500, 501])])
+        self.assertFalse(SlotScreen(p).showing)
+
+    def test_nothing_open_at_all_is_not_open(self):
+        self.assertFalse(SlotScreen(fakes.memory_with_windows([])).showing)
+
+    def test_unreadable_memory_is_not_open(self):
         self.assertFalse(SlotScreen(FakeProc()).showing)
 
 

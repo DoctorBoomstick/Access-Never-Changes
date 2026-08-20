@@ -176,6 +176,82 @@ def _plausible(wid: int, l: int, t: int, r: int, b: int, w: int, h: int) -> bool
     return 0 < w < MAX_SCREEN and 0 < h < MAX_SCREEN
 
 
+# GNW's array of pointers to the windows that are actually OPEN, in draw order,
+# ending at the first null. Found by taking windows identified by shape and
+# searching the executable's static data for their addresses: five of them
+# turned up four bytes apart, which is an array or nothing.
+#
+# This is the difference between "a window with this shape exists somewhere in
+# the heap" and "this window is on screen", and the difference is not academic.
+# Searching by shape finds FREED windows too -- they keep their fields, which is
+# why `find_window_at` prefers the richest match -- so once the save screen had
+# been opened, a dead 640x480 struct sat in the heap for the rest of the session
+# and answered "yes, the save screen is showing" for ever after.
+WINDOW_LIST = 0x006ADE58
+MAX_WINDOWS = 64
+
+
+def live_window_addresses(proc) -> List[int]:
+    """The address of every window currently open, in draw order."""
+    blob = proc.read_chunked(WINDOW_LIST, 4 * MAX_WINDOWS)
+    if not blob:
+        return []
+    out: List[int] = []
+    for i in range(min(MAX_WINDOWS, len(blob) // 4)):
+        ptr = struct.unpack_from("<I", blob, i * 4)[0]
+        if not ptr:
+            break
+        out.append(ptr)
+    return out
+
+
+def live_windows(proc, buttons: bool = False) -> List[Window]:
+    """Every window currently open, read through GNW's own list.
+
+    `buttons` is off by default because walking a button list costs a read per
+    button and most callers only want the shapes.
+    """
+    out: List[Window] = []
+    for addr in live_window_addresses(proc):
+        blob = proc.read_chunked(addr, W_SIZE)
+        if not blob or len(blob) < W_SIZE:
+            continue
+        wid, flags, l, t, r, b, w, h = struct.unpack_from("<8i", blob, 0)
+        if not _plausible(wid, l, t, r, b, w, h):
+            continue
+        head = struct.unpack_from("<I", blob, W_BUTTONS)[0]
+        out.append(Window(id=wid, flags=flags, left=l, top=t, width=w, height=h,
+                          addr=addr,
+                          buttons=_read_buttons(proc, head) if (buttons and head)
+                          else []))
+    return out
+
+
+def live_window_with(proc, width: int, height: int, press: int
+                     ) -> Optional[Window]:
+    """An open window of this size carrying a button with this press code.
+
+    Size alone is not enough to name a screen: at this resolution the character
+    sheet, the Pipboy and the save screen are all 640x480 panels. The button is
+    what says which one it is.
+    """
+    for win in live_windows(proc):
+        # Size first, buttons only for the few that match. This runs on every
+        # poll tick, and walking the button list of every open window -- the
+        # interface bar alone has ten -- to answer a question the size already
+        # settles is work for nothing.
+        if (win.width, win.height) != (width, height):
+            continue
+        blob = proc.read_chunked(win.addr, W_SIZE)
+        if not blob or len(blob) < W_SIZE:
+            continue
+        head = struct.unpack_from("<I", blob, W_BUTTONS)[0]
+        buttons = _read_buttons(proc, head) if head else []
+        if any(b.press == press for b in buttons):
+            return win._replace(buttons=buttons)
+    return None
+
+
 def find_windows(proc, want_id: Optional[int] = None) -> List[Window]:
     """Every open GNW window, newest allocations last.
 

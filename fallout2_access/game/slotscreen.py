@@ -11,12 +11,19 @@ navigable all along and simply silent, which is the failure this project keeps
 meeting: a working thing that makes no sound is indistinguishable from a broken
 one.
 
-Three readings, all confirmed against a live game:
+**Whether the screen is showing is asked of GNW's window list**, not of a flag,
+and the difference is the most expensive lesson in this file. There was a flag,
+0x00614858, "confirmed" by reading non-zero with the screen up and zero at the
+main menu -- which is all the evidence you can gather from a screen you have
+never closed. It does not clear on the way out. Since `screens.detect` tests
+this screen before any other, one stuck flag did not mis-name one screen: it
+hid every screen in the game behind it for the rest of the session.
 
-`OPEN` is non-zero while either screen is up and zero at the main menu. That
-matters because no in-game script runs before a game is loaded, so the usual
-"ask the script for the game mode" is unavailable here and the screen has to be
-recognised from memory alone.
+That test has to work before a game is loaded, since no in-game script is
+running at the main menu and there is no game mode to ask for. An open window is
+a fact available in both places; `showing()` below finds the panel by its page
+buttons, because at this resolution the character sheet and the Pipboy are
+640x480 too.
 
 `SELECTION` is the highlighted row, 0 to 9, clamping at both ends rather than
 wrapping. The first candidate for this was wrong in an instructive way: it rose
@@ -60,8 +67,24 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-# Non-zero while the save or load screen is showing.
-OPEN = 0x00614858
+# The screen is recognised by its own window being OPEN, not by a flag.
+#
+# There was a flag here -- 0x00614858 -- and it was wrong in the way that costs
+# the most: it read non-zero with the screen up and zero at a freshly launched
+# main menu, which is exactly the evidence you get from testing a screen you
+# have never closed. Once the save screen had been opened and left, it kept
+# reading non-zero, and since `detect` consults this first and before anything
+# else, every other screen in the game became unreachable -- the mod answered
+# "load game" to the map, to character selection, to everything.
+#
+# The window is the honest test. It exists while the screen is up and is taken
+# out of GNW's list when it closes, and the page buttons identify it among the
+# other 640x480 panels.
+def showing(proc) -> bool:
+    """Is the save or load screen on screen right now?"""
+    from . import uiwindow
+    return uiwindow.live_window_with(
+        proc, PANEL_WIDTH, PANEL_HEIGHT, PAGE_NEXT) is not None
 
 # The highlighted row on the visible page: 0..9, clamped at both ends.
 SELECTION = 0x005193B8
@@ -241,8 +264,7 @@ class SlotScreen:
 
     @property
     def showing(self) -> bool:
-        value = self.proc.read_i32(OPEN)
-        return bool(value)
+        return showing(self.proc)
 
     def selection(self) -> Optional[int]:
         """The highlighted row, or None if it reads implausibly.
