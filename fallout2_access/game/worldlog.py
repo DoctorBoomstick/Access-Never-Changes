@@ -73,6 +73,38 @@ def status_line(line: str) -> Optional[str]:
     return " ".join(parts)
 
 
+# "WORLD:useitem try Plastic Explosives|Impenetrable Door|"
+_USEITEM_RE = re.compile(r"WORLD:useitem (\w+)\s*([^|]*)\|?([^|]*)\|?")
+
+
+def use_item_line(line: str) -> Optional[str]:
+    """Turn a WORLD:useitem line into the sentence to say, or None.
+
+    Four outcomes, and the wording keeps them apart because they need
+    different things done about them: nothing in your hand, nothing to use it
+    on, the attempt starting, and the attempt returning.
+
+    "Done" deliberately does not claim success. The engine runs the object's own
+    handler, and whether a door opens or a lock refuses is something the game
+    says in its own words through the display window -- which this mod already
+    reads aloud. Inventing a verdict here would put a second, less informed
+    voice on top of the one that actually knows.
+    """
+    m = _USEITEM_RE.match(line)
+    if not m:
+        return None
+    what, item, target = m.group(1), m.group(2).strip(), m.group(3).strip()
+    if what == "empty":
+        return "Your hands are empty. Ready an item first."
+    if what == "notarget":
+        return "Nothing there to use it on."
+    if what == "try":
+        return "Using {} on {}.".format(item or "that", target or "it")
+    if what == "done":
+        return None      # the game's own message follows and says more
+    return None
+
+
 class HexReading(NamedTuple):
     tile: int
     distance: int

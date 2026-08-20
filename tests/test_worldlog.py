@@ -152,3 +152,44 @@ class TestStatusLine(unittest.TestCase):
     def test_an_unparsable_line_is_not_spoken(self):
         self.assertIsNone(worldlog.status_line("WORLD:status garbage"))
         self.assertIsNone(worldlog.status_line("WORLD:hex 17488 dist 0 : you|"))
+
+
+class TestUseItemLine(unittest.TestCase):
+    """Using the item in your hand on the thing the look cursor is on.
+
+    The one action the engine's menu offered that nothing else could reach:
+    walking, attacking, using an object and using a skill are all cursor modes,
+    and "use an ITEM on that" is not.
+    """
+
+    def say(self, line):
+        return worldlog.use_item_line(line)
+
+    def test_the_attempt_names_both_halves(self):
+        self.assertEqual(
+            self.say("WORLD:useitem try Plastic Explosives|Impenetrable Door|"),
+            "Using Plastic Explosives on Impenetrable Door.")
+
+    def test_empty_hands_say_what_to_do_about_it(self):
+        """A refusal that does not say how to proceed is a dead end to someone
+        who cannot see the hand slots."""
+        text = self.say("WORLD:useitem empty|")
+        self.assertIn("empty", text)
+        self.assertIn("Ready an item", text)
+
+    def test_nothing_to_use_it_on(self):
+        self.assertEqual(self.say("WORLD:useitem notarget 14322|"),
+                         "Nothing there to use it on.")
+
+    def test_finishing_says_nothing_and_that_is_deliberate(self):
+        """The engine runs the object's own handler and reports the outcome in
+        its own words through the display window, which the mod already reads.
+        A verdict invented here would talk over the one voice that knows."""
+        self.assertIsNone(
+            self.say("WORLD:useitem done Plastic Explosives|Impenetrable Door|"))
+
+    def test_an_unknown_outcome_is_silent_rather_than_raw(self):
+        self.assertIsNone(self.say("WORLD:useitem wat|"))
+
+    def test_a_line_that_is_not_ours_is_ignored(self):
+        self.assertIsNone(self.say("WORLD:hex 14322 dist 1 : Door|"))

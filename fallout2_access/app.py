@@ -397,6 +397,10 @@ class WorldWatcher(Watcher):
                 said = worldlog.status_line(line)
                 if said:
                     self._queue.append((said, True))
+            elif line.startswith("WORLD:useitem"):
+                said = worldlog.use_item_line(line)
+                if said:
+                    self._queue.append((said, True))
             elif line.startswith("WORLD:hex") and self.log.last_hex:
                 self._queue.append((self.log.last_hex, True))
             elif line.startswith("WORLD:gamemode"):

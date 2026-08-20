@@ -462,6 +462,39 @@ Two things worth knowing:
 Compare two objects and you can see the engine discriminating: a pot offers
 *use it*, a stone bench does not, because you cannot open a bench.
 
+### Using an item on something — U
+
+When the readout says **"use an item on it"**, that's the backpack icon, and it
+is the one action with no cursor mode behind it. Walking, attacking, using an
+object and using a skill are all "set the cursor and click"; applying one of
+*your* items to something is not.
+
+Ready the item in a hand slot, point at the target with the numpad, and press
+**U**:
+
+    Using Plastic Explosives on Impenetrable Door.
+
+Then the game speaks for itself — whatever it would have told a sighted player
+appears in the message window, which the mod already reads aloud. The mod does
+**not** invent a verdict of its own; the engine knows whether the lock turned
+and it doesn't.
+
+No pointer is involved. The script already knows which hex your look cursor is
+on and asks the engine to apply the item directly, so there's no aiming delay
+and nothing to miss.
+
+| It says | What happened |
+|---|---|
+| "Your hands are empty. Ready an item first." | nothing in the active hand |
+| "Nothing there to use it on." | the hex holds no object |
+| "Using X on Y." | the attempt is under way; listen for the game's reply |
+
+**The explosive timer is still not readable.** Planting a charge opens a window
+for setting the countdown, and that window has not been made usable yet — so U
+will get the explosive onto the door and then leave you at a prompt the mod
+cannot yet describe. That's the next piece of work, and the countdown stays
+yours to choose.
+
 A left click acts on the hex your look cursor is on: the mod moves the pointer
 there first, because that is the part you cannot do yourself, then sets the
 cursor mode to match what you selected.

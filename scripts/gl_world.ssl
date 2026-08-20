@@ -75,6 +75,7 @@
 #define ACT_NORTH          (-14)
 #define ACT_SOUTH          (-15)
 #define ACT_STATUS         (-16)
+#define ACT_USE_ITEM       (-17)
 
 variable g_cursor := CURSOR_UNSET;
 variable g_lastmode := -1;
@@ -121,6 +122,7 @@ procedure scan_jump;
 procedure prepare_cursor;
 procedure on_useskill;
 procedure obj_is_real(variable obj);
+procedure use_item_on_cursor;
 procedure report_status;
 
 /*
@@ -449,6 +451,7 @@ procedure on_key begin
    end
    else if (key == DIK_SEMICOLON) then dir := ACT_STATUS;
    else if (key == DIK_SLASH) then dir := ACT_SCAN_JUMP;
+   else if (key == DIK_U) then dir := ACT_USE_ITEM;
    else if (key == DIK_BACKSLASH) then dir := ACT_PREPARE;
    else return;
 
@@ -472,6 +475,7 @@ procedure on_key begin
    else if (dir == ACT_SCAN_CATPREV)  then call scan_category(-1);
    else if (dir == ACT_SCAN_JUMP)     then call scan_jump;
    else if (dir == ACT_PREPARE)       then call prepare_cursor;
+   else if (dir == ACT_USE_ITEM)      then call use_item_on_cursor;
    else                               call step_cursor(dir);
 
    set_sfall_return(0);   // swallow the key so the game does not also act
@@ -993,6 +997,80 @@ procedure report_status begin
       + get_critter_stat(dude_obj, STAT_max_move_points) + "|"
       + get_critter_stat(dude_obj, STAT_ac) + "|"
       + (combat_is_initialized != 0) + "|");
+end
+
+/*
+ * use_item_on_cursor  --  use what is in your hand on what you are pointing at.
+ *
+ * This is the one thing the action menu offers that nothing else could reach.
+ * Walking, attacking and using an object are all "set the cursor mode and
+ * click", and skills are the same with a skill armed -- but "use an ITEM on
+ * that" has no cursor mode at all. A sighted player gets it from the backpack
+ * icon in the menu that appears when you hold the button on something, and that
+ * menu is drawn as a mouse cursor rather than a window, so there was no way in.
+ *
+ * There is no pointer here at all. The script already knows which hex the look
+ * cursor is on and the engine will apply an item to an object directly, so this
+ * asks the engine rather than driving the mouse and hoping -- and the same call
+ * runs the object's own use_obj_on_p_proc, which is what actually opens a door
+ * or plants a charge.
+ *
+ * set_self twice is not a typo. sfall's own notes say use_obj and use_obj_on_obj
+ * need it to work correctly, and its use_item_on_dude macro is written the same
+ * way.
+ */
+procedure use_item_on_cursor begin
+   variable item, elev, objs, total, i, obj, target;
+
+   // The active hand. critter_inven_obj reports whichever hand is active
+   // rather than a fixed one, which is the behaviour that cost a round of
+   // debugging in the inventory and is exactly what is wanted here: the item
+   // you are holding is the item you mean.
+   item := critter_inven_obj(dude_obj, INVEN_TYPE_RIGHT_HAND);
+   if (not item) then begin
+      debug_msg("WORLD:useitem empty|");
+      return;
+   end
+
+   elev := elevation(dude_obj);
+   objs := tile_get_objs(g_cursor, elev);
+   total := 0;
+   if (objs) then begin
+      total := len_array(objs);
+   end
+
+   // The first real thing on the hex. Nested rather than joined with `and`:
+   // SSL does NOT short-circuit, and evaluating obj_is_real on a null is the
+   // shape that produced 341 null dereferences the last time it was written
+   // the obvious way.
+   target := 0;
+   i := 0;
+   while (i < total) do begin
+      obj := objs[i];
+      if (obj) then begin
+         if (obj != dude_obj) then begin
+            if (obj_is_real(obj)) then begin
+               if (not target) then target := obj;
+            end
+         end
+      end
+      i := i + 1;
+   end
+
+   if (not target) then begin
+      debug_msg("WORLD:useitem notarget " + g_cursor + "|");
+      return;
+   end
+
+   // Announce the attempt before making it. If the engine crashes on this
+   // combination -- and it has crashed on odd object types before -- the log
+   // says what was being tried rather than stopping mid-sentence.
+   debug_msg("WORLD:useitem try " + obj_name(item) + "|" + obj_name(target) + "|");
+   set_self(dude_obj);
+   set_self(dude_obj);
+   use_obj_on_obj(item, target);
+   set_self(0);
+   debug_msg("WORLD:useitem done " + obj_name(item) + "|" + obj_name(target) + "|");
 end
 
 procedure obj_is_real(variable obj) begin
