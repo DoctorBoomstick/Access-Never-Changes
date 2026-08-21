@@ -1205,10 +1205,28 @@ procedure menu_do begin
 
    if (code == ACT_USE) then begin
       debug_msg("WORLD:useobj try " + obj_name(target) + "|");
+      /*
+       * self is the USER, and sfall's macro cannot settle it either way.
+       *
+       *   use_item_on_dude(item)  set_self(dude_obj); set_self(dude_obj);
+       *                           use_obj_on_obj(item, dude_obj)
+       *
+       * There the target IS dude_obj, so self and target coincide and the
+       * macro reads correctly under either interpretation. The engine's own
+       * implementation is what decides: it takes self and passes it as the
+       * critter DOING the action. So this stays on the player.
+       *
+       * Logged, because set_self silently doing nothing inside a global script
+       * would look exactly like the engine ignoring the call -- and telling
+       * those two apart is the whole question.
+       */
+      debug_msg("WORLD:selfdbg before=" + obj_name(self_obj) + "|");
       set_self(dude_obj);
       set_self(dude_obj);
+      debug_msg("WORLD:selfdbg after=" + obj_name(self_obj) + "|");
       use_obj(target);
       set_self(0);
+      debug_msg("WORLD:useobj done mode=" + get_game_mode + "|");
       return;
    end
 
@@ -1238,10 +1256,13 @@ procedure menu_do begin
       end
       debug_msg("WORLD:useitem try " + obj_name(item) + "|"
          + obj_name(target) + "|");
+      debug_msg("WORLD:selfdbg before=" + obj_name(self_obj) + "|");
       set_self(dude_obj);
       set_self(dude_obj);
+      debug_msg("WORLD:selfdbg after=" + obj_name(self_obj) + "|");
       use_obj_on_obj(item, target);
       set_self(0);
+      debug_msg("WORLD:useitem done mode=" + get_game_mode + "|");
       return;
     end
 

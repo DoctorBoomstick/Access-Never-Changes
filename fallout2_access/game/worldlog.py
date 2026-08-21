@@ -174,9 +174,7 @@ def use_item_line(line: str) -> Optional[str]:
         return "Nothing there to use it on."
     if what == "try":
         return "Using {} on {}.".format(item or "that", target or "it")
-    if what == "done":
-        return None      # the game's own message follows and says more
-    return None
+    return None      # "done" carries diagnostics; the game's own words follow
 
 
 class HexReading(NamedTuple):
