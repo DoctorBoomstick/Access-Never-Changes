@@ -30,7 +30,9 @@ from .game.aim import Aimer
 from .game.chargen import CharGen
 from .game.combat import CombatWatcher
 from .game.displaywin import DisplayWindow
-from .game import actions, itemmove, slotscreen, timerwin, uiwindow
+from .game import (actions, itemactions, itemmove, slotscreen,
+                   timerwin, uiwindow)
+from .game import inventory
 from .game.inventory import InventoryWatcher
 from .game.premade import PremadeScreen
 from .game.saves import SaveWatcher
@@ -347,6 +349,8 @@ class WorldWatcher(Watcher):
         # question, and the tests drive everything else with log lines alone.
         self.aimer = None
         self.hwnd: Optional[int] = None
+        # An item-menu choice waiting to be carried out.
+        self.pending_item_action: Optional[str] = None
         # What the pointer was actually put on when the menu was built.
         # The script names the object it opened the menu for, and the two
         # must agree -- the action array is never cleared, only overwritten,
@@ -386,6 +390,15 @@ class WorldWatcher(Watcher):
             elif line.startswith("INVEN:rect"):
                 self._queue.extend((t, True) for t in self.inventory.handle(line))
                 self._dump_buttons()
+            elif line.startswith("INVEN:menu"):
+                said = inventory.menu_line(line)
+                if said:
+                    self._queue.append((said, True))
+            elif line.startswith("INVEN:do"):
+                # Enter in the item menu. The script cannot do these -- they
+                # need the pointer -- so it writes the choice down and the loop
+                # picks it up on the next tick, off this parsing path.
+                self.pending_item_action = line
             elif line.startswith("INVEN:"):
                 # Urgent throughout: every one of these is the answer to
                 # something the player just did -- a key that stepped the list,
@@ -544,9 +557,13 @@ class WorldWatcher(Watcher):
         stays with the player.
         """
         if self.inventory.open:
-            # A panel over the map takes the question with it, the same way
-            # `repeat` does.
-            ann.answer(self.inventory.repeat() or HELP_NOTHING)
+            # Same key, same idea, different list: on the map this asks what can
+            # be done to the thing you are pointing at, and in the inventory it
+            # asks what can be done to the item you have selected.
+            if self.hwnd is None:
+                ann.answer(self.inventory.repeat() or HELP_NOTHING)
+                return
+            guarded_tap(self.hwnd, "m", settle=0.2)
             return
         if self.aimer is None or self.proc is None:
             ann.answer("Not attached to the game.")
@@ -1092,6 +1109,38 @@ class App:
         """
         self._pending.append((what, time.time()))
 
+    def _run_item_action(self) -> None:
+        """Carry out an item-menu choice, off the log-parsing path.
+
+        Done here rather than where the line is read because these actions take
+        seconds and drive the pointer, and doing that in the middle of parsing a
+        batch of log lines would stall the rest of them behind it.
+        """
+        line = self.world.pending_item_action if self.world else None
+        if not line:
+            return
+        self.world.pending_item_action = None
+        m = inventory._DO.match(line)
+        if not m:
+            return
+        what, name, side, index, total, active = (
+            m.group(1).strip(), m.group(2).strip(), int(m.group(3)),
+            int(m.group(4)), int(m.group(5)), m.group(6) == "1")
+        if self.proc is None or self.hwnd is None:
+            self.ann.answer("Not attached to the game.")
+            return
+
+        self.ann.answer("{} {}.".format(what.capitalize(), name))
+        if what.startswith("use"):
+            done, why = itemactions.use(self.proc, self.hwnd, side, index, active)
+        elif what.startswith("drop"):
+            done, why = itemactions.drop(self.world.finder, self.proc,
+                                         self.hwnd, side, index, total)
+        else:
+            done, why = False, "The mod has no way to do that yet."
+        if not done:
+            self.ann.answer(why or "That did not work.")
+
     def _run_pending(self) -> None:
         while self._pending:
             what, queued_at = self._pending.pop(0)
@@ -1214,6 +1263,7 @@ class App:
         # Hotkeys last: an aimed click sends its own keystrokes and reads the
         # same log, so it must not run half way through a screen transition.
         self._run_pending()
+        self._run_item_action()
 
     def run(self, on_tick: Optional[Callable[[], None]] = None) -> None:
         period = 1.0 / POLL_HZ

@@ -493,6 +493,37 @@ itself — whatever it would have told a sighted player appears in the message
 window, which the mod already reads aloud. The mod does **not** invent a verdict
 of its own; the engine knows whether the lock turned and it doesn't.
 
+### What can I do with this item? — numpad .
+
+Select an item with the numpad, then press **numpad .** inside the inventory.
+Same idea as the map's action menu, same keys:
+
+    Plastic Explosives. 2 actions. Use it, 1 of 2.
+
+| Key | In the list |
+|---|---|
+| Up / Down | move through the actions |
+| Enter | do the selected one |
+| Escape | back out |
+
+**Use it** is how an explosive gets armed, a stimpak gets used, and anything
+else with a use gets used. It ends in a click on the interface bar's item slot —
+the only route to using a carried item that exists, since no cursor mode means
+"use an item" and the inventory window has no Use button at all. The mod swaps
+your active hand if it needs to, closes the inventory, and clicks.
+
+The item has to be **in one of your hands**; from your pack it says so. And the
+mod checks which item is live before clicking, because that slot acts on the
+*active* item — clicking it with a weapon live **attacks**.
+
+**Drop it** puts the item on the ground at your feet.
+
+One honest difference from the map's menu: **this list is the mod's, not the
+engine's.** Fallout keeps no action list for inventory items — holding the mouse
+button on every carried row and every worn slot left the map's action array
+unchanged, still reading whatever object it was last built for. So this menu can
+only ever offer what somebody here thought of, where the map's grows by itself.
+
 ### Arming an explosive, and the countdown
 
 Explosives do not get used *on* a door — the game does not work that way. You

@@ -64,6 +64,39 @@ _ENTRY = re.compile(
     r"INVEN:entry (\d+)\|(\d+)\|(\d+)\|([^|]*)\|(-?\d+)\|(-?\d+)\|(-?\d+)\|"
 )
 _NONE = re.compile(r"INVEN:none (\d+)\|")
+# The item menu: the map's action menu, for what you carry.
+_MENU = re.compile(r"INVEN:menu (\w+)\|?([^|]*)\|?([^|]*)\|?([^|]*)\|?")
+# action | item | side | index | total | is it the ACTIVE item
+_DO = re.compile(r"INVEN:do\|([^|]*)\|([^|]*)\|(\d+)\|(\d+)\|(\d+)\|(\d+)\|")
+
+
+def menu_line(line):
+    """Turn an INVEN:menu line into the sentence to say, or None.
+
+    Deliberately the same shape as the map's action menu -- arrows move, Enter
+    does it -- because it is the same idea and a second set of habits to learn
+    would be a worse answer than a slightly duller one.
+    """
+    m = _MENU.match(line)
+    if not m:
+        return None
+    what = m.group(1)
+    if what == "none":
+        return "Nothing selected."
+    if what == "closed":
+        return "Closed."
+    if what == "gone":
+        return "That item is no longer there."
+    if what == "open":
+        name, count, first = (m.group(2).strip(), m.group(3).strip(),
+                              m.group(4).strip())
+        return "{}. {} actions. {}, 1 of {}.".format(
+            name or "That", count, first.capitalize(), count)
+    if what == "at":
+        label, index, count = (m.group(2).strip(), m.group(3).strip(),
+                               m.group(4).strip())
+        return "{}, {} of {}.".format(label.capitalize(), index, count)
+    return None
 _SUMMARY = re.compile(
     r"INVEN:summary (\d+)\|(-?\d+)\|(-?\d+)\|(\d+)\|(\d+)\|(-?\d+)\|"
 )

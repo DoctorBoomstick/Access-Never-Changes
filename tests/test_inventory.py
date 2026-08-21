@@ -8,6 +8,7 @@ wording tells them apart -- an empty hand and an empty container are both
 
 import unittest
 
+from fallout2_access.game import inventory
 from fallout2_access.game.inventory import (
     SIDE_MINE,
     SIDE_THEIRS,
@@ -204,3 +205,60 @@ class TestStateForMoving(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestItemMenu(unittest.TestCase):
+    """The map's action menu, for what you carry.
+
+    Deliberately the same shape -- arrows move, Enter does it -- because it is
+    the same idea, and a second set of habits to learn would be a worse answer
+    than a slightly duller one. The contents differ in kind, though: the engine
+    offers no action list for inventory items, so this list is the mod's own and
+    can only ever hold what somebody thought of.
+    """
+
+    def test_opening_names_the_item_and_the_first_action(self):
+        self.assertEqual(
+            inventory.menu_line("INVEN:menu open|Plastic Explosives|2|use it|"),
+            "Plastic Explosives. 2 actions. Use it, 1 of 2.")
+
+    def test_moving_says_where_you_are(self):
+        self.assertEqual(inventory.menu_line("INVEN:menu at|drop it|2|2|"),
+                         "Drop it, 2 of 2.")
+
+    def test_nothing_selected(self):
+        self.assertEqual(inventory.menu_line("INVEN:menu none|"),
+                         "Nothing selected.")
+
+    def test_backing_out(self):
+        self.assertEqual(inventory.menu_line("INVEN:menu closed|"), "Closed.")
+
+    def test_an_item_that_went_away(self):
+        self.assertEqual(inventory.menu_line("INVEN:menu gone|"),
+                         "That item is no longer there.")
+
+    def test_a_line_that_is_not_ours(self):
+        self.assertIsNone(inventory.menu_line("INVEN:entry 0|0|1|Spear|1|4|-1|0|"))
+
+
+class TestItemChoice(unittest.TestCase):
+    """What Enter writes down for the Python side to carry out.
+
+    It carries the side and index because the list cursor may have moved by the
+    time anything acts on it, and whether the item is ACTIVE because "use it"
+    ends in a click on the interface bar's item slot -- and that slot acts on
+    the active item, attacking if a weapon is live.
+    """
+
+    def test_a_choice_parses(self):
+        m = inventory._DO.match(
+            "INVEN:do|use it|Plastic Explosives|2|1|3|1|")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "use it")
+        self.assertEqual(m.group(2), "Plastic Explosives")
+        self.assertEqual((m.group(3), m.group(4)), ("2", "1"))
+        self.assertEqual(m.group(6), "1")
+
+    def test_an_inactive_item_is_reported_as_such(self):
+        m = inventory._DO.match("INVEN:do|drop it|Spear|2|2|3|0|")
+        self.assertEqual(m.group(6), "0")

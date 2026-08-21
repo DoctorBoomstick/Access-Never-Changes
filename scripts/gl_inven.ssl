@@ -68,10 +68,18 @@ variable g_label := "";
 variable g_count := 0;
 variable g_item := 0;
 variable g_other := 0;
+variable g_imenu := 0;
+variable g_imenu_index := 0;
 
 procedure start;
 procedure poll_inven;
 procedure on_key;
+procedure imenu_open;
+procedure imenu_close;
+procedure imenu_step(variable delta);
+procedure imenu_do;
+procedure imenu_label(variable which);
+procedure worn_slot(variable index);
 procedure side_owner(variable side);
 procedure side_count(variable side);
 procedure side_usable(variable side);
@@ -435,6 +443,103 @@ end
  * declines the same keys whenever a panel covers the map, so exactly one of the
  * two acts on any given press and neither has to know about the other.
  */
+/*
+ * The item menu: the same thing the map's action menu is, for what you carry.
+ *
+ * The engine does NOT offer a list for inventory items. Holding the button on
+ * every carried row and every worn slot in turn left the map's action array
+ * reading the last OBJECT it was built for, unchanged -- so unlike the map
+ * menu, whose contents come from the engine, this list is the mod's own.
+ *
+ * That is a real difference and worth stating rather than hiding: this menu can
+ * only ever offer what somebody here thought of. It earns its place anyway,
+ * because the routes behind it exist and had no keys at all -- "use it" is how
+ * an explosive gets armed, and it was previously reachable only by clicking a
+ * slot on the interface bar, which is precisely what a blind player cannot do.
+ *
+ * The script owns the menu because arrows and Enter have to be SWALLOWED while
+ * it is up. The ACTIONS belong to the Python side, which can drive the pointer,
+ * so Enter writes a line for it to act on rather than doing the work here.
+ */
+#define IMENU_COUNT     (2)
+#define IMENU_USE       (0)
+#define IMENU_DROP      (1)
+
+procedure worn_slot(variable index) begin
+   // The middle column, in the order this script reports it: armour, then the
+   // two hands. Same mapping side_item uses; kept as its own procedure so the
+   // active-hand test cannot drift away from the list it is testing.
+   if (index == 0) then return INVEN_TYPE_WORN;
+   if (index == 1) then return INVEN_TYPE_RIGHT_HAND;
+   return INVEN_TYPE_LEFT_HAND;
+end
+
+procedure imenu_label(variable which) begin
+   if (which == IMENU_USE)  then return "use it";
+   if (which == IMENU_DROP) then return "drop it";
+   return "action " + which;
+end
+
+procedure imenu_open begin
+   if (not g_item) then begin
+      debug_msg("INVEN:menu none" + SEP);
+      return;
+   end
+   g_imenu := 1;
+   g_imenu_index := 0;
+   debug_msg("INVEN:menu open" + SEP + g_label + SEP + IMENU_COUNT
+      + SEP + imenu_label(0) + SEP);
+end
+
+procedure imenu_close begin
+   g_imenu := 0;
+   g_imenu_index := 0;
+end
+
+procedure imenu_step(variable delta) begin
+   variable next;
+
+   next := g_imenu_index + delta;
+   // Clamped, not wrapped: a list you can walk off the end of without noticing
+   // is one you will act from without meaning to.
+   if (next < 0) then next := 0;
+   if (next >= IMENU_COUNT) then next := IMENU_COUNT - 1;
+   g_imenu_index := next;
+   debug_msg("INVEN:menu at" + SEP + imenu_label(g_imenu_index) + SEP
+      + (g_imenu_index + 1) + SEP + IMENU_COUNT + SEP);
+end
+
+procedure imenu_do begin
+   variable which, active;
+
+   which := g_imenu_index;
+   call imenu_close;
+   if (not g_item) then begin
+      debug_msg("INVEN:menu gone" + SEP);
+      return;
+   end
+   /*
+    * The side and index go with it, because by the time the other side acts on
+    * this the list cursor may have been moved.
+    *
+    * So does whether this item is the ACTIVE one. critter_inven_obj answers
+    * only for the active hand -- ask it about the other and it says nothing --
+    * which makes it useless as a reading and exact as this test. The Python
+    * side needs it because "use it" ends in a click on the interface bar's item
+    * slot, and that slot acts on the active item: clicking it with a WEAPON
+    * live attacks instead, which is how a fight started and a charge got
+    * dropped during development.
+    */
+   active := 0;
+   if (g_side == SIDE_WORN) then begin
+      if (critter_inven_obj(dude_obj, worn_slot(g_index)) == g_item) then
+         active := 1;
+   end
+   debug_msg("INVEN:do" + SEP + imenu_label(which) + SEP + g_label
+      + SEP + g_side + SEP + g_index + SEP + side_count(g_side)
+      + SEP + active + SEP);
+end
+
 procedure on_key begin
    variable event, key, act;
 
@@ -442,6 +547,40 @@ procedure on_key begin
    key := get_sfall_arg;
    if (event != 1) then return;
    if (not (get_game_mode bwand INVEN_MODES)) then return;
+
+   /*
+    * The item menu owns the keyboard while it is up, and these keys must be
+    * SWALLOWED or the inventory window acts on them underneath the menu.
+    */
+   if (g_imenu) then begin
+      if (key == DIK_UP) then begin
+         call imenu_step(-1);
+         set_sfall_return(0);
+         return;
+      end
+      if (key == DIK_DOWN) then begin
+         call imenu_step(1);
+         set_sfall_return(0);
+         return;
+      end
+      if (key == DIK_RETURN) then begin
+         call imenu_do;
+         set_sfall_return(0);
+         return;
+      end
+      if (key == DIK_ESCAPE) then begin
+         call imenu_close;
+         debug_msg("INVEN:menu closed" + SEP);
+         set_sfall_return(0);
+         return;
+      end
+   end
+
+   if (key == DIK_M) then begin
+      call imenu_open;
+      set_sfall_return(0);
+      return;
+   end
 
    /*
     * The engine's own list keys, watched and deliberately NOT swallowed.
