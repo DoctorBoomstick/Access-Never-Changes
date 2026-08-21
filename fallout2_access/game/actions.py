@@ -130,11 +130,17 @@ def open_menu(proc, aimer, hwnd) -> tuple:
         # gets the PREVIOUS object's list -- and since it is never empty, a
         # stale read looks exactly like a good one.
         time.sleep(0.6)
+        # Hand over while the pointer is STILL ON THE OBJECT. The script asks
+        # the engine what is under the pointer, and that has to be asked before
+        # the pointer is moved off -- the first version tapped this after
+        # stepping aside, which left the script to guess from the hex instead,
+        # and on a tile holding both a door and a stone plate it guessed wrong.
+        guarded_tap(hwnd, "m", settle=0.15)
     finally:
+        # Only now step away, so releasing cannot land on the object and
+        # perform its default action.
         move_mouse_relative(CANCEL_DX, CANCEL_DY, settle=0.05, hwnd=hwnd)
         time.sleep(0.2)
         mouse_up("left")
         time.sleep(0.25)
-
-    guarded_tap(hwnd, "m", settle=0.2)
     return what, ""

@@ -140,7 +140,6 @@ procedure scan_jump;
 procedure prepare_cursor;
 procedure on_useskill;
 procedure obj_is_real(variable obj);
-procedure target_at_cursor;
 procedure menu_open;
 procedure menu_close;
 procedure menu_step(variable delta);
@@ -1114,9 +1113,35 @@ end
  * to whatever the cursor is over when Enter is finally pressed.
  */
 procedure menu_open begin
-   variable i, code;
+   variable i, code, ou;
 
-   g_menu_target := target_at_cursor;
+   /*
+    * The object under the POINTER, not the first one on the hex.
+    *
+    * These are different things and the difference is not rare: the Temple
+    * door and a raised stone plate share a tile, so "the first real object on
+    * the hex" was the plate while the engine had built its action list for the
+    * door. The menu would have listed the door's actions and applied them to
+    * the plate.
+    *
+    * obj_under_cursor is the same question the engine answered when it filled
+    * the array in, and the same one prepare_cursor asks -- so the two halves
+    * of this feature now agree by construction rather than by luck, and the
+    * mismatch check becomes a real safety net instead of a false alarm.
+    *
+    * Critters first and separately: with onlyCritter set the engine ignores
+    * their cover, and without it "can't check critters under objects" hides an
+    * enemy standing in scenery.
+    */
+   ou := obj_under_cursor(1, 0);
+   if (not ou) then begin
+      ou := obj_under_cursor(0, 0);
+   end
+   if (ou) then begin
+      if (not obj_is_real(ou)) then ou := 0;
+   end
+
+   g_menu_target := ou;
    if (not g_menu_target) then begin
       debug_msg("WORLD:menu none|");
       return;
@@ -1188,7 +1213,25 @@ procedure menu_do begin
    end
 
    if (code == ACT_INVENTORY) then begin
+      /*
+       * Whatever is in the active hand.
+       *
+       * Asking for INVEN_TYPE_RIGHT_HAND and stopping there reported empty
+       * hands to a player holding a spear in one and a brick of plastic
+       * explosive in the other. critter_inven_obj only ever admits to the hand
+       * that is ACTIVE -- ask it about the other one and it says nothing --
+       * which is useless as a reading and perfect as a probe: whichever hand
+       * it will talk about is the active one.
+       *
+       * critter_inven_obj2 is sfall's replacement without that quirk, so it
+       * covers the case where the active hand is empty but the other is not.
+       * Refusing to use a held item because it is in the wrong hand would be a
+       * distinction with no meaning to someone who cannot see the hands.
+       */
       item := critter_inven_obj(dude_obj, INVEN_TYPE_RIGHT_HAND);
+      if (not item) then item := critter_inven_obj(dude_obj, INVEN_TYPE_LEFT_HAND);
+      if (not item) then item := critter_inven_obj2(dude_obj, INVEN_TYPE_RIGHT_HAND);
+      if (not item) then item := critter_inven_obj2(dude_obj, INVEN_TYPE_LEFT_HAND);
       if (not item) then begin
          debug_msg("WORLD:useitem empty|");
          return;
@@ -1205,39 +1248,6 @@ procedure menu_do begin
    // Offered by the engine, no route here yet. Said plainly rather than
    // swallowed: silence after Enter reads as the key never arriving.
    debug_msg("WORLD:menu noroute " + menu_label(code) + "|");
-end
-
-/*
- * target_at_cursor  --  the first real object on the look cursor's hex.
- *
- * Nested ifs rather than one `and`: SSL does NOT short-circuit, and calling
- * obj_is_real on a null is the exact shape that produced 341 null dereferences
- * the last time this was written the obvious way.
- */
-procedure target_at_cursor begin
-   variable elev, objs, total, i, obj, target;
-
-   elev := elevation(dude_obj);
-   objs := tile_get_objs(g_cursor, elev);
-   total := 0;
-   if (objs) then begin
-      total := len_array(objs);
-   end
-
-   target := 0;
-   i := 0;
-   while (i < total) do begin
-      obj := objs[i];
-      if (obj) then begin
-         if (obj != dude_obj) then begin
-            if (obj_is_real(obj)) then begin
-               if (not target) then target := obj;
-            end
-         end
-      end
-      i := i + 1;
-   end
-   return target;
 end
 
 procedure obj_is_real(variable obj) begin
