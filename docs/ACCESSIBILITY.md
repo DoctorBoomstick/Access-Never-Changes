@@ -442,8 +442,22 @@ sentence rather than an action.
 
 Point at something with the numpad and press **numpad .** on the map:
 
-    Impenetrable Door. You can use it, look at it, use an item on it,
-    use a skill on it.
+    Impenetrable Door. Use it, press G. Look at it, no key for that yet.
+    Use an item on it, press U. Use a skill on it, arm a skill with 1 to 8,
+    then numpad plus.
+
+**Every entry names the key that does it**, so the readout is a menu rather
+than a description. An action the mod cannot perform yet says so, instead of
+being listed as though you had simply failed to find the key.
+
+Picking from Fallout's own icon strip is not available, and that is worth being
+straight about. It is drawn as a mouse cursor rather than a window, and nothing
+in the process tracks which icon is under the pointer — searched with the button
+held under the command cursor, through the executable's globals and then all
+290 MB of the address space, with the pointer walked ninety pixels up the strip.
+Neither you nor the mod can see the screen to check whether it even opens, so
+driving it would be guesswork wearing the costume of control. The engine still
+decides what is on offer; the mod just supplies its own way to take each one.
 
 That is not the mod's opinion. It is the list of icons Fallout itself would put
 on screen if you held the mouse button on that object — the eye, the hand, the
@@ -461,6 +475,18 @@ Two things worth knowing:
 
 Compare two objects and you can see the engine discriminating: a pot offers
 *use it*, a stone bench does not, because you cannot open a bench.
+
+### Using something — G
+
+When the readout says **"use it"**, press **G**:
+
+    Using Impenetrable Door.
+
+This is the hand icon — open a door, pull a lever, work a machine. It had no
+route at all before: the mod only ever selects the movement or targeting cursor,
+so a click on a door walked you into it, and opening one needs the command
+cursor the mod never picks. `G` skips the cursor entirely and runs the object's
+own handler.
 
 ### Using an item on something — U
 

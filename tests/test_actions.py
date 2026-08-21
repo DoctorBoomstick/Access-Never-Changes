@@ -59,12 +59,20 @@ class TestDescribe(unittest.TestCase):
     def test_the_backpack_is_named_for_what_it_does(self):
         """"Inventory" is what the engine calls it; what it MEANS is using one
         of your items on the thing -- which is the whole point of asking."""
-        self.assertIn("use an item on it", actions.describe([2]))
+        self.assertIn("Use an item on it", actions.describe([2]))
 
-    def test_a_full_container_menu_reads_as_a_sentence(self):
-        self.assertEqual(
-            actions.describe([6, 3, 2, 8]),
-            "You can use it, look at it, use an item on it, use a skill on it.")
+    def test_every_entry_carries_the_key_that_does_it(self):
+        """A list you cannot act on is half a feature -- which is exactly what
+        the first version of this shipped. Each entry names its key."""
+        text = actions.describe([6, 3, 2, 8])
+        self.assertIn("Use it, press G.", text)
+        self.assertIn("Use an item on it, press U.", text)
+        self.assertIn("arm a skill with 1 to 8", text)
+
+    def test_an_action_with_no_route_admits_it(self):
+        """Listing "look at it" with no way to look reads as a key the player
+        has failed to find, which is worse than saying so."""
+        self.assertIn("no key for that yet", actions.describe([3]))
 
     def test_nothing_available_says_so(self):
         self.assertEqual(actions.describe([]), "Nothing you can do to it.")
@@ -74,8 +82,8 @@ class TestDescribe(unittest.TestCase):
         down by measurement, so a code outside the table is reported as itself.
         Naming it wrongly would describe an action that cannot be checked."""
         text = actions.describe([3, 42])
-        self.assertIn("action 42", text)
-        self.assertIn("look at it", text)
+        self.assertIn("Action 42", text)
+        self.assertIn("Look at it", text)
 
 
 if __name__ == "__main__":

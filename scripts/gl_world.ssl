@@ -76,6 +76,7 @@
 #define ACT_SOUTH          (-15)
 #define ACT_STATUS         (-16)
 #define ACT_USE_ITEM       (-17)
+#define ACT_USE_OBJ        (-18)
 
 variable g_cursor := CURSOR_UNSET;
 variable g_lastmode := -1;
@@ -123,6 +124,8 @@ procedure prepare_cursor;
 procedure on_useskill;
 procedure obj_is_real(variable obj);
 procedure use_item_on_cursor;
+procedure use_cursor_object;
+procedure target_at_cursor;
 procedure report_status;
 
 /*
@@ -452,6 +455,7 @@ procedure on_key begin
    else if (key == DIK_SEMICOLON) then dir := ACT_STATUS;
    else if (key == DIK_SLASH) then dir := ACT_SCAN_JUMP;
    else if (key == DIK_U) then dir := ACT_USE_ITEM;
+   else if (key == DIK_G) then dir := ACT_USE_OBJ;
    else if (key == DIK_BACKSLASH) then dir := ACT_PREPARE;
    else return;
 
@@ -476,6 +480,7 @@ procedure on_key begin
    else if (dir == ACT_SCAN_JUMP)     then call scan_jump;
    else if (dir == ACT_PREPARE)       then call prepare_cursor;
    else if (dir == ACT_USE_ITEM)      then call use_item_on_cursor;
+   else if (dir == ACT_USE_OBJ)       then call use_cursor_object;
    else                               call step_cursor(dir);
 
    set_sfall_return(0);   // swallow the key so the game does not also act
@@ -1019,6 +1024,70 @@ end
  * need it to work correctly, and its use_item_on_dude macro is written the same
  * way.
  */
+/*
+ * target_at_cursor  --  the first real object on the look cursor's hex.
+ *
+ * Nested ifs rather than one `and`: SSL does NOT short-circuit, and calling
+ * obj_is_real on a null is the exact shape that produced 341 null dereferences
+ * the last time this was written the obvious way.
+ */
+procedure target_at_cursor begin
+   variable elev, objs, total, i, obj, target;
+
+   elev := elevation(dude_obj);
+   objs := tile_get_objs(g_cursor, elev);
+   total := 0;
+   if (objs) then begin
+      total := len_array(objs);
+   end
+
+   target := 0;
+   i := 0;
+   while (i < total) do begin
+      obj := objs[i];
+      if (obj) then begin
+         if (obj != dude_obj) then begin
+            if (obj_is_real(obj)) then begin
+               if (not target) then target := obj;
+            end
+         end
+      end
+      i := i + 1;
+   end
+   return target;
+end
+
+/*
+ * use_cursor_object  --  "use it", the hand icon from the action menu.
+ *
+ * The action readout says a door can be used. This is what does it, and until
+ * now nothing could: the mod only ever sets the movement or targeting cursor,
+ * so a click on a door walked into it rather than opening it. Opening one needs
+ * the command cursor, which the mod never selects.
+ *
+ * Doing it here skips the cursor entirely. use_obj runs the object's own
+ * use_p_proc, which is the handler that actually opens the door.
+ *
+ * set_self twice is sfall's documented requirement for use_obj and
+ * use_obj_on_obj both.
+ */
+procedure use_cursor_object begin
+   variable target;
+
+   target := target_at_cursor;
+   if (not target) then begin
+      debug_msg("WORLD:useobj notarget " + g_cursor + "|");
+      return;
+   end
+
+   debug_msg("WORLD:useobj try " + obj_name(target) + "|");
+   set_self(dude_obj);
+   set_self(dude_obj);
+   use_obj(target);
+   set_self(0);
+   debug_msg("WORLD:useobj done " + obj_name(target) + "|");
+end
+
 procedure use_item_on_cursor begin
    variable item, elev, objs, total, i, obj, target;
 

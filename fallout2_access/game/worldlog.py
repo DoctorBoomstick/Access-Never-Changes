@@ -73,6 +73,33 @@ def status_line(line: str) -> Optional[str]:
     return " ".join(parts)
 
 
+# "WORLD:useobj try Impenetrable Door|"
+_USEOBJ_RE = re.compile(r"WORLD:useobj (\w+)\s*([^|]*)\|?")
+
+
+def use_obj_line(line: str) -> Optional[str]:
+    """Turn a WORLD:useobj line into the sentence to say, or None.
+
+    "Use it" -- the hand icon. Nothing could reach this before: the mod only
+    ever selects the movement or targeting cursor, so a click on a door walked
+    into it instead of opening it, and opening one needs the command cursor the
+    mod never picks.
+
+    Like the item version, finishing says nothing. The engine reports what
+    happened in its own words through the display window, which is already read
+    aloud, and it knows whether the door was locked.
+    """
+    m = _USEOBJ_RE.match(line)
+    if not m:
+        return None
+    what, target = m.group(1), m.group(2).strip()
+    if what == "notarget":
+        return "Nothing there to use."
+    if what == "try":
+        return "Using {}.".format(target or "it")
+    return None
+
+
 # "WORLD:useitem try Plastic Explosives|Impenetrable Door|"
 _USEITEM_RE = re.compile(r"WORLD:useitem (\w+)\s*([^|]*)\|?([^|]*)\|?")
 

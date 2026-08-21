@@ -193,3 +193,25 @@ class TestUseItemLine(unittest.TestCase):
 
     def test_a_line_that_is_not_ours_is_ignored(self):
         self.assertIsNone(self.say("WORLD:hex 14322 dist 1 : Door|"))
+
+
+class TestUseObjLine(unittest.TestCase):
+    """"Use it" -- the hand icon.
+
+    Nothing could reach this before: the mod only ever selects the movement or
+    targeting cursor, so a click on a door walked into it rather than opening
+    it, and opening one needs the command cursor the mod never picks.
+    """
+
+    def test_the_attempt_names_the_target(self):
+        self.assertEqual(
+            worldlog.use_obj_line("WORLD:useobj try Impenetrable Door|"),
+            "Using Impenetrable Door.")
+
+    def test_nothing_there(self):
+        self.assertEqual(worldlog.use_obj_line("WORLD:useobj notarget 14322|"),
+                         "Nothing there to use.")
+
+    def test_finishing_leaves_the_verdict_to_the_game(self):
+        self.assertIsNone(
+            worldlog.use_obj_line("WORLD:useobj done Impenetrable Door|"))

@@ -98,15 +98,54 @@ def read_list(proc) -> List[int]:
     return out
 
 
+# How to actually do each one.
+#
+# **A list you cannot act on is half a feature.** The first version of this read
+# the menu out and stopped there, which left the obvious question unanswered:
+# what is the point of being told a door will take an item if there is no way to
+# give it one?
+#
+# Picking from the engine's own strip turned out not to be available. It is
+# drawn as a mouse cursor rather than a window, and nothing in the process
+# tracks which icon is under the pointer -- searched with the button held under
+# the command cursor, in the executable's globals and across all 290 MB, and
+# with the pointer walked ninety pixels up the strip. Neither of us can see the
+# screen to check whether it even opens, so driving it would be guesswork
+# dressed as control.
+#
+# So the list is a menu of KEYS instead. The engine still decides what is on
+# offer; the mod says how to take each one, and admits which ones it cannot do
+# yet rather than listing them as though it could.
+HOW = {
+    USE: "press G",
+    INVENTORY: "press U",
+    USE_SKILL: "arm a skill with 1 to 8, then numpad plus",
+    TALK: "walk up to it and press numpad plus",
+}
+
+NO_KEY = "no key for that yet"
+
+
 def name(code: int) -> str:
     return NAMES.get(code, "action {}".format(code))
 
 
+def how(code: int) -> str:
+    return HOW.get(code, NO_KEY)
+
+
 def describe(codes) -> str:
-    """One sentence listing what can be done, or that nothing can."""
+    """What can be done, and the key for each.
+
+    Every entry carries its key so the readout is something to act on rather
+    than something to admire. An action with no route says so plainly -- being
+    told "look at it" with no way to look would be worse than not listing it,
+    because it reads as a key the player has failed to find.
+    """
     if not codes:
         return "Nothing you can do to it."
-    return "You can " + ", ".join(name(c) for c in codes) + "."
+    return " ".join("{}, {}.".format(name(c).capitalize(), how(c))
+                    for c in codes)
 
 
 def probe(proc, aimer, hwnd) -> tuple:
