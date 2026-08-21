@@ -347,6 +347,11 @@ class WorldWatcher(Watcher):
         # question, and the tests drive everything else with log lines alone.
         self.aimer = None
         self.hwnd: Optional[int] = None
+        # What the pointer was actually put on when the menu was built.
+        # The script names the object it opened the menu for, and the two
+        # must agree -- the action array is never cleared, only overwritten,
+        # so a stale read is a confident list about the wrong thing.
+        self._menu_aimed_at: Optional[str] = None
         self._dumped = False
         self.combat = CombatWatcher()
         self.scanner = Scanner()
@@ -399,6 +404,10 @@ class WorldWatcher(Watcher):
                     self._queue.append((said, True))
             elif line.startswith("WORLD:useitem"):
                 said = worldlog.use_item_line(line)
+                if said:
+                    self._queue.append((said, True))
+            elif line.startswith("WORLD:menu"):
+                said = worldlog.menu_line(line, self._menu_aimed_at)
                 if said:
                     self._queue.append((said, True))
             elif line.startswith("WORLD:useobj"):
@@ -550,13 +559,14 @@ class WorldWatcher(Watcher):
         # Say so first. Pointing at the object takes a few seconds, and silence
         # after a keypress reads as the key never having arrived -- the
         # misreading this project keeps designing against.
-        target = self.log.last_hex.announce() if self.log.last_hex else "there"
-        ann.answer("Checking {}.".format(target))
-        what, codes, why = actions.probe(self.proc, self.aimer, self.hwnd)
-        if what is None:
+        ann.answer("Checking.")
+        self._menu_aimed_at, why = actions.open_menu(
+            self.proc, self.aimer, self.hwnd)
+        if self._menu_aimed_at is None:
             ann.answer("Cannot check that: {}.".format(why or "no answer"))
             return
-        ann.answer("{}. {}".format(what, actions.describe(codes)))
+        # Nothing more is said here. The script announces the menu, and one
+        # voice saying it once beats two saying it differently.
 
     def summary(self, ann: Announcer) -> None:
         # "Where am I" is answered by whatever currently owns the screen. Each

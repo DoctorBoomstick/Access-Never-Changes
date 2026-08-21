@@ -73,6 +73,53 @@ def status_line(line: str) -> Optional[str]:
     return " ".join(parts)
 
 
+_MENU_RE = re.compile(r"WORLD:menu (\w+)\s*([^|]*)\|?([^|]*)\|?([^|]*)\|?([^|]*)\|?")
+
+
+def menu_line(line: str, aimed_at: Optional[str] = None) -> Optional[str]:
+    """Turn a WORLD:menu line into the sentence to say, or None.
+
+    The mod's own version of the icon strip a sighted player gets: everything
+    the engine says can be done to this object, arrows to move, Enter to do it.
+
+    `aimed_at` is what the pointer was actually put on when the list was built.
+    The engine's action array is never cleared, only overwritten, so a list read
+    at the wrong moment is a confident answer about the previous object -- and
+    since it is never empty, that looks exactly like a good one. Python knows
+    what it aimed at and the script names what it opened the menu for; if the
+    two disagree the only honest thing is to say so rather than read out a menu
+    for something else.
+    """
+    m = _MENU_RE.match(line)
+    if not m:
+        return None
+    what = m.group(1)
+    if what == "none":
+        return "Nothing there to act on."
+    if what == "empty":
+        return "{}. Nothing you can do to it.".format(m.group(2).strip() or "That")
+    if what == "closed":
+        return "Closed."
+    if what == "gone":
+        return "That is no longer there."
+    if what == "noroute":
+        return ("{}. The game offers that, but the mod has no way to do it yet."
+                .format(m.group(2).strip().capitalize()))
+    if what == "open":
+        name, count, first = (m.group(2).strip(), m.group(3).strip(),
+                              m.group(4).strip())
+        if aimed_at and name and aimed_at != name:
+            return ("Read the wrong thing: pointed at {} but the game answered "
+                    "for {}. Try again.".format(aimed_at, name))
+        return "{}. {} actions. {}, 1 of {}.".format(
+            name, count, first.capitalize(), count)
+    if what == "at":
+        label, index, count = (m.group(2).strip(), m.group(3).strip(),
+                               m.group(4).strip())
+        return "{}, {} of {}.".format(label.capitalize(), index, count)
+    return None
+
+
 # "WORLD:useobj try Impenetrable Door|"
 _USEOBJ_RE = re.compile(r"WORLD:useobj (\w+)\s*([^|]*)\|?")
 

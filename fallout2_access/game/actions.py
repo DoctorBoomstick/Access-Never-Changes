@@ -98,87 +98,43 @@ def read_list(proc) -> List[int]:
     return out
 
 
-# How to actually do each one.
-#
-# **A list you cannot act on is half a feature.** The first version of this read
-# the menu out and stopped there, which left the obvious question unanswered:
-# what is the point of being told a door will take an item if there is no way to
-# give it one?
-#
-# Picking from the engine's own strip turned out not to be available. It is
-# drawn as a mouse cursor rather than a window, and nothing in the process
-# tracks which icon is under the pointer -- searched with the button held under
-# the command cursor, in the executable's globals and across all 290 MB, and
-# with the pointer walked ninety pixels up the strip. Neither of us can see the
-# screen to check whether it even opens, so driving it would be guesswork
-# dressed as control.
-#
-# So the list is a menu of KEYS instead. The engine still decides what is on
-# offer; the mod says how to take each one, and admits which ones it cannot do
-# yet rather than listing them as though it could.
-HOW = {
-    USE: "press G",
-    INVENTORY: "press U",
-    USE_SKILL: "arm a skill with 1 to 8, then numpad plus",
-    TALK: "walk up to it and press numpad plus",
-}
-
-NO_KEY = "no key for that yet"
-
-
 def name(code: int) -> str:
     return NAMES.get(code, "action {}".format(code))
 
 
-def how(code: int) -> str:
-    return HOW.get(code, NO_KEY)
+def open_menu(proc, aimer, hwnd) -> tuple:
+    """Fill the engine's action array, then hand over to the in-game menu.
 
+    Two halves, split where the capability is. Only Python can put the pointer
+    on the object and press, which is what makes the engine work out what is
+    possible; only the script can swallow the arrow keys the menu is navigated
+    with. So Python does the trip and taps the key that tells the script to
+    read the array and take over.
 
-def describe(codes) -> str:
-    """What can be done, and the key for each.
-
-    Every entry carries its key so the readout is something to act on rather
-    than something to admire. An action with no route says so plainly -- being
-    told "look at it" with no way to look would be worse than not listing it,
-    because it reads as a key the player has failed to find.
+    Returns (object_name, why_not). The script announces the menu itself, so
+    nothing is said here -- one voice, not two.
     """
-    if not codes:
-        return "Nothing you can do to it."
-    return " ".join("{}, {}.".format(name(c).capitalize(), how(c))
-                    for c in codes)
-
-
-def probe(proc, aimer, hwnd) -> tuple:
-    """Ask the engine what it would offer for the selected object.
-
-    Holds the button so the menu is built, reads the list, then releases well
-    clear of the strip. Returns (object_name, codes, why_not).
-
-    **The release is the dangerous half.** On the strip it chooses an action, so
-    the pointer is shoved a long way sideways first. Nothing else here touches
-    the world: no icon is picked and the menu is cancelled every time.
-    """
-    from ..input.send import mouse_down, mouse_up, move_mouse_relative
+    from ..input.send import guarded_tap, mouse_down, mouse_up, move_mouse_relative
 
     ok, _reading, why = aimer.aim()
     if not ok:
-        return None, [], why or "could not point at it"
-
+        return None, why or "could not point at it"
     what, _offset = aimer.prepare(want_object=True)
     if not what:
-        return None, [], "nothing under the pointer to act on"
+        return None, "nothing under the pointer to act on"
 
     mouse_down("left")
     try:
-        # Let the engine build the menu before reading it. Reading in the same
-        # breath as the press gets the PREVIOUS object's list, which is the one
-        # mistake this array makes easy: it is never empty, so a stale read
-        # looks exactly like a good one.
+        # Let the engine work out what is possible before handing over. The
+        # array is never cleared, only overwritten, so reading it too early
+        # gets the PREVIOUS object's list -- and since it is never empty, a
+        # stale read looks exactly like a good one.
         time.sleep(0.6)
-        codes = read_list(proc)
     finally:
         move_mouse_relative(CANCEL_DX, CANCEL_DY, settle=0.05, hwnd=hwnd)
-        time.sleep(0.25)
+        time.sleep(0.2)
         mouse_up("left")
-        time.sleep(0.3)
-    return what, codes, ""
+        time.sleep(0.25)
+
+    guarded_tap(hwnd, "m", settle=0.2)
+    return what, ""

@@ -438,96 +438,67 @@ The two mouse buttons sit next to each other on `+` and `-`, unmistakable by
 feel. Everything else on the numpad is a readout, so a misfire costs you a
 sentence rather than an action.
 
-### What can I do to this?
+### What can I do to this? — numpad .
 
-Point at something with the numpad and press **numpad .** on the map:
+Point at something with the numpad and press **numpad .** on the map. You get a
+plain list of everything the game says you can do to that thing:
 
-    Impenetrable Door. Use it, press G. Look at it, no key for that yet.
-    Use an item on it, press U. Use a skill on it, arm a skill with 1 to 8,
-    then numpad plus.
+    Impenetrable Door. 4 actions. Use it, 1 of 4.
 
-**Every entry names the key that does it**, so the readout is a menu rather
-than a description. An action the mod cannot perform yet says so, instead of
-being listed as though you had simply failed to find the key.
-
-Picking from Fallout's own icon strip is not available, and that is worth being
-straight about. It is drawn as a mouse cursor rather than a window, and nothing
-in the process tracks which icon is under the pointer — searched with the button
-held under the command cursor, through the executable's globals and then all
-290 MB of the address space, with the pointer walked ninety pixels up the strip.
-Neither you nor the mod can see the screen to check whether it even opens, so
-driving it would be guesswork wearing the costume of control. The engine still
-decides what is on offer; the mod just supplies its own way to take each one.
-
-That is not the mod's opinion. It is the list of icons Fallout itself would put
-on screen if you held the mouse button on that object — the eye, the hand, the
-backpack, the skilldex — read straight out of the engine, which decides it from
-the object's own flags. So it stays right for things this mod has never heard
-of.
-
-Two things worth knowing:
-
-- **It takes a couple of seconds**, because the pointer has to travel to the
-  object first. It says "Checking…" so you know the key landed.
-- **It only reads.** The menu is opened, the list is taken, and it is cancelled.
-  Nothing is chosen — knowing an item *can* be used on a door is the missing
-  piece; deciding to use one stays yours.
-
-Compare two objects and you can see the engine discriminating: a pot offers
-*use it*, a stone bench does not, because you cannot open a bench.
-
-### Using something — G
-
-When the readout says **"use it"**, press **G**:
-
-    Using Impenetrable Door.
-
-This is the hand icon — open a door, pull a lever, work a machine. It had no
-route at all before: the mod only ever selects the movement or targeting cursor,
-so a click on a door walked you into it, and opening one needs the command
-cursor the mod never picks. `G` skips the cursor entirely and runs the object's
-own handler.
-
-### Using an item on something — U
-
-When the readout says **"use an item on it"**, that's the backpack icon, and it
-is the one action with no cursor mode behind it. Walking, attacking, using an
-object and using a skill are all "set the cursor and click"; applying one of
-*your* items to something is not.
-
-Ready the item in a hand slot, point at the target with the numpad, and press
-**U**:
-
-    Using Plastic Explosives on Impenetrable Door.
-
-Then the game speaks for itself — whatever it would have told a sighted player
-appears in the message window, which the mod already reads aloud. The mod does
-**not** invent a verdict of its own; the engine knows whether the lock turned
-and it doesn't.
-
-No pointer is involved. The script already knows which hex your look cursor is
-on and asks the engine to apply the item directly, so there's no aiming delay
-and nothing to miss.
-
-| It says | What happened |
+| Key | In the list |
 |---|---|
-| "Your hands are empty. Ready an item first." | nothing in the active hand |
-| "Nothing there to use it on." | the hex holds no object |
-| "Using X on Y." | the attempt is under way; listen for the game's reply |
+| Up / Down | move through the actions |
+| Enter | do the selected one |
+| Escape | back out |
 
-**The explosive timer is still not readable.** Planting a charge opens a window
-for setting the countdown, and that window has not been made usable yet — so U
-will get the explosive onto the door and then leave you at a prompt the mod
-cannot yet describe. That's the next piece of work, and the countdown stays
-yours to choose.
+Nothing else to learn — it behaves like every other list. Moving re-announces
+the entry, so there is no separate key to repeat it.
 
-A left click acts on the hex your look cursor is on: the mod moves the pointer
-there first, because that is the part you cannot do yourself, then sets the
-cursor mode to match what you selected.
+**The contents are the engine's, not the mod's.** This is the same set of icons
+a sighted player gets when they hold the mouse button on something — the eye,
+the hand, the backpack, the skilldex — read out of the memory Fallout fills in
+from the object's own flags. So it stays right for objects this mod has never
+heard of, and an action nobody here has seen still shows up, as "action 42".
 
-Off the map — in the inventory, Pipboy, a dialog — numpad + doesn't aim. There
-are no hexes there, so it just clicks where the pointer already is, and says
-which panel is currently eating your clicks.
+What the mod supplies is the *presentation*. Fallout's own icon strip cannot be
+driven: it is drawn as a mouse cursor rather than a window, and nothing in the
+process tracks which icon is under the pointer — searched with the button held
+under the command cursor, through the executable's globals and then all 290 MB
+of the address space, with the pointer walked ninety pixels up the strip. Since
+neither you nor the mod can see the screen to check whether it even opens,
+driving it would be guesswork dressed as control. So the mod presents the same
+actions its own way.
+
+The list is tied to the **object**, captured when you built it, not to the hex.
+If something wanders across the tile before you press Enter, the action still
+applies to the thing you chose.
+
+Two honest limits:
+
+- **Building the list takes a couple of seconds.** The pointer has to travel to
+  the object, because that is what makes the engine work out what is possible.
+  It says "Checking" so you know the key landed. Moving through the list
+  afterwards is instant.
+- **Not every action has a route yet.** Enter on one the mod cannot perform says
+  so plainly rather than going quiet. "Look at it" is the notable one — that is
+  the examine description, and it is still to come.
+
+Two of them do work now, and they are the ones that matter for a locked door:
+
+    Use it                 opens it, pulls it, works it
+    Use an item on it      applies whatever is in your active hand
+
+For the second, ready the item in a hand slot first. Then the game speaks for
+itself — whatever it would have told a sighted player appears in the message
+window, which the mod already reads aloud. The mod does **not** invent a verdict
+of its own; the engine knows whether the lock turned and it doesn't.
+
+**The explosive timer is still not readable.** Using a charge on a door opens a
+window for setting the countdown, and that window has not been made usable yet —
+so you can plant the charge and then be left at a prompt the mod cannot
+describe. That is the next piece of work, and the countdown stays yours to
+choose.
+
 
 ## Containers, looting and your inventory
 

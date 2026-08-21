@@ -215,3 +215,59 @@ class TestUseObjLine(unittest.TestCase):
     def test_finishing_leaves_the_verdict_to_the_game(self):
         self.assertIsNone(
             worldlog.use_obj_line("WORLD:useobj done Impenetrable Door|"))
+
+
+class TestMenuLine(unittest.TestCase):
+    """The mod's own version of the icon strip a sighted player gets.
+
+    Fallout's strip cannot be driven -- it is drawn as a mouse cursor, and
+    nothing in the process tracks which icon is under the pointer. So the
+    contents come from the engine and the presentation is ours: arrows move,
+    Enter does it.
+    """
+
+    def say(self, line, aimed=None):
+        return worldlog.menu_line(line, aimed)
+
+    def test_opening_names_the_object_and_the_first_action(self):
+        self.assertEqual(
+            self.say("WORLD:menu open Impenetrable Door|4|use it|1|"),
+            "Impenetrable Door. 4 actions. Use it, 1 of 4.")
+
+    def test_moving_says_where_you_are_in_the_list(self):
+        """Which is why there is no repeat key: moving re-announces, the way
+        every list does."""
+        self.assertEqual(self.say("WORLD:menu at look at it|2|4|"),
+                         "Look at it, 2 of 4.")
+
+    def test_a_stale_list_is_refused_rather_than_read_out(self):
+        """The engine's array is never cleared, only overwritten, and it is
+        never empty -- so a list read a moment too early is a confident menu
+        for the PREVIOUS object and looks exactly like a good one. Python knows
+        what it aimed at; the script names what it opened for."""
+        text = self.say("WORLD:menu open Pot|4|use it|1|",
+                        aimed="Impenetrable Door")
+        self.assertIn("wrong thing", text)
+        self.assertIn("Impenetrable Door", text)
+        self.assertIn("Pot", text)
+
+    def test_matching_names_read_normally(self):
+        self.assertIn("Impenetrable Door. 4 actions.",
+                      self.say("WORLD:menu open Impenetrable Door|4|use it|1|",
+                               aimed="Impenetrable Door"))
+
+    def test_an_action_the_mod_cannot_do_says_so(self):
+        """Silence after Enter reads as the key never arriving."""
+        self.assertIn("no way to do it yet",
+                      self.say("WORLD:menu noroute look at it|"))
+
+    def test_nothing_to_act_on(self):
+        self.assertEqual(self.say("WORLD:menu none|"),
+                         "Nothing there to act on.")
+
+    def test_an_object_with_no_actions(self):
+        self.assertEqual(self.say("WORLD:menu empty Stone Bench|"),
+                         "Stone Bench. Nothing you can do to it.")
+
+    def test_backing_out(self):
+        self.assertEqual(self.say("WORLD:menu closed|"), "Closed.")

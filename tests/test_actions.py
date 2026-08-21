@@ -1,4 +1,4 @@
-"""Reading the engine's action menu out of memory.
+"""Reading the engine's action list out of memory.
 
 The list is never empty between menus -- it holds whatever was last built -- so
 the failure mode here is a confident answer about the wrong object. Everything
@@ -53,37 +53,6 @@ class TestReadList(unittest.TestCase):
     def test_it_never_runs_past_its_bound(self):
         self.assertLessEqual(
             len(actions.read_list(memory([3] * 40))), actions.MAX_ACTIONS)
-
-
-class TestDescribe(unittest.TestCase):
-    def test_the_backpack_is_named_for_what_it_does(self):
-        """"Inventory" is what the engine calls it; what it MEANS is using one
-        of your items on the thing -- which is the whole point of asking."""
-        self.assertIn("Use an item on it", actions.describe([2]))
-
-    def test_every_entry_carries_the_key_that_does_it(self):
-        """A list you cannot act on is half a feature -- which is exactly what
-        the first version of this shipped. Each entry names its key."""
-        text = actions.describe([6, 3, 2, 8])
-        self.assertIn("Use it, press G.", text)
-        self.assertIn("Use an item on it, press U.", text)
-        self.assertIn("arm a skill with 1 to 8", text)
-
-    def test_an_action_with_no_route_admits_it(self):
-        """Listing "look at it" with no way to look reads as a key the player
-        has failed to find, which is worse than saying so."""
-        self.assertIn("no key for that yet", actions.describe([3]))
-
-    def test_nothing_available_says_so(self):
-        self.assertEqual(actions.describe([]), "Nothing you can do to it.")
-
-    def test_an_unknown_code_is_a_number_not_a_guess(self):
-        """The names come from the engine's ordering and only USE was pinned
-        down by measurement, so a code outside the table is reported as itself.
-        Naming it wrongly would describe an action that cannot be checked."""
-        text = actions.describe([3, 42])
-        self.assertIn("Action 42", text)
-        self.assertIn("Look at it", text)
 
 
 if __name__ == "__main__":

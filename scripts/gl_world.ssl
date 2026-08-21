@@ -75,8 +75,20 @@
 #define ACT_NORTH          (-14)
 #define ACT_SOUTH          (-15)
 #define ACT_STATUS         (-16)
-#define ACT_USE_ITEM       (-17)
-#define ACT_USE_OBJ        (-18)
+#define ACT_MENU           (-17)
+
+#define ACTION_LIST     (0x00596C3C)
+#define MENU_MAX        (12)
+
+#define ACT_CANCEL      (0)
+#define ACT_DROP        (1)
+#define ACT_INVENTORY   (2)
+#define ACT_LOOK        (3)
+#define ACT_ROTATE      (4)
+#define ACT_TALK        (5)
+#define ACT_USE         (6)
+#define ACT_UNLOAD      (7)
+#define ACT_USESKILL    (8)
 
 variable g_cursor := CURSOR_UNSET;
 variable g_lastmode := -1;
@@ -95,6 +107,11 @@ variable g_armedskill := 0;
 // Which way the north/south staircase currently leans. See step_north.
 variable g_ndrift := 0;
 variable g_label := "";
+variable g_menu := 0;
+variable g_menu_index := 0;
+variable g_menu_count := 0;
+variable g_menu_target := 0;
+variable g_menu_codes;
 variable g_movestart := -1;
 variable g_moving := 0;
 variable g_stillticks := 0;
@@ -123,9 +140,12 @@ procedure scan_jump;
 procedure prepare_cursor;
 procedure on_useskill;
 procedure obj_is_real(variable obj);
-procedure use_item_on_cursor;
-procedure use_cursor_object;
 procedure target_at_cursor;
+procedure menu_open;
+procedure menu_close;
+procedure menu_step(variable delta);
+procedure menu_do;
+procedure menu_label(variable code);
 procedure report_status;
 
 /*
@@ -156,6 +176,9 @@ procedure start begin
       register_hook_proc(HOOK_USESKILLON, on_useskill);
       g_cursor := tile_num(dude_obj);
       g_lastdude := g_cursor;
+      // Permanent, not temporary: sfall deletes temp arrays at the end of
+      // the frame, and this one has to survive between keypresses.
+      g_menu_codes := create_array_list(MENU_MAX);
       // Print a beacon into the interface bar's display window. The Python
       // side finds it by searching memory for this exact text, which is how it
       // learns where that buffer lives -- it is heap-allocated and moves every
@@ -364,6 +387,43 @@ procedure on_key begin
     * exactly the modes this one declines, so one of the two handles any given
     * press and neither needs to know about the other.
     */
+   /*
+    * The action menu owns the keyboard while it is up.
+    *
+    * Tested before the mode guard and before everything else, because these
+    * keys have to be SWALLOWED: arrows scroll the map and Enter belongs to the
+    * game, and a menu whose navigation also moved the world underneath it
+    * would be worse than no menu. Only the keypress hook can swallow a key,
+    * which is the whole reason this list lives in the script rather than on
+    * the Python side with the rest of the speech.
+    *
+    * Nothing else is swallowed: a player who opens the menu and then decides
+    * to walk somewhere keeps every other key they had.
+    */
+   if (g_menu) then begin
+      if (key == DIK_UP) then begin
+         call menu_step(-1);
+         set_sfall_return(0);
+         return;
+      end
+      if (key == DIK_DOWN) then begin
+         call menu_step(1);
+         set_sfall_return(0);
+         return;
+      end
+      if (key == DIK_RETURN) then begin
+         call menu_do;
+         set_sfall_return(0);
+         return;
+      end
+      if (key == DIK_ESCAPE) then begin
+         call menu_close;
+         debug_msg("WORLD:menu closed|");
+         set_sfall_return(0);
+         return;
+      end
+   end
+
    m := get_game_mode;
    if (m bwand MAP_HIDDEN) then begin
       /*
@@ -454,8 +514,7 @@ procedure on_key begin
    end
    else if (key == DIK_SEMICOLON) then dir := ACT_STATUS;
    else if (key == DIK_SLASH) then dir := ACT_SCAN_JUMP;
-   else if (key == DIK_U) then dir := ACT_USE_ITEM;
-   else if (key == DIK_G) then dir := ACT_USE_OBJ;
+   else if (key == DIK_M) then dir := ACT_MENU;
    else if (key == DIK_BACKSLASH) then dir := ACT_PREPARE;
    else return;
 
@@ -479,8 +538,7 @@ procedure on_key begin
    else if (dir == ACT_SCAN_CATPREV)  then call scan_category(-1);
    else if (dir == ACT_SCAN_JUMP)     then call scan_jump;
    else if (dir == ACT_PREPARE)       then call prepare_cursor;
-   else if (dir == ACT_USE_ITEM)      then call use_item_on_cursor;
-   else if (dir == ACT_USE_OBJ)       then call use_cursor_object;
+   else if (dir == ACT_MENU)          then call menu_open;
    else                               call step_cursor(dir);
 
    set_sfall_return(0);   // swallow the key so the game does not also act
@@ -1005,25 +1063,150 @@ procedure report_status begin
 end
 
 /*
- * use_item_on_cursor  --  use what is in your hand on what you are pointing at.
+ * The action menu, built here rather than driven over there.
  *
- * This is the one thing the action menu offers that nothing else could reach.
- * Walking, attacking and using an object are all "set the cursor mode and
- * click", and skills are the same with a skill armed -- but "use an ITEM on
- * that" has no cursor mode at all. A sighted player gets it from the backpack
- * icon in the menu that appears when you hold the button on something, and that
- * menu is drawn as a mouse cursor rather than a window, so there was no way in.
+ * Fallout shows a sighted player a strip of icons when they hold the button on
+ * something: the eye, the hand, the backpack, the skilldex. That strip cannot
+ * be driven -- it is drawn as a mouse cursor rather than a window, and nothing
+ * in the process tracks which icon is under the pointer, searched for across
+ * all 290 MB with the button held and the pointer walked up the strip. Neither
+ * the player nor the mod can see the screen to check whether it even appears.
  *
- * There is no pointer here at all. The script already knows which hex the look
- * cursor is on and the engine will apply an item to an object directly, so this
- * asks the engine rather than driving the mouse and hoping -- and the same call
- * runs the object's own use_obj_on_p_proc, which is what actually opens a door
- * or plants a charge.
+ * So the mod builds its own list of the same actions and presents it the way
+ * every list is presented: arrows move, Enter does it, Escape backs out. The
+ * CONTENTS are still the engine's -- read out of the array it fills in at
+ * ACTION_LIST -- which is the half that matters and the half that stays right
+ * for objects nobody has thought about.
  *
- * set_self twice is not a typo. sfall's own notes say use_obj and use_obj_on_obj
- * need it to work correctly, and its use_item_on_dude macro is written the same
- * way.
+ * The alternative was a letter key per action, and it was going nowhere: two
+ * had already been guessed against a keyboard whose bindings cannot be
+ * enumerated, and there are ten codes to cover.
+ *
+ * It lives in the script because arrows and Enter have to be SWALLOWED while
+ * the menu is up, or they scroll the map underneath it, and only the keypress
+ * hook can swallow a key.
  */
+
+procedure menu_label(variable code) begin
+   if (code == ACT_USE)       then return "use it";
+   if (code == ACT_LOOK)      then return "look at it";
+   if (code == ACT_INVENTORY) then return "use an item on it";
+   if (code == ACT_USESKILL)  then return "use a skill on it";
+   if (code == ACT_TALK)      then return "talk to it";
+   if (code == ACT_DROP)      then return "drop something here";
+   if (code == ACT_ROTATE)    then return "turn it";
+   if (code == ACT_UNLOAD)    then return "unload it";
+   if (code == ACT_CANCEL)    then return "cancel";
+   // Only USE was pinned down by measurement -- it is the entry a stone bench
+   // does not get and a pot does. An unnamed code is announced as a number
+   // rather than guessed at: a wrong name describes an action nobody can check.
+   return "action " + code;
+end
+
+/*
+ * menu_open  --  read what the engine decided, and offer it.
+ *
+ * The array is filled when the engine evaluates the object under the mouse, so
+ * the Python side puts the pointer on the target and presses before handing
+ * over. It is never cleared, only overwritten, so a stale read looks exactly
+ * like a good one -- which is why the target object is captured HERE, at the
+ * moment of building, and every action is applied to that object rather than
+ * to whatever the cursor is over when Enter is finally pressed.
+ */
+procedure menu_open begin
+   variable i, code;
+
+   g_menu_target := target_at_cursor;
+   if (not g_menu_target) then begin
+      debug_msg("WORLD:menu none|");
+      return;
+   end
+
+   g_menu_count := 0;
+   i := 0;
+   while (i < MENU_MAX) do begin
+      code := read_int(ACTION_LIST + (4 * i));
+      if (code == 0) then i := MENU_MAX;
+      else if (code < 0 or code > 63) then i := MENU_MAX;
+      else begin
+         set_array(g_menu_codes, g_menu_count, code);
+         g_menu_count := g_menu_count + 1;
+         i := i + 1;
+      end
+   end
+
+   if (g_menu_count <= 0) then begin
+      debug_msg("WORLD:menu empty " + obj_name(g_menu_target) + "|");
+      return;
+   end
+
+   g_menu := 1;
+   g_menu_index := 0;
+   debug_msg("WORLD:menu open " + obj_name(g_menu_target) + "|"
+      + g_menu_count + "|" + menu_label(g_menu_codes[0]) + "|1|");
+end
+
+procedure menu_close begin
+   g_menu := 0;
+   g_menu_index := 0;
+   g_menu_count := 0;
+   g_menu_target := 0;
+end
+
+procedure menu_step(variable delta) begin
+   variable next;
+
+   next := g_menu_index + delta;
+   // Clamped, not wrapped. A list that wraps silently is one you can walk off
+   // the end of without noticing, and this list ends in an action.
+   if (next < 0) then next := 0;
+   if (next >= g_menu_count) then next := g_menu_count - 1;
+   g_menu_index := next;
+   debug_msg("WORLD:menu at " + menu_label(g_menu_codes[g_menu_index]) + "|"
+      + (g_menu_index + 1) + "|" + g_menu_count + "|");
+end
+
+procedure menu_do begin
+   variable code, item, target;
+
+   code := g_menu_codes[g_menu_index];
+   target := g_menu_target;
+   call menu_close;
+
+   if (not target) then begin
+      debug_msg("WORLD:menu gone|");
+      return;
+   end
+
+   if (code == ACT_USE) then begin
+      debug_msg("WORLD:useobj try " + obj_name(target) + "|");
+      set_self(dude_obj);
+      set_self(dude_obj);
+      use_obj(target);
+      set_self(0);
+      return;
+   end
+
+   if (code == ACT_INVENTORY) then begin
+      item := critter_inven_obj(dude_obj, INVEN_TYPE_RIGHT_HAND);
+      if (not item) then begin
+         debug_msg("WORLD:useitem empty|");
+         return;
+      end
+      debug_msg("WORLD:useitem try " + obj_name(item) + "|"
+         + obj_name(target) + "|");
+      set_self(dude_obj);
+      set_self(dude_obj);
+      use_obj_on_obj(item, target);
+      set_self(0);
+      return;
+    end
+
+   // Offered by the engine, no route here yet. Said plainly rather than
+   // swallowed: silence after Enter reads as the key never arriving.
+   debug_msg("WORLD:menu noroute " + menu_label(code) + "|");
+end
+
 /*
  * target_at_cursor  --  the first real object on the look cursor's hex.
  *
@@ -1055,91 +1238,6 @@ procedure target_at_cursor begin
       i := i + 1;
    end
    return target;
-end
-
-/*
- * use_cursor_object  --  "use it", the hand icon from the action menu.
- *
- * The action readout says a door can be used. This is what does it, and until
- * now nothing could: the mod only ever sets the movement or targeting cursor,
- * so a click on a door walked into it rather than opening it. Opening one needs
- * the command cursor, which the mod never selects.
- *
- * Doing it here skips the cursor entirely. use_obj runs the object's own
- * use_p_proc, which is the handler that actually opens the door.
- *
- * set_self twice is sfall's documented requirement for use_obj and
- * use_obj_on_obj both.
- */
-procedure use_cursor_object begin
-   variable target;
-
-   target := target_at_cursor;
-   if (not target) then begin
-      debug_msg("WORLD:useobj notarget " + g_cursor + "|");
-      return;
-   end
-
-   debug_msg("WORLD:useobj try " + obj_name(target) + "|");
-   set_self(dude_obj);
-   set_self(dude_obj);
-   use_obj(target);
-   set_self(0);
-   debug_msg("WORLD:useobj done " + obj_name(target) + "|");
-end
-
-procedure use_item_on_cursor begin
-   variable item, elev, objs, total, i, obj, target;
-
-   // The active hand. critter_inven_obj reports whichever hand is active
-   // rather than a fixed one, which is the behaviour that cost a round of
-   // debugging in the inventory and is exactly what is wanted here: the item
-   // you are holding is the item you mean.
-   item := critter_inven_obj(dude_obj, INVEN_TYPE_RIGHT_HAND);
-   if (not item) then begin
-      debug_msg("WORLD:useitem empty|");
-      return;
-   end
-
-   elev := elevation(dude_obj);
-   objs := tile_get_objs(g_cursor, elev);
-   total := 0;
-   if (objs) then begin
-      total := len_array(objs);
-   end
-
-   // The first real thing on the hex. Nested rather than joined with `and`:
-   // SSL does NOT short-circuit, and evaluating obj_is_real on a null is the
-   // shape that produced 341 null dereferences the last time it was written
-   // the obvious way.
-   target := 0;
-   i := 0;
-   while (i < total) do begin
-      obj := objs[i];
-      if (obj) then begin
-         if (obj != dude_obj) then begin
-            if (obj_is_real(obj)) then begin
-               if (not target) then target := obj;
-            end
-         end
-      end
-      i := i + 1;
-   end
-
-   if (not target) then begin
-      debug_msg("WORLD:useitem notarget " + g_cursor + "|");
-      return;
-   end
-
-   // Announce the attempt before making it. If the engine crashes on this
-   // combination -- and it has crashed on odd object types before -- the log
-   // says what was being tried rather than stopping mid-sentence.
-   debug_msg("WORLD:useitem try " + obj_name(item) + "|" + obj_name(target) + "|");
-   set_self(dude_obj);
-   set_self(dude_obj);
-   use_obj_on_obj(item, target);
-   set_self(0);
-   debug_msg("WORLD:useitem done " + obj_name(item) + "|" + obj_name(target) + "|");
 end
 
 procedure obj_is_real(variable obj) begin
