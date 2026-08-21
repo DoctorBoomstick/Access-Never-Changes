@@ -65,6 +65,19 @@ _PREPARE = re.compile(r"WORLD:prepare (-?\d+)\|([^|]*)\|(-?\d+)\|(-?\d+)\|")
 # misses and makes small things on the ground reachable at all.
 TARGET_STEPS = (0, -4, -8, -12, -16, -20, -26, -32, 4, 8, 12, 16)
 
+# The same hunt in two dimensions. Vertical alone finds a sprite that is not
+# covered by anything, and fails the moment one is: an item on the floor beside
+# a door is inside the door's sprite from top to bottom, so no amount of moving
+# up or down reaches it. Sideways does, because the door does not extend across
+# the whole hex.
+#
+# Ordered so the cheap cases stay cheap -- straight up first, then low, then
+# out to the sides -- because every step costs a round trip to the game.
+TARGET_OFFSETS = tuple(
+    [(0, dy) for dy in TARGET_STEPS]
+    + [(dx, dy) for dx in (-12, 12, -22, 22) for dy in (0, -8, 8, -16, 16)]
+)
+
 # Where to look for a spot inside the hex that is not covered by something
 # else's sprite. Fallout draws tall objects over the hexes in front of them, so
 # the centre of a perfectly walkable tile can be underneath a wall -- the
@@ -188,7 +201,8 @@ class Aimer:
             time.sleep(0.03)
         return None
 
-    def prepare(self, want_object: bool, per_step: float = 0.25):
+    def prepare(self, want_object: bool, per_step: float = 0.25,
+                wanted: Optional[str] = None):
         """Set the cursor for the click, and find a spot where it will land.
 
         Being on the right hex is not enough. Fallout draws tall objects over
@@ -201,13 +215,21 @@ class Aimer:
         For an object, upwards, onto its sprite. For bare ground, downwards and
         sideways, off whatever is leaning over it.
 
+        `wanted` names the object the caller actually meant, and without it this
+        takes the first object the engine offers -- which is wrong whenever
+        something taller is drawn over the one you chose. A brick of explosive
+        lying beside a door is the case that exposed it: every probe came back
+        "Impenetrable Door", the item was never found, and the click was set up
+        for the door. Passing the name the hex readout already gave the player
+        turns "an object" into "that object", and the search keeps going until
+        the engine agrees rather than settling for the first answer.
+
         Returns (name, offset). `name` is the object the click would act on, or
         None. For bare ground, None with an offset found is success; None with
         no clear spot means the caller should not click.
         """
         prev = (0, 0)
-        steps = TARGET_STEPS if want_object else None
-        candidates = [(0, dy) for dy in steps] if steps else list(CLEAR_STEPS)
+        candidates = list(TARGET_OFFSETS) if want_object else list(CLEAR_STEPS)
 
         for dx, dy in candidates:
             if (dx, dy) != prev:
@@ -221,6 +243,8 @@ class Aimer:
             if under != look:
                 continue          # drifted off the hex entirely
             if want_object and name:
+                if wanted and wanted.lower() not in name.lower():
+                    continue          # something else is drawn over it
                 return name, prev
             if not want_object and not name:
                 return None, prev

@@ -560,8 +560,14 @@ class WorldWatcher(Watcher):
         # after a keypress reads as the key never having arrived -- the
         # misreading this project keeps designing against.
         ann.answer("Checking.")
+        last = self.log.last_hex
+        wanted = None
+        if last and last.contents:
+            first = last.contents.split(",")[0].strip()
+            if first and first not in ("empty", "you"):
+                wanted = first
         self._menu_aimed_at, why = actions.open_menu(
-            self.proc, self.aimer, self.hwnd)
+            self.proc, self.aimer, self.hwnd, wanted=wanted)
         if self._menu_aimed_at is None:
             ann.answer("Cannot check that: {}.".format(why or "no answer"))
             return
@@ -871,7 +877,19 @@ class App:
                 # engine agrees it is pointing at it -- Fallout picks objects by
                 # the figure drawn above the tile, so a click dead centre on a
                 # door's hex hits the floor in front of it and does nothing.
-                name, _at = self.aimer.prepare(expects_object)
+                # Name what the hex readout already told the player, so the
+                # search keeps going until the engine agrees it is pointing at
+                # THAT rather than at whatever taller thing is drawn over it.
+                # Without this, an item lying beside a door answered
+                # "Impenetrable Door" to every probe, the cursor was set up for
+                # the door, and the click walked onto the item instead of
+                # picking it up.
+                wanted = None
+                if expects_object and last and last.contents:
+                    first = last.contents.split(",")[0].strip()
+                    if first and first not in ("empty", "you"):
+                        wanted = first
+                name, _at = self.aimer.prepare(expects_object, wanted=wanted)
                 if expects_object and not name:
                     self.ann.answer("Cannot point at that.")
                     return

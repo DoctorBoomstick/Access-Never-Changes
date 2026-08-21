@@ -102,7 +102,7 @@ def name(code: int) -> str:
     return NAMES.get(code, "action {}".format(code))
 
 
-def open_menu(proc, aimer, hwnd) -> tuple:
+def open_menu(proc, aimer, hwnd, wanted=None) -> tuple:
     """Fill the engine's action array, then hand over to the in-game menu.
 
     Two halves, split where the capability is. Only Python can put the pointer
@@ -119,7 +119,7 @@ def open_menu(proc, aimer, hwnd) -> tuple:
     ok, _reading, why = aimer.aim()
     if not ok:
         return None, why or "could not point at it"
-    what, _offset = aimer.prepare(want_object=True)
+    what, _offset = aimer.prepare(want_object=True, wanted=wanted)
     if not what:
         return None, "nothing under the pointer to act on"
 
