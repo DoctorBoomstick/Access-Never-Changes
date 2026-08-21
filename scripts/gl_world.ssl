@@ -1220,9 +1220,28 @@ procedure menu_do begin
        * would look exactly like the engine ignoring the call -- and telling
        * those two apart is the whole question.
        */
-      debug_msg("WORLD:selfdbg before=" + obj_name(self_obj) + "|");
-      set_self(dude_obj);
-      set_self(dude_obj);
+      /*
+       * self is the TARGET.
+       *
+       * Tried the other way first, on the reading that the engine passes self
+       * as the critter DOING the action. That was measured and does nothing:
+       * self was confirmed set to the player, the call returned normally, the
+       * game mode never moved and the door never answered.
+       *
+       * So this is the remaining interpretation, and it is the one sfall's
+       * note actually supports -- "you can also access the local variables in
+       * the script of an object after calling set_self twice" describes making
+       * that object's SCRIPT current, and the handler that has to run
+       * (use_p_proc, use_obj_on_p_proc) belongs to the thing being acted on.
+       *
+       * self_obj is NOT logged before the call any more. It reads NULL here --
+       * set_self(0) at the end of the previous call leaves it that way -- and
+       * obj_name(NULL) does not fail quietly: it logs a script error and hands
+       * back whatever name was last in the engine's buffer, which made the
+       * reading look like a sensible answer instead of an error.
+       */
+      set_self(target);
+      set_self(target);
       debug_msg("WORLD:selfdbg after=" + obj_name(self_obj) + "|");
       use_obj(target);
       set_self(0);
@@ -1256,9 +1275,8 @@ procedure menu_do begin
       end
       debug_msg("WORLD:useitem try " + obj_name(item) + "|"
          + obj_name(target) + "|");
-      debug_msg("WORLD:selfdbg before=" + obj_name(self_obj) + "|");
-      set_self(dude_obj);
-      set_self(dude_obj);
+      set_self(target);
+      set_self(target);
       debug_msg("WORLD:selfdbg after=" + obj_name(self_obj) + "|");
       use_obj_on_obj(item, target);
       set_self(0);
