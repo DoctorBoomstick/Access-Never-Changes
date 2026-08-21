@@ -493,11 +493,43 @@ itself — whatever it would have told a sighted player appears in the message
 window, which the mod already reads aloud. The mod does **not** invent a verdict
 of its own; the engine knows whether the lock turned and it doesn't.
 
-**The explosive timer is still not readable.** Using a charge on a door opens a
-window for setting the countdown, and that window has not been made usable yet —
-so you can plant the charge and then be left at a prompt the mod cannot
-describe. That is the next piece of work, and the countdown stays yours to
-choose.
+### Arming an explosive, and the countdown
+
+Explosives do not get used *on* a door — the game does not work that way. You
+arm one, set its countdown, and it is placed on the ground where you stand.
+
+Put the charge in your **active** item slot (`b` swaps which hand is live), then
+click the interface bar's item slot. The mod announces the timer:
+
+    Explosive timer. Setting it to the shortest.
+    10 seconds. Numpad plus and minus change it, Enter arms it, Escape cancels.
+
+| Key | Action |
+|---|---|
+| Numpad + | ten seconds longer |
+| Numpad - | ten seconds shorter |
+| Numpad / | say the countdown again |
+| Enter | arm it |
+| Escape | cancel |
+
+**Opening the timer places the charge on the floor.** That is the game's own
+behaviour, not the mod's — so cancelling still leaves it at your feet to pick
+back up.
+
+**The mod cannot read that number, so it sets it instead.** On arrival it winds
+the countdown down to its shortest by pressing the down arrow more times than
+the range is long, which lands on ten seconds whatever it was showing before.
+Every value after that is arithmetic the mod controls, so what it announces is
+what it caused rather than what it guessed.
+
+The number genuinely is not readable: it is not in the executable's globals, not
+in sfall's, and the one heap candidate that looked right turned out to be a
+tally of clicks — it rose on *both* buttons, 9 to 31 going down and 31 to 57
+going up, and never clamped. Watching a value move is not evidence; watching it
+move in opposite directions is.
+
+If anything goes wrong mid-adjustment the mod says the countdown is **unknown**
+rather than naming a number it no longer trusts. Escape and start again.
 
 
 ## Containers, looting and your inventory

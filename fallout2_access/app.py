@@ -30,7 +30,7 @@ from .game.aim import Aimer
 from .game.chargen import CharGen
 from .game.combat import CombatWatcher
 from .game.displaywin import DisplayWindow
-from .game import actions, itemmove, slotscreen, uiwindow
+from .game import actions, itemmove, slotscreen, timerwin, uiwindow
 from .game.inventory import InventoryWatcher
 from .game.premade import PremadeScreen
 from .game.saves import SaveWatcher
@@ -722,6 +722,67 @@ class SlotScreenWatcher(Watcher):
         ann.answer(self._page_line() + " " + self._current())
 
 
+class TimerWatcher(Watcher):
+    """The explosive countdown.
+
+    The number on this window cannot be read -- it is not in the executable's
+    globals, not in sfall's, and the one heap candidate turned out to be a tally
+    of clicks that rose on BOTH buttons. So it is not read. It is caused: on
+    arrival the countdown is driven to its minimum by pressing down more times
+    than the range is long, and from there every value is arithmetic the mod
+    controls.
+
+    That is the same construction the save screen's page and the inventory's
+    scroll position use, and it is better than a reading would be: nothing to
+    find, nothing to drift, and no address a patch could move.
+    """
+
+    key = screens.TIMER
+
+    def __init__(self, timer) -> None:
+        self.timer = timer
+
+    def reset(self) -> None:
+        self.timer.steps = None
+
+    def enter(self, ann: Announcer) -> None:
+        # Say what the screen is before the slow part. Winding the countdown
+        # down to its floor is twenty clicks, and silence after a screen change
+        # reads as the mod having died.
+        ann.answer("Explosive timer. Setting it to the shortest.")
+        if not self.timer.rewind():
+            ann.answer("Explosive timer. Cannot reach its controls, so the "
+                       "countdown is unknown. Escape cancels.")
+            return
+        ann.say("{}. Numpad plus and minus change it, Enter arms it, "
+                "Escape cancels.".format(self._time()),
+                interrupt=False, force=True)
+
+    def _time(self) -> str:
+        if self.timer.steps is None:
+            return "Countdown unknown"
+        return timerwin.say_time(self.timer.steps).capitalize()
+
+    def repeat(self, ann: Announcer) -> None:
+        ann.answer(self._time() + ".")
+
+    describe = repeat
+    summary = repeat
+
+    def adjust(self, ann: Announcer, delta: int) -> None:
+        before = self.timer.steps
+        now = self.timer.step(delta)
+        if now is None:
+            ann.answer("Could not change the countdown, so it is now unknown. "
+                       "Escape cancels.")
+            return
+        if now == before:
+            ann.answer("{}. That is as {} as it goes.".format(
+                self._time(), "short" if delta < 0 else "long"))
+            return
+        ann.answer(self._time() + ".")
+
+
 class App:
     def __init__(self, speaker: Optional[Speaker] = None, require_focus: bool = True) -> None:
         self.ann = Announcer(speaker or get_speaker())
@@ -785,6 +846,8 @@ class App:
         pager = Pager(self.proc, self.hwnd, self.finder,
                       slotscreen.page_count(game_dir))
         self.watchers = {
+            screens.TIMER: TimerWatcher(
+                timerwin.Timer(self.proc, self.hwnd, self.finder)),
             screens.SLOTS: SlotScreenWatcher(self.slots, self.saves, pager),
             screens.MAIN_MENU: MainMenuWatcher(),
             screens.SELECT: SelectWatcher(PremadeScreen(self.proc)),
@@ -1040,6 +1103,13 @@ class App:
             self._do_action(what)
 
     def _do_action(self, what: str) -> None:
+        if what in ("click", "rclick") and self.screen == screens.TIMER:
+            # Nothing to point at here either: the two step buttons are the
+            # only controls, and Enter and Escape are already the game's.
+            watcher = self.current_watcher()
+            if watcher:
+                watcher.adjust(self.ann, 1 if what == "click" else -1)
+            return
         if what in ("click", "rclick") and self.screen == screens.SLOTS:
             # There is nothing to click at on this screen -- the arrow keys
             # already move the highlight -- so the two mouse-button keys are

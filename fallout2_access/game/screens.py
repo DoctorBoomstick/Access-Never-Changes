@@ -40,6 +40,7 @@ SELECT = "select"
 CHARGEN = "chargen"
 WORLD = "world"
 SLOTS = "slots"          # the save or load screen
+TIMER = "timer"          # the explosive countdown
 UNKNOWN = "unknown"
 
 # Sub-modes reported by the in-game script's get_game_mode bitmask, from
@@ -240,7 +241,13 @@ def detect(proc: Process, in_game: bool = False,
     # save screen had been opened -- so the mod answered "load game" to the map,
     # to character selection, to all of it. A window that is actually open is a
     # fact; a flag somebody set is a promise.
-    from . import slotscreen  # local import: avoids a cycle
+    from . import slotscreen, timerwin  # local imports: avoid a cycle
+
+    # The countdown first. It is a small window drawn over the map, so every
+    # other detector still reports the map underneath it -- and a charge whose
+    # timer is being set is the last thing that should be narrated as scenery.
+    if timerwin.showing(proc):
+        return TIMER
 
     if slotscreen.showing(proc):
         return SLOTS
