@@ -76,6 +76,7 @@
 #define ACT_SOUTH          (-15)
 #define ACT_STATUS         (-16)
 #define ACT_MENU           (-17)
+#define ACT_USE_ACTIVE     (-18)
 
 #define ACTION_LIST     (0x00596C3C)
 #define MENU_MAX        (12)
@@ -153,6 +154,7 @@ procedure menu_close;
 procedure menu_step(variable delta);
 procedure menu_do;
 procedure menu_label(variable code);
+procedure report_active;
 procedure run_pending;
 procedure report_status;
 
@@ -525,6 +527,7 @@ procedure on_key begin
    else if (key == DIK_SEMICOLON) then dir := ACT_STATUS;
    else if (key == DIK_SLASH) then dir := ACT_SCAN_JUMP;
    else if (key == DIK_M) then dir := ACT_MENU;
+   else if (key == DIK_U) then dir := ACT_USE_ACTIVE;
    else if (key == DIK_BACKSLASH) then dir := ACT_PREPARE;
    else return;
 
@@ -549,6 +552,7 @@ procedure on_key begin
    else if (dir == ACT_SCAN_JUMP)     then call scan_jump;
    else if (dir == ACT_PREPARE)       then call prepare_cursor;
    else if (dir == ACT_MENU)          then call menu_open;
+   else if (dir == ACT_USE_ACTIVE)    then call report_active;
    else                               call step_cursor(dir);
 
    set_sfall_return(0);   // swallow the key so the game does not also act
@@ -1123,6 +1127,34 @@ end
  * moment of building, and every action is applied to that object rather than
  * to whatever the cursor is over when Enter is finally pressed.
  */
+/*
+ * report_active  --  name the item in your hand, and say if it is a weapon.
+ *
+ * Using a carried item ends in a click on the interface bar's ITEM SLOT, which
+ * only the Python side can do. So this does not act: it reports, and the other
+ * side clicks.
+ *
+ * The weapon flag is the important half. That slot acts on the ACTIVE item and
+ * clicking it with a weapon live ATTACKS -- which is how a fight started and a
+ * live charge ended up on the floor during development. Better to refuse with a
+ * reason than to swing a spear at nothing.
+ *
+ * critter_inven_obj answers only for the ACTIVE hand, which is useless as a
+ * reading and exact here: whichever hand it will talk about is the live one.
+ */
+procedure report_active begin
+   variable item;
+
+   item := critter_inven_obj(dude_obj, INVEN_TYPE_RIGHT_HAND);
+   if (not item) then item := critter_inven_obj(dude_obj, INVEN_TYPE_LEFT_HAND);
+   if (not item) then begin
+      debug_msg("WORLD:useactive empty|");
+      return;
+   end
+   debug_msg("WORLD:useactive " + obj_name(item) + "|"
+      + (obj_item_subtype(item) == item_type_weapon) + "|");
+end
+
 procedure menu_open begin
    variable i, code, ou;
 

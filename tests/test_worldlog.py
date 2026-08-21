@@ -271,3 +271,35 @@ class TestMenuLine(unittest.TestCase):
 
     def test_backing_out(self):
         self.assertEqual(self.say("WORLD:menu closed|"), "Closed.")
+
+
+class TestUseActiveLine(unittest.TestCase):
+    """The U key: use whatever is in your hand.
+
+    The script reports rather than acts, because using a carried item ends in a
+    click on the interface bar's item slot and only the Python side has a
+    pointer. The weapon flag is what stops that click being an attack.
+    """
+
+    def test_a_usable_item_is_used(self):
+        name, weapon, said = worldlog.use_active_line(
+            "WORLD:useactive Plastic Explosives|0|")
+        self.assertEqual(name, "Plastic Explosives")
+        self.assertFalse(weapon)
+        self.assertIn("Using Plastic Explosives", said)
+
+    def test_a_weapon_is_refused_with_the_reason(self):
+        """That slot ATTACKS with a weapon live, which is how a fight started
+        and a live charge ended up on the floor."""
+        name, weapon, said = worldlog.use_active_line("WORLD:useactive Spear|1|")
+        self.assertEqual(name, "Spear")
+        self.assertTrue(weapon)
+        self.assertIn("would attack", said)
+
+    def test_empty_hands_say_what_to_do(self):
+        name, weapon, said = worldlog.use_active_line("WORLD:useactive empty|")
+        self.assertIsNone(name)
+        self.assertIn("Ready something", said)
+
+    def test_a_line_that_is_not_ours(self):
+        self.assertIsNone(worldlog.use_active_line("WORLD:hex 1 dist 0 : you|"))

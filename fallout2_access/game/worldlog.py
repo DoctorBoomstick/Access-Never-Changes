@@ -73,6 +73,30 @@ def status_line(line: str) -> Optional[str]:
     return " ".join(parts)
 
 
+# "WORLD:useactive Plastic Explosives|0|"
+_USEACTIVE_RE = re.compile(r"WORLD:useactive ([^|]*)\|(-?\d+)?\|?")
+
+
+def use_active_line(line):
+    """(item, is_a_weapon, what to say) for a WORLD:useactive line, or None.
+
+    The script reports rather than acts, because using a carried item ends in a
+    click on the interface bar's item slot and only the Python side has a
+    pointer. The weapon flag is what stops that click being an attack.
+    """
+    m = _USEACTIVE_RE.match(line)
+    if not m:
+        return None
+    name = m.group(1).strip()
+    if name == "empty" or not name:
+        return None, False, "Your hands are empty. Ready something first."
+    weapon = m.group(2) == "1"
+    if weapon:
+        return name, True, ("{} is a weapon. Using it from here would attack, "
+                            "so it is refused.".format(name))
+    return name, False, "Using {}.".format(name)
+
+
 _MENU_RE = re.compile(r"WORLD:menu (\w+)\s*([^|]*)\|?([^|]*)\|?([^|]*)\|?([^|]*)\|?")
 
 

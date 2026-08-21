@@ -419,6 +419,13 @@ class WorldWatcher(Watcher):
                 said = worldlog.use_item_line(line)
                 if said:
                     self._queue.append((said, True))
+            elif line.startswith("WORLD:useactive"):
+                got = worldlog.use_active_line(line)
+                if got:
+                    name, weapon, said = got
+                    self._queue.append((said, True))
+                    if name and not weapon:
+                        self.pending_item_action = "useactive"
             elif line.startswith("WORLD:menu"):
                 said = worldlog.menu_line(line, self._menu_aimed_at)
                 if said:
@@ -1120,6 +1127,13 @@ class App:
         if not line:
             return
         self.world.pending_item_action = None
+        if line == "useactive":
+            # The U key, from the map: the item is already in the active hand
+            # and already known not to be a weapon, so this is just the click.
+            done, why = itemactions.click_item_slot(self.proc, self.hwnd)
+            if not done:
+                self.ann.answer(why or "That did not work.")
+            return
         m = inventory._DO.match(line)
         if not m:
             return

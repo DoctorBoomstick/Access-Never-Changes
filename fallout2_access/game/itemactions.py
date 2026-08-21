@@ -51,27 +51,17 @@ def _panel(proc, width, height):
     return None
 
 
-def use(proc, hwnd, side: int, index: int, active: bool) -> Tuple[bool, str]:
-    """Use the chosen item. Returns (done, what to say).
+def click_item_slot(proc, hwnd) -> Tuple[bool, str]:
+    """Click the interface bar's item slot: the game's own "use this" control.
 
-    Refuses clearly rather than clicking hopefully. A refusal that says what to
-    do about it is worth more here than an attempt that starts a fight.
+    Assumes the caller has already established that the active item is worth
+    using. This slot acts on whatever is live, and with a weapon there it
+    ATTACKS -- so every caller checks first, and none of them checks here.
     """
     from ..input.send import guarded_tap, mouse_click
     from .pointer import MenuMouse, aim_to
 
-    if side != SIDE_WORN or index not in HAND_INDEXES:
-        return False, ("Put it in one of your hands first, then use it.")
-
-    if not active:
-        # One press, and then the state is re-read rather than assumed. `b`
-        # swaps which hand is live; pressing it blind in a retry loop is what
-        # started a fight once already.
-        guarded_tap(hwnd, "b", settle=0.6)
-        time.sleep(0.8)
-
-    # Out of the inventory: the item slot lives on the interface bar, which the
-    # inventory window covers.
+    # The bar is underneath the inventory window, so that has to go first.
     if _panel(proc, PANEL_WIDTH, PANEL_HEIGHT) is not None:
         guarded_tap(hwnd, "escape", settle=0.7)
         time.sleep(1.0)
@@ -90,6 +80,27 @@ def use(proc, hwnd, side: int, index: int, active: bool) -> Tuple[bool, str]:
     mouse_click("left", settle=0.5)
     time.sleep(0.6)
     return True, ""
+
+
+def use(proc, hwnd, side: int, index: int, active: bool) -> Tuple[bool, str]:
+    """Use the chosen item. Returns (done, what to say).
+
+    Refuses clearly rather than clicking hopefully. A refusal that says what to
+    do about it is worth more here than an attempt that starts a fight.
+    """
+    from ..input.send import guarded_tap
+
+    if side != SIDE_WORN or index not in HAND_INDEXES:
+        return False, ("Put it in one of your hands first, then use it.")
+
+    if not active:
+        # One press, not a loop. `b` swaps which hand is live, and pressing it
+        # blind and repeatedly to "fix" an unmeasured state is what started a
+        # fight once already.
+        guarded_tap(hwnd, "b", settle=0.6)
+        time.sleep(0.8)
+
+    return click_item_slot(proc, hwnd)
 
 
 def drop(finder, proc, hwnd, side: int, index: int, total: int

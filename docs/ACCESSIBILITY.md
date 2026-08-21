@@ -524,6 +524,23 @@ button on every carried row and every worn slot left the map's action array
 unchanged, still reading whatever object it was last built for. So this menu can
 only ever offer what somebody here thought of, where the map's grows by itself.
 
+### Using what is in your hand — U
+
+On the map, **U** uses whatever is in your active hand. That is the shortcut for
+the thing you will do constantly; the menu above is for everything else.
+
+    Using Plastic Explosives.
+
+If a **weapon** is live it refuses and says so, rather than clicking:
+
+    Spear is a weapon. Using it from here would attack, so it is refused.
+
+That is not caution for its own sake — the interface bar's item slot acts on the
+active item, and clicking it with a weapon in hand starts a fight. It did,
+during development, and dropped a live charge on the floor doing it.
+
+`b` swaps which hand is active.
+
 ### Arming an explosive, and the countdown
 
 Explosives do not get used *on* a door — the game does not work that way. You
