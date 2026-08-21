@@ -80,6 +80,10 @@
 #define ACTION_LIST     (0x00596C3C)
 #define MENU_MAX        (12)
 
+// How many polls to let pass before running a queued action. The
+// keypress that asked for it has to be completely finished first.
+#define PENDING_TICKS   (3)
+
 #define ACT_CANCEL      (0)
 #define ACT_DROP        (1)
 #define ACT_INVENTORY   (2)
@@ -112,6 +116,10 @@ variable g_menu_index := 0;
 variable g_menu_count := 0;
 variable g_menu_target := 0;
 variable g_menu_codes;
+variable g_do_what := 0;
+variable g_do_item := 0;
+variable g_do_target := 0;
+variable g_do_wait := 0;
 variable g_movestart := -1;
 variable g_moving := 0;
 variable g_stillticks := 0;
@@ -145,6 +153,7 @@ procedure menu_close;
 procedure menu_step(variable delta);
 procedure menu_do;
 procedure menu_label(variable code);
+procedure run_pending;
 procedure report_status;
 
 /*
@@ -222,6 +231,8 @@ end
  */
 procedure poll_state begin
    variable m, c, d, b;
+
+   call run_pending;
 
    // Game mode. This is the ONLY reliable way for the Python side to know we
    // are in a loaded game and which sub-screen is up: from memory alone, being
@@ -1191,6 +1202,55 @@ procedure menu_step(variable delta) begin
       + (g_menu_index + 1) + "|" + g_menu_count + "|");
 end
 
+/*
+ * run_pending  --  perform a queued action, outside the keypress hook.
+ *
+ * Calling use_obj_on_obj from inside the hook reaches the engine and does
+ * nothing: measured with self as the player and again with self as the target,
+ * and both times the call returned normally with the game mode still 0 and the
+ * world unchanged.
+ *
+ * What was never varied is WHEN. The engine's handler registers an animation
+ * sequence rather than acting immediately, and registering one halfway through
+ * processing the keypress that asked for it is a good way to have it cleared by
+ * the rest of that same keypress. Ordinary scripts make this call from a
+ * procedure, never from an input hook.
+ *
+ * So the menu only queues, and this runs a few polls later with the keypress
+ * long finished.
+ */
+procedure run_pending begin
+   variable what, item, target;
+
+   if (not g_do_what) then return;
+   if (g_do_wait > 0) then begin
+      g_do_wait := g_do_wait - 1;
+      return;
+   end
+
+   what := g_do_what;
+   item := g_do_item;
+   target := g_do_target;
+   g_do_what := 0;
+   g_do_item := 0;
+   g_do_target := 0;
+
+   if (not target) then begin
+      debug_msg("WORLD:menu gone|");
+      return;
+   end
+
+   set_self(dude_obj);
+   set_self(dude_obj);
+   if (what == ACT_USE) then begin
+      use_obj(target);
+   end else begin
+      use_obj_on_obj(item, target);
+   end
+   set_self(0);
+   debug_msg("WORLD:pending ran " + what + " mode=" + get_game_mode + "|");
+end
+
 procedure menu_do begin
    variable code, item, target;
 
@@ -1240,12 +1300,10 @@ procedure menu_do begin
        * back whatever name was last in the engine's buffer, which made the
        * reading look like a sensible answer instead of an error.
        */
-      set_self(target);
-      set_self(target);
-      debug_msg("WORLD:selfdbg after=" + obj_name(self_obj) + "|");
-      use_obj(target);
-      set_self(0);
-      debug_msg("WORLD:useobj done mode=" + get_game_mode + "|");
+      g_do_what := ACT_USE;
+      g_do_item := 0;
+      g_do_target := target;
+      g_do_wait := PENDING_TICKS;
       return;
    end
 
@@ -1275,12 +1333,10 @@ procedure menu_do begin
       end
       debug_msg("WORLD:useitem try " + obj_name(item) + "|"
          + obj_name(target) + "|");
-      set_self(target);
-      set_self(target);
-      debug_msg("WORLD:selfdbg after=" + obj_name(self_obj) + "|");
-      use_obj_on_obj(item, target);
-      set_self(0);
-      debug_msg("WORLD:useitem done mode=" + get_game_mode + "|");
+      g_do_what := ACT_INVENTORY;
+      g_do_item := item;
+      g_do_target := target;
+      g_do_wait := PENDING_TICKS;
       return;
     end
 
