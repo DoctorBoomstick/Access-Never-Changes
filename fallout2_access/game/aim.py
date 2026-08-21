@@ -49,7 +49,21 @@ _PREPARE = re.compile(r"WORLD:prepare (-?\d+)\|([^|]*)\|(-?\d+)\|(-?\d+)\|")
 # a hardcoded 12 pixels hit one ant and sailed clean over another. The engine is
 # asked at each step whether it can see a target, so critter size, stance and
 # screen position stop mattering.
-TARGET_STEPS = (0, -4, -8, -12, -16, -20, -26, -32)
+# Upwards first, because a critter or a wall is drawn standing UP out of its
+# hex, so the sprite is above the tile's centre.
+#
+# But not only upwards, which is what this was. **A brick of plastic explosive
+# lying on the floor is drawn at or below the centre**, so walking the pointer
+# up from the middle never touched it, obj_under_cursor reported nothing, and
+# prepare_cursor fell through to "walkable ground" and chose the movement
+# cursor. The click then walked onto the item instead of picking it up, with
+# nothing anywhere saying why -- the hex readout named the item perfectly well
+# the whole time, because that comes from the tile's object list rather than
+# from the pointer.
+#
+# So the low half of the hex is searched too. It costs a few more probes on the
+# misses and makes small things on the ground reachable at all.
+TARGET_STEPS = (0, -4, -8, -12, -16, -20, -26, -32, 4, 8, 12, 16)
 
 # Where to look for a spot inside the hex that is not covered by something
 # else's sprite. Fallout draws tall objects over the hexes in front of them, so
