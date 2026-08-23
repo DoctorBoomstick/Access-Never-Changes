@@ -20,6 +20,8 @@ import os
 import re
 from typing import List, NamedTuple, Optional
 
+from . import charsheet
+
 PREFIX = "WORLD:"
 # gl_combat.ssl writes on the same channel. Two scripts, one log file: they are
 # kept as separate scripts so a bug in one cannot crash the other, but there is
@@ -29,6 +31,15 @@ COMBAT_PREFIX = "COMBAT:"
 SCAN_PREFIX = "SCAN:"
 # gl_inven.ssl, a third script, for the inventory and loot windows.
 INVEN_PREFIX = "INVEN:"
+# The character sheet, reported once when that screen opens.
+CHAR_PREFIX = "CHAR:"
+# The Skilldex panel's contents, likewise.
+SKILLDEX_PREFIX = "SKILLDEX:"
+
+# get_game_mode's CHARSCREEN bit. Spelled out rather than imported, the same way
+# slotscreen spells out SAVEGAME: screens.py is the module that owns these names
+# and it already reaches into this one.
+MODE_CHARSCREEN = 0x200
 
 # "WORLD:hex 17488 dist 0 : you, Tree|"
 # Contents stop at the terminating bar. The engine appends its own debug output
@@ -73,8 +84,10 @@ def status_line(line: str) -> Optional[str]:
     return " ".join(parts)
 
 
-# "WORLD:useactive Plastic Explosives|0|"
-_USEACTIVE_RE = re.compile(r"WORLD:useactive ([^|]*)\|(-?\d+)?\|?")
+# "WORLD:useactive Plastic Explosives|0||"  and, for an empty active hand,
+# "WORLD:useactive empty|0|Healing Powder|" naming what the OTHER hand holds.
+# The third field is optional so an older compiled script still parses.
+_USEACTIVE_RE = re.compile(r"WORLD:useactive ([^|]*)\|(-?\d+)?\|?([^|]*)?\|?")
 
 
 def use_active_line(line):
@@ -82,18 +95,38 @@ def use_active_line(line):
 
     The script reports rather than acts, because using a carried item ends in a
     click on the interface bar's item slot and only the Python side has a
-    pointer. The weapon flag is what stops that click being an attack.
+    pointer.
+
+    **A weapon is no longer refused.** This used to stop and explain itself
+    whenever the active item was a weapon, on the grounds that the item slot
+    attacks with a live weapon and a stray swing costs a turn. That is a real
+    consequence, and it is the player's to accept: a sighted player presses the
+    same slot with the same weapon in hand and the game does not argue with
+    them. Deciding on someone's behalf that they cannot have meant it is not
+    accessibility, it is a smaller game.
+
+    The flag is still reported and still spoken, because "Spear" and "Spear, a
+    weapon" are different facts about what is in your hand -- and knowing it is
+    what makes the decision an informed one instead of a blocked one.
     """
     m = _USEACTIVE_RE.match(line)
     if not m:
         return None
     name = m.group(1).strip()
     if name == "empty" or not name:
+        # The slot acts on the ACTIVE hand, so an item in the other one might as
+        # well be in the pack. Naming it is the difference between "this key is
+        # broken" and "the powder is in your other hand" -- which is exactly the
+        # confusion this reading used to cause, back when it reported the other
+        # hand's item as though the slot would use it.
+        other = (m.group(3) or "").strip()
+        if other:
+            return None, False, ("Your active hand is empty. {} is in the other "
+                                 "hand.".format(other))
         return None, False, "Your hands are empty. Ready something first."
     weapon = m.group(2) == "1"
     if weapon:
-        return name, True, ("{} is a weapon. Using it from here would attack, "
-                            "so it is refused.".format(name))
+        return name, True, "Using {}, a weapon.".format(name)
     return name, False, "Using {}.".format(name)
 
 
@@ -132,7 +165,13 @@ def menu_line(line: str, aimed_at: Optional[str] = None) -> Optional[str]:
     if what == "open":
         name, count, first = (m.group(2).strip(), m.group(3).strip(),
                               m.group(4).strip())
-        if aimed_at and name and aimed_at != name:
+        # Tolerant, not equal. Both names come from the engine, but through two
+        # doors that word them differently: the aim reports through obj_label,
+        # which appends ", locked" or ", open", while the menu reports the bare
+        # obj_name. An equality test therefore cried wolf on exactly the locked
+        # doors and open containers -- announcing "read the wrong thing" about a
+        # perfectly good menu for the one object the player most needed it for.
+        if aimed_at and name and not names_match(name, aimed_at):
             return ("Read the wrong thing: pointed at {} but the game answered "
                     "for {}. Try again.".format(aimed_at, name))
         return "{}. {} actions. {}, 1 of {}.".format(
@@ -141,6 +180,44 @@ def menu_line(line: str, aimed_at: Optional[str] = None) -> Optional[str]:
         label, index, count = (m.group(2).strip(), m.group(3).strip(),
                                m.group(4).strip())
         return "{}, {} of {}.".format(label.capitalize(), index, count)
+    return None
+
+
+# "WORLD:pick open|Door Track|1|2|"
+_PICK_RE = re.compile(r"WORLD:pick (\w+)\s*\|?([^|]*)\|?([^|]*)\|?([^|]*)\|?")
+
+
+def pick_line(line: str) -> Optional[str]:
+    """Turn a WORLD:pick line into the sentence to say, or None.
+
+    The list of things on the hex, offered before the list of things to do to
+    them. It exists because "which object did you mean" was previously answered
+    by where a mouse pointer ended up, and that answer was wrong twice in ways
+    the player could not see -- a door lost to the Door Track sharing its tile,
+    and walkable ground refused because a wall was drawn across it.
+
+    Both entries and count are said, because the count is what tells you
+    whether stepping the list is worth doing at all.
+    """
+    m = _PICK_RE.match(line)
+    if not m:
+        return None
+    what = m.group(1)
+    if what == "none":
+        return "Nothing here to act on."
+    if what == "closed":
+        return "Cancelled."
+    if what == "gone":
+        return "That is no longer there."
+    if what in ("open", "at"):
+        label, index, count = (m.group(2).strip(), m.group(3).strip(),
+                               m.group(4).strip())
+        said = "{}, {} of {}.".format(label.capitalize(), index, count)
+        if what == "open":
+            # Only on the way in. Repeating it on every step would bury the
+            # thing being stepped to.
+            said = "{} things here. {}".format(count, said)
+        return said
     return None
 
 
@@ -201,6 +278,64 @@ def use_item_line(line: str) -> Optional[str]:
     return None      # "done" carries diagnostics; the game's own words follow
 
 
+# Words the readout is not naming an object with.
+#
+# "empty", "blocked" and "you" are what describe_cursor says INSTEAD of a list
+# of objects. "locked" and "open" are the state gl_world.ssl's obj_label appends
+# to a door or a container -- and it appends them with the same comma that
+# separates one object from the next, which is why they have to be named here:
+# nothing about the string itself distinguishes "Door, locked" (one object) from
+# "Door Track, Door" (two). Both halves of that pair are ours rather than the
+# game's, so listing them does not break a translation the way filtering on an
+# object name would.
+NOT_A_NAME = frozenset(("empty", "blocked", "you", "locked", "open"))
+
+
+def wanted_names(wanted) -> List[str]:
+    """Normalise one name, or many, into a list to match against.
+
+    Callers that know exactly what they aimed at -- the action menu, handed an
+    object name by the script -- pass a string. The click passes everything the
+    hex readout named, because the readout is the player's own knowledge of that
+    hex and any of it is a fair answer.
+    """
+    if not wanted:
+        return []
+    if isinstance(wanted, str):
+        wanted = [wanted]
+    return [w.strip().lower() for w in wanted if w and w.strip()]
+
+
+def bare_name(name: str) -> str:
+    """An object's name with the mod's state words taken back off.
+
+    The engine is asked the same question through two doors that word the
+    answer differently: `prepare_cursor` reports through `obj_label`, which
+    appends state -- "Door, locked" -- while the menu reports the bare
+    `obj_name`, "Door". The suffix is the mod's own and always comes after a
+    comma, so it comes off the same way the hex readout takes it off.
+    """
+    return (name or "").split(",")[0].strip().lower()
+
+
+def names_match(name: str, acceptable) -> bool:
+    """Is `name` one of the objects in `acceptable`?
+
+    Whole names, once the state suffix is off. This was a substring test either
+    way round, and that is not a smaller mistake than demanding equality -- it
+    is the same mistake pointing the other way. **"Door" is a substring of
+    "Door Track"**, so on the hex that every sliding door in the game sits on,
+    a caller asking for the door accepted the flat rail underneath it, and a
+    lockpick armed for the door was spent on a piece of track. Measured on hex
+    11108 in the Arroyo caves: `WORLD:prepare 6|Door Track|` seven times over,
+    each one a skill use the player watched do nothing.
+    """
+    low = bare_name(name)
+    if not low:
+        return False
+    return any(low == bare_name(w) for w in wanted_names(acceptable))
+
+
 class HexReading(NamedTuple):
     tile: int
     distance: int
@@ -213,6 +348,32 @@ class HexReading(NamedTuple):
             return what
         return "{}, {} hex{}".format(what, self.distance, "" if self.distance == 1 else "es")
 
+    def names(self) -> List[str]:
+        """Every object the readout named, in the order the script listed them.
+
+        This exists because `contents.split(",")[0]` was being used as "the
+        thing the player meant", and on a hex holding more than one object that
+        picks whichever the engine happened to list first. Every sliding door in
+        the game sits on a Door Track, so a door hex reads "Door Track, Door",
+        the first field is the track, and the click then refused to act on the
+        door because the engine kept answering "Door" -- which was correct, and
+        was discarded thirty-two times in a row.
+
+        The readout is prose written for a listener, so parsing it back is doing
+        the string a violence it was not designed for. Returning all of the
+        fields rather than one of them is what makes that tolerable: the caller
+        no longer has to guess which is right, because it asks the engine and
+        accepts any answer the player has been told about.
+        """
+        out: List[str] = []
+        for field in self.contents.split(","):
+            name = field.strip()
+            if not name or name.lower() in NOT_A_NAME:
+                continue
+            if name not in out:
+                out.append(name)
+        return out
+
 
 class WorldLog:
     def __init__(self, path: str) -> None:
@@ -221,6 +382,10 @@ class WorldLog:
         self.game_mode: Optional[int] = None
         self.cursor_mode: Optional[int] = None
         self.last_hex: Optional[HexReading] = None
+        # The in-game character screen, as the engine reports it. Lives here
+        # rather than on a watcher because the script fills it and a different
+        # watcher reads it.
+        self.sheet = charsheet.Sheet()
         self.session_live = False
         # Bumped every time the script announces itself, which it does once per
         # game load. The display window's buffer is reallocated at the same
@@ -234,6 +399,7 @@ class WorldLog:
         self.game_mode = None
         self.cursor_mode = None
         self.last_hex = None
+        self.sheet = charsheet.Sheet()
         self.session_live = False
         self.ready_count = 0
 
@@ -273,6 +439,18 @@ class WorldLog:
                 if inven.startswith("INVEN:ready"):
                     self.session_live = True
                 continue
+            if SKILLDEX_PREFIX in line:
+                out.append(line[line.index(SKILLDEX_PREFIX):].strip())
+                self.session_live = True
+                continue
+            if CHAR_PREFIX in line:
+                # Absorbed here rather than passed on. These are numbers for
+                # the character screen to read out when asked, not events, and
+                # the default for an unrecognised line is to speak it -- which
+                # would read five rows of raw digits aloud.
+                self.sheet.handle(line[line.index(CHAR_PREFIX):].strip())
+                self.session_live = True
+                continue
             if PREFIX not in line:
                 continue
             line = line[line.index(PREFIX):].strip()
@@ -287,6 +465,13 @@ class WorldLog:
             if m:
                 self.game_mode = int(m.group(1))
                 self.session_live = True
+                if not (self.game_mode & MODE_CHARSCREEN):
+                    # Dropped on the way out, so it cannot outlive the screen it
+                    # describes. Rolling a NEW character in the same session
+                    # would otherwise inherit the old one's numbers, and the
+                    # creation editor is precisely where the reader must fall
+                    # back on the editor's own working copy.
+                    self.sheet = charsheet.Sheet()
                 continue
 
             m = _CURSOR_RE.match(line)

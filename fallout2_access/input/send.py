@@ -40,18 +40,52 @@ DIK = {
     "space": (0x39, False),
     "minus": (0x0C, False),
     "plus": (0x0D, False),  # the '=' key
+    # The number row. Fallout binds these to the dialogue replies itself --
+    # option i is pressed by the key '1' + i, which the engine states in its
+    # own button table -- so saying a reply is pressing one of these rather
+    # than pointing at anything.
+    "1": (0x02, False),
+    "2": (0x03, False),
+    "3": (0x04, False),
+    "4": (0x05, False),
+    "5": (0x06, False),
+    "6": (0x07, False),
+    "7": (0x08, False),
+    "8": (0x09, False),
+    "9": (0x0A, False),
+    # The whole alphabet, rather than the dozen letters something in Python
+    # happened to need. This table has now produced two false failures of the
+    # same shape: a probe of the character editor died on 'h' and a check of the
+    # U key died on 'u', in both cases reporting a missing key as though the
+    # thing being tested were broken. `u` in particular is a key the mod
+    # documents and a player presses; not being able to send it made the one
+    # bug that needed reproducing the one bug that could not be.
     "a": (0x1E, False),
     "b": (0x30, False),
     "c": (0x2E, False),
     "d": (0x20, False),
+    "e": (0x12, False),
+    "f": (0x21, False),
+    "g": (0x22, False),
+    "h": (0x23, False),
     "i": (0x17, False),
+    "j": (0x24, False),
+    "k": (0x25, False),
     "l": (0x26, False),
-    "p": (0x19, False),
     "m": (0x32, False),
     "n": (0x31, False),
     "o": (0x18, False),
+    "p": (0x19, False),
+    "q": (0x10, False),
+    "r": (0x13, False),
     "s": (0x1F, False),
     "t": (0x14, False),
+    "u": (0x16, False),
+    "v": (0x2F, False),
+    "w": (0x11, False),
+    "x": (0x2D, False),
+    "y": (0x15, False),
+    "z": (0x2C, False),
     # Numpad. Note these share scancodes with the arrow/nav cluster and are
     # distinguished *only* by the extended flag: numpad 8 is 0x48 plain, while
     # the up arrow is 0x48 extended. Getting that wrong sends the wrong key.

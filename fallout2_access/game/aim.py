@@ -31,6 +31,7 @@ import time
 from typing import NamedTuple, Optional
 
 from ..input.send import guarded_tap, move_mouse_relative, park_pointer
+from . import worldlog
 
 # Fallout 2's tile numbering is row-major with 200 tiles to a row, so a tile
 # number splits into a row and a column that behave like coordinates. The screen
@@ -38,8 +39,13 @@ from ..input.send import guarded_tap, move_mouse_relative, park_pointer
 # what the matrix below is for.
 TILES_PER_ROW = 200
 
+# What the engine's cursor mode 0 means: a click walks to the tile under the
+# pointer. Spelled out rather than imported from screens.py, which imports this
+# module's neighbours and is not worth a cycle for one constant.
+CURSOR_MOVEMENT = 0
+
 _TARGET = re.compile(r"COMBAT:target (\d+)\|(\d+)\|([^|]*)")
-_PREPARE = re.compile(r"WORLD:prepare (-?\d+)\|([^|]*)\|(-?\d+)\|(-?\d+)\|")
+_PREPARE = re.compile(r"WORLD:prepare (-?\d+)\|([^|]*)\|(-?\d+)\|(-?\d+)\|(\d*)")
 
 # How far above a hex to look for the critter standing on it, in pixels. Fallout
 # picks critters by their drawn sprite rather than by the tile they occupy, so
@@ -85,8 +91,19 @@ TARGET_OFFSETS = tuple(
 # solves this without noticing, by clicking a part of the hex they can see.
 # Downwards first, because sprites lean upwards and the low edge of a hex is
 # usually the clear part.
-CLEAR_STEPS = ((0, 0), (0, 4), (0, 8), (-10, 4), (10, 4),
-               (-10, 0), (10, 0), (0, 12), (-14, 8), (14, 8))
+#
+# **A hex is small, and this list has to fit inside one.** Rastered against a
+# live game from a confirmed anchor on hex 20314: offsets out to +16 across and
+# -10 across were already on neighbouring tiles, and during the aim itself a
+# THREE pixel move changed which hex the pointer was over. An earlier version of
+# this list reached 22 pixels either side on the theory that a wider search
+# finds more clear ground. It does not. It leaves the hex, and a probe on the
+# wrong hex is discarded, so widening the box bought nothing but latency.
+#
+# Only ever used now for the narrow case below where something under the pointer
+# would really be acted on, so a handful of nearby spots is the right size.
+CLEAR_STEPS = ((0, 0), (0, 4), (0, -4), (0, 8), (10, 0), (10, 4),
+               (-6, 0), (-6, 4), (0, 12), (10, 8))
 
 _CALIB = re.compile(
     r"WORLD:calib mouse=(-?\d+),(-?\d+) btns=(-?\d+) under=(-?\d+) "
@@ -117,6 +134,11 @@ BOTTOM_MARGIN = 180
 MAX_STEPS = 10
 MAX_NUDGE = 320  # pixels per step; a whole-screen lunge overshoots wildly
 
+# How many times to ask for a calibration line before calling it a failure.
+# A bound, not a measurement: three taps costs at most a couple of seconds on
+# the way to a refusal that would otherwise have been spoken after one.
+READ_ATTEMPTS = 3
+
 
 class Reading(NamedTuple):
     x: int
@@ -136,6 +158,14 @@ def _rowcol(tile: int):
     return divmod(tile, TILES_PER_ROW)
 
 
+# Matching an object name lives with the readout that produces the names, in
+# worldlog, because the action menu's own cross-check needs exactly the same
+# comparison. Two copies of "is this the same object?" is how the two halves
+# drift apart, which is the shape of the bug this whole change is fixing.
+_wanted_names = worldlog.wanted_names
+_names_match = worldlog.names_match
+
+
 class Aimer:
     """Drives the pointer onto the look cursor's hex, and says whether it got there."""
 
@@ -145,6 +175,9 @@ class Aimer:
         self._pos = None
         # Learned response, refined as we go.
         self.j = [J_ROW_PER_X, J_COL_PER_X, J_ROW_PER_Y, J_COL_PER_Y]
+        # What was covering the hex the last time a clear spot could not be
+        # found. Set by prepare(), read only to word the refusal.
+        self.blocked_by: Optional[str] = None
 
     # -- sensing --------------------------------------------------------
 
@@ -170,8 +203,11 @@ class Aimer:
         guarded_tap(self.hwnd, "apostrophe", settle=0.06)
         deadline = time.time() + timeout
         found = None
+        seen = ""
         while time.time() < deadline:
-            for line in self._tail().splitlines():
+            chunk = self._tail()
+            seen += chunk
+            for line in chunk.splitlines():
                 m = _CALIB.search(line)
                 if m:
                     found = Reading(
@@ -183,12 +219,29 @@ class Aimer:
             if found:
                 return found
             time.sleep(0.03)
+        # Say what DID arrive. A miss here is spoken to the player as "the game
+        # did not report the cursor position", which is true and useless: it
+        # cannot distinguish a key that never reached the script from a reply
+        # that arrived mangled. The engine writes its own debug output onto our
+        # lines without a newline in between -- a real log holds
+        # "PROBE:key 2Dialogue Reaction: Said Neutral" -- so a splice through
+        # the middle of a calibration line fails this pattern while looking
+        # perfectly fine to a human reading the file. Printing the tail is what
+        # makes the next occurrence identifiable instead of anonymous.
+        if seen.strip():
+            print("[aim] no calibration line in: {!r}".format(seen[-300:]),
+                  flush=True)
+        else:
+            print("[aim] the script said nothing at all after the calibrate key",
+                  flush=True)
         return None
 
     def _probe(self, per_step: float = 0.25):
         """Ask the script to set the cursor, and report what it found there.
 
-        Returns (mode, object_name, hex_under_pointer, look_hex) or None.
+        Returns (mode, object_name, hex_under_pointer, look_hex, flat) or None.
+        `flat` is the engine's FLAG_FLAT: the thing under the pointer is drawn
+        lying on the floor rather than standing up out of the hex.
         """
         self._tail()
         guarded_tap(self.hwnd, "backslash", settle=0.08)
@@ -196,13 +249,14 @@ class Aimer:
         while time.time() < deadline:
             found = _PREPARE.findall(self._tail())
             if found:
-                mode, name, under, look = found[-1]
-                return int(mode), name.strip(), int(under), int(look)
+                mode, name, under, look, flat = found[-1]
+                return (int(mode), name.strip(), int(under), int(look),
+                        flat == "1")
             time.sleep(0.03)
         return None
 
     def prepare(self, want_object: bool, per_step: float = 0.25,
-                wanted: Optional[str] = None):
+                wanted=None):
         """Set the cursor for the click, and find a spot where it will land.
 
         Being on the right hex is not enough. Fallout draws tall objects over
@@ -215,21 +269,62 @@ class Aimer:
         For an object, upwards, onto its sprite. For bare ground, downwards and
         sideways, off whatever is leaning over it.
 
-        `wanted` names the object the caller actually meant, and without it this
-        takes the first object the engine offers -- which is wrong whenever
-        something taller is drawn over the one you chose. A brick of explosive
-        lying beside a door is the case that exposed it: every probe came back
-        "Impenetrable Door", the item was never found, and the click was set up
-        for the door. Passing the name the hex readout already gave the player
-        turns "an object" into "that object", and the search keeps going until
-        the engine agrees rather than settling for the first answer.
+        `wanted` is what the player was TOLD is on this hex -- one name or all
+        of them. Without it this takes the first object the engine offers, which
+        is wrong whenever something taller is drawn over the one you chose: a
+        brick of explosive lying beside a door answered "Impenetrable Door" to
+        every probe, and the click was set up for the door.
+
+        **All of them, not the first of them.** Insisting on a single name is
+        what made every door in the game unclickable. A sliding door sits on a
+        Door Track, so the hex reads "Door Track, Door", and taking the first
+        field meant demanding "Door Track" while the engine said "Door" to all
+        thirty-two probes in a row -- pointer on the right hex, engine agreeing,
+        every answer thrown away, and "cannot point at that" spoken about a door
+        the pointer was sitting on. Measured on hex 24308 in the Arroyo caves.
+
+        Matching against every name the readout gave is both safer and simpler.
+        The engine picks which object a click acts on; this only checks that its
+        choice is one of the things the player has been told is there. There is
+        no second guess to get wrong.
+
+        **But the first acceptable answer is not the best one.** Accepting any
+        of them meant accepting whichever the engine happened to name at the
+        spot the aim left the pointer, and on a door hex that is the Door Track
+        -- so the search stopped on its first probe, the click was set up for a
+        length of rail, and a lockpick armed for the door was spent on it.
+        Seven times in one session's log, each one silent, because using a
+        skill on scenery that has no answer for it is not an error the engine
+        reports. The same session picked the lock first try from one tile
+        further along, where the pointer happened to land on the door instead.
+
+        So a flat object does not end the search. FLAG_FLAT is the engine's own
+        word for what lies on the floor -- rails, rugs, splatters -- and what
+        stands up out of a hex is what a sighted player points at. The flat
+        answer is kept as a fallback rather than discarded, so a hex whose only
+        contents lie flat is still reachable; it just no longer wins over
+        something standing on top of it.
 
         Returns (name, offset). `name` is the object the click would act on, or
         None. For bare ground, None with an offset found is success; None with
-        no clear spot means the caller should not click.
+        no clear spot means the caller should not click -- and `blocked_by` then
+        names what was in the way, because "behind Wall" is a fact a player can
+        act on and "behind something" is not.
         """
         prev = (0, 0)
         candidates = list(TARGET_OFFSETS) if want_object else list(CLEAR_STEPS)
+        acceptable = _wanted_names(wanted)
+        self.blocked_by = None
+        # The best flat answer seen so far, and where it was seen. Only used if
+        # the whole search goes by without anything standing up out of the hex.
+        underfoot = None
+        # Is there anything to choose BETWEEN? A flat answer is only the wrong
+        # one when the hex holds something else that could be the right one.
+        # Told about a single object -- a rug on its own, or the one name the
+        # action menu hands over -- the engine's answer is the answer, and
+        # walking all thirty-two offsets to arrive back at it would be several
+        # seconds of silence bought for nothing.
+        choosing = len(acceptable) > 1
 
         for dx, dy in candidates:
             if (dx, dy) != prev:
@@ -239,25 +334,87 @@ class Aimer:
             probe = self._probe(per_step)
             if probe is None:
                 continue
-            _mode, name, under, look = probe
+            mode, name, under, look, flat = probe
             if under != look:
                 continue          # drifted off the hex entirely
             if want_object and name:
-                if wanted and wanted.lower() not in name.lower():
+                if acceptable and not _names_match(name, acceptable):
                     continue          # something else is drawn over it
+                if flat and choosing:
+                    # Keep looking. See the note above: this is the door track
+                    # under the door, and stopping here is what spent the skill
+                    # on it.
+                    if underfoot is None:
+                        underfoot = (name, prev)
+                    continue
                 return name, prev
-            if not want_object and not name:
-                return None, prev
+            if not want_object:
+                if not name:
+                    return None, prev
+                # Something IS drawn over the hex -- and that is usually fine.
+                #
+                # Ask the engine what a click would do rather than assuming it
+                # would hit the sprite. With the movement cursor Fallout walks
+                # to the tile under the pointer and does not care what is drawn
+                # over it, so a wall across a walkable hex costs nothing.
+                #
+                # Measured, because this file assumed the opposite for months.
+                # On hex 20314 every probe that stayed on the hex answered
+                # "Wall" or "Cave Wall", the search gave up, and the mod refused
+                # the walk. Clicking anyway, with mode 0 and the wall still
+                # squarely under the pointer, produced WORLD:arrive 20314 dist 2
+                # and cost the 2 action points the walk was worth. The refusal
+                # had never been checked against an actual click; it was
+                # inferred from obj_under_cursor naming something, which names
+                # something almost everywhere on a Fallout map.
+                #
+                # A non-movement cursor is the case that really would act on the
+                # sprite -- an item drawn across a walkable tile arms the
+                # command cursor, and clicking picks the item up instead of
+                # walking. That is worth stepping aside for, and it is what the
+                # remaining offsets are for.
+                if mode == CURSOR_MOVEMENT:
+                    return None, prev
+                self.blocked_by = name
+
+        if want_object and underfoot is not None:
+            # Nothing on this hex stands up, so the thing lying on it is the
+            # thing that was meant. Go back to where the engine said so, and
+            # probe once more: the script sets the cursor from what is under
+            # the pointer, and the last probe was somewhere else.
+            name, at = underfoot
+            if at != prev:
+                move_mouse_relative(at[0] - prev[0], at[1] - prev[1],
+                                    settle=0.05, hwnd=self.hwnd)
+                prev = at
+                self._probe(per_step)
+            return name, prev
         return (None, prev) if want_object else (False, prev)
 
     # -- solving --------------------------------------------------------
 
     def _solve(self, d_row: int, d_col: int):
-        """Screen delta that should produce this row/column change."""
+        """Screen delta that should produce this row/column change.
+
+        A singular model is recovered from rather than reported. It used to
+        return None, the caller turned that into "cannot work out which way to
+        move", and because the aimer lives as long as the session that refusal
+        was permanent -- every click, every hex, until the mod was restarted.
+
+        The measured starting values are always available and are known to be
+        roughly right, so falling back to them costs one slightly clumsy aim
+        that then re-measures itself. `_learn` no longer writes the row of zeros
+        that caused this, and this is the backstop for whatever does it next.
+        """
         a, c, b, d = self.j  # [[a b],[c d]] * (dx,dy) = (d_row, d_col)
         det = a * d - b * c
         if abs(det) < 1e-9:
-            return None
+            print("[aim] learned response went singular ({}); "
+                  "falling back to the measured defaults".format(self.j),
+                  flush=True)
+            self.j = [J_ROW_PER_X, J_COL_PER_X, J_ROW_PER_Y, J_COL_PER_Y]
+            a, c, b, d = self.j
+            det = a * d - b * c
         dx = (d * d_row - b * d_col) / det
         dy = (a * d_col - c * d_row) / det
         return dx, dy
@@ -268,7 +425,29 @@ class Aimer:
         Only meaningful when the move was mostly along one axis; a blended move
         cannot be attributed to one axis or the other without more algebra than
         this is worth.
+
+        **A move that crossed no hex boundary teaches nothing, and believing it
+        broke every click in the session.** A hex is about thirty pixels across,
+        so a twenty-odd pixel step landing inside the one it started in is
+        ordinary rather than exceptional. Taken as a measurement it says "moving
+        along this axis changes the row by zero and the column by zero", which
+        writes a row of zeros into the matrix, and a matrix with a zero row has
+        no inverse -- so `_solve` returned None from then on and every aim, on
+        every hex, answered "cannot work out which way to move".
+
+        Captured in a live log, and the step that did it is unremarkable:
+
+            mouse=472,334  under=20465     22 pixels right
+            mouse=494,334  under=20465     same hex, so d_row = d_col = 0
+            mouse=494,334  ...             the pointer never moved again
+
+        The aimer lives as long as the session, so one such step poisoned it
+        until the mod was restarted. That is why it read as "combat broke
+        clicking" -- combat scrolls the map and provokes more corrections, so it
+        is simply where the odds caught up.
         """
+        if d_row == 0 and d_col == 0:
+            return
         if abs(dx_px) > 20 and abs(dy_px) < 5:
             self.j[0] = d_row / dx_px
             self.j[1] = d_col / dx_px
@@ -289,7 +468,17 @@ class Aimer:
         # relative moves can leave the Windows cursor at a window edge, where
         # the engine scrolls the map continuously and no aim can converge.
         park_pointer(self.hwnd)
-        r = self.read()
+        # Ask more than once before giving up. A single dropped line used to end
+        # the whole action -- one tap, one 0.8 second window, and a refusal the
+        # player could not tell from a real one. Everything else in this mod
+        # re-asks the engine until it answers; this did not, and combat is
+        # exactly where it would bite, because that is when the engine writes
+        # the most of its own output and the frame times are longest.
+        r = None
+        for _ in range(READ_ATTEMPTS):
+            r = self.read()
+            if r is not None:
+                break
         if r is None:
             return False, None, "the game did not report the cursor position"
 

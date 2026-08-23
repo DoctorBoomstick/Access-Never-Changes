@@ -57,8 +57,56 @@ class FakeMemory:
             out.append(byte)
         return bytes(out)
 
+    def read(self, addr, size):
+        return self.read_chunked(addr, size)
+
+    def read_i16(self, addr):
+        blob = self.read_chunked(addr, 2)
+        if blob is None:
+            return None
+        return struct.unpack("<h", blob)[0]
+
+    def read_cstring(self, addr, max_len=256, encoding="cp1252"):
+        out = bytearray()
+        for i in range(max_len):
+            byte = self.bytes.get(addr + i)
+            if byte is None:
+                break
+            if byte == 0:
+                break
+            out.append(byte)
+        if not out:
+            return None
+        return bytes(out).decode(encoding, errors="replace")
+
     def module_at(self, name, directory):
         return None
+
+
+def memory_with_dialogue(reply, options, msglist=751, msgid=121,
+                         count=None, values=None) -> FakeMemory:
+    """A fake showing this conversation on screen.
+
+    `count` defaults to len(options) but can be set lower on purpose, which is
+    the case that matters: the engine never clears this array, it only
+    overwrites it, so entries past the count are the *previous* conversation's
+    replies sitting there fully readable.
+    """
+    from fallout2_access.game import dialogue
+
+    mem = FakeMemory(values)
+    mem.set_i32(dialogue.REPLY_MSGLIST, msglist)
+    mem.set_i32(dialogue.REPLY_MSGID, msgid)
+    mem.set_i32(dialogue.WINDOW, 6)
+    mem.poke(dialogue.REPLY_TEXT, reply.encode("cp1252") + b"\x00")
+    mem.set_i32(dialogue.OPTION_COUNT,
+                len(options) if count is None else count)
+    for index, text in enumerate(options):
+        addr = (dialogue.OPTIONS + index * dialogue.OPTION_STRIDE
+                + dialogue.OPTION_TEXT)
+        # With the bullet the engine really puts in front of every reply.
+        mem.poke(addr, b"\x95 " + text.encode("cp1252") + b"\x00")
+    return mem
 
 
 def _button(addr: int, press: int, nxt: int) -> bytes:
@@ -96,6 +144,29 @@ def memory_with_windows(windows, values=None) -> FakeMemory:
             mem.poke(baddr, _button(baddr, press, head))
             head = baddr
         mem.poke(waddr, _window(index + 1, 0, 0, width, height, head))
+        pointers.append(waddr)
+
+    blob = b"".join(struct.pack("<I", p) for p in pointers)
+    blob = blob.ljust(4 * uiwindow.MAX_WINDOWS, b"\x00")
+    mem.poke(uiwindow.WINDOW_LIST, blob)
+    mem.set_i32(uiwindow.WINDOW_COUNT, len(pointers))
+    return mem
+
+
+def memory_with_placed_windows(windows, values=None) -> FakeMemory:
+    """The same, but each window has a position as well as a size.
+
+    `windows` is a list of (left, top, width, height). The character editor's
+    name, age and sex dialogs are all exactly 139x72 and are told apart by
+    which of the three buttons they opened under, so a fake that puts every
+    window at the origin cannot express the case at all -- it would agree with
+    any implementation, including a wrong one.
+    """
+    mem = FakeMemory(values)
+    pointers = []
+    for index, (left, top, width, height) in enumerate(windows):
+        waddr = WINDOW_BASE + index * STRIDE
+        mem.poke(waddr, _window(index + 1, left, top, width, height, 0))
         pointers.append(waddr)
 
     blob = b"".join(struct.pack("<I", p) for p in pointers)

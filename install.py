@@ -67,7 +67,7 @@ REQUIRED = {
 # repeat rate independently, so the split costs nothing -- and gl_world has hard
 # crashed the engine twice during development. A bug while reading a container
 # should not be able to take the hex cursor down with it.
-SCRIPTS = ("gl_world.int", "gl_combat.int", "gl_inven.int")
+SCRIPTS = ("gl_world.int", "gl_combat.int", "gl_inven.int", "gl_dialog.int")
 
 GAME_MARKERS = ("fallout2.exe", "master.dat")
 

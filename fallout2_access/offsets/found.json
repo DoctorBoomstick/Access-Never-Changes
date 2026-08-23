@@ -70,5 +70,73 @@
     "type": "MessageList",
     "count": 234,
     "note": "perk.msg. Not needed for chargen but resolved for free."
+  },
+
+  "_dialogue_comment": "Confirmed live against Klint in Arroyo: all six read as zero or -1 with no conversation on screen, and all six filled in the moment one opened. Candidates came from fallout2-ce's original-address annotations; the confirmation is this game. The option array is never cleared, only overwritten, so dlg_option_count is the only thing that says how much of it is real.",
+
+  "dlg_reply_text": {
+    "addr": 5829860,
+    "hex": "0x0058F4E4",
+    "rva": 1635556,
+    "type": "char[900]",
+    "note": "What the NPC just said. Read Klint's greeting verbatim."
+  },
+  "dlg_reply_msglist": {
+    "addr": 5829848,
+    "hex": "0x0058F4D8",
+    "rva": 1635544,
+    "type": "i32",
+    "note": "Which .msg file the line came from. -2 for the engine's own [Done]."
+  },
+  "dlg_reply_msgid": {
+    "addr": 5829852,
+    "hex": "0x0058F4DC",
+    "rva": 1635548,
+    "type": "i32",
+    "note": "Which line of it. Read 751:121, then 751:124 after a reply was picked."
+  },
+  "dlg_options": {
+    "addr": 5832560,
+    "hex": "0x0058FF70",
+    "rva": 1638256,
+    "type": "entry[30]",
+    "stride": 928,
+    "text_offset": 24,
+    "note": "Replies on offer. Text at +0x18, prefixed with the byte 0x95 (a bullet). Entry: msglist, msgid, reaction, proc, btn, top, text[900], bottom."
+  },
+  "dlg_option_count": {
+    "addr": 5342936,
+    "hex": "0x005186D8",
+    "rva": 1148632,
+    "type": "i32",
+    "note": "How many of the 30 entries are real. Load-bearing: see the comment above."
+  },
+  "dlg_window": {
+    "addr": 5343044,
+    "hex": "0x00518744",
+    "rva": 1148740,
+    "type": "i32",
+    "note": "Dialogue window handle: -1 with no conversation, a GNW id with one. Cross-check only; the script's game mode is what the mod actually tests."
+  },
+  "dlg_speaker": {
+    "addr": 5343304,
+    "hex": "0x00518848",
+    "rva": 1149000,
+    "type": "Object*",
+    "note": "The critter being talked to. NOT yet used: the name lives behind the proto system, and the in-game script can get it for free from obj_name(dialog_obj). Recorded so the next person does not go looking."
+  },
+  "dlg_review_entries": {
+    "addr": 5827808,
+    "hex": "0x0058ECE0",
+    "rva": 1633504,
+    "type": "entry[]",
+    "note": "The Review screen's conversation history. Unconfirmed -- from fallout2-ce, not yet read live."
+  },
+  "dlg_review_count": {
+    "addr": 5342940,
+    "hex": "0x005186DC",
+    "rva": 1148636,
+    "type": "i32",
+    "note": "How many review entries. Unconfirmed, as above."
   }
 }

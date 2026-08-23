@@ -55,6 +55,70 @@ These are the engine's own keys, not anything this mod adds. The main menu has
 | `D` or Enter | done |
 | `C` or Escape | cancel |
 
+Each SPECIAL stat is read with the word the editor prints beside it —
+"Strength, 6, Good". The game abbreviates that word on screen to fit the panel
+("Avrg", "Exclnt"); what you hear is the same word untruncated, because an
+abbreviation is a measurement in pixels rather than something anyone reads
+aloud.
+
+`N`, `A` and `S` each open a small dialog, and the mod names it and reads its
+current value: "Sex. Male.", "Age 25.", "Name. Empty." Left and right change
+age and gender, and every change is spoken. **Escape cancels and the old value
+is spoken back**, so a dialog you opened by accident costs nothing.
+
+The name field is the one place the mod cannot follow you keystroke by
+keystroke: the game keeps the half-typed name somewhere no address can reach,
+and only writes it down when you accept it. The finished name is announced then.
+If you want to hear each letter as you type it, that is your screen reader's own
+"speak typed characters" setting, which works here because the mod is not
+competing with it.
+
+## The character screen, in a loaded game
+
+Press `C` in the game and the mod reads the sheet: the seven attributes with
+their rating words, the ten derived stats, the eighteen skills, your condition,
+and your level and experience. The screen navigates with its own keys — Tab
+moves between sections, the arrows move within one — exactly as it does
+during character creation, because it is the same panel.
+
+What changed is where the numbers come from. The mod used to read the engine's
+stat table and compute the rest with the character-creation formulas, which is
+right while you are making a character and wrong the moment you have one:
+
+| | mod said | screen said | why |
+|---|---|---|---|
+| Perception | 8 | 6 | a drug penalty, kept in a separate table |
+| Small Guns | 37% | 47% | tag skills and the points you have spent |
+| Damage Resistance | 0 | 8% | your armour, added when the row is drawn |
+
+Every one of those is a modifier the engine already totals up, so it is asked
+instead — `get_critter_stat` and `has_skill` return exactly what the panel
+is showing. The names are still the game's own, out of `stat.msg` and
+`skill.msg`, so a translated game reads out translated.
+
+Your condition is read from the engine's own flags, and **only what is actually
+set**. The box on screen is a fixed column of labels with the applicable ones
+lit, so reading the column out would announce that you are blind and missing
+both legs when you are fine.
+
+## The Skilldex, and stealth
+
+`S` opens the Skilldex and the mod reads it out, with the key that arms each
+one and how good you are at it:
+
+    Skilldex. 1 Sneak, 49 percent. 2 Lockpick, 24 percent. 3 Steal, 24 percent.
+    4 Traps, 22 percent. 5 First Aid, 37 percent. 6 Doctor, 31 percent.
+    7 Science, 15 percent. 8 Repair, 17 percent.
+
+The key number is the panel's position, not the skill's index — Sneak is
+skill 8 and is armed with 1.
+
+Arming any of them but Sneak switches the cursor, which is announced, so you
+know it took. **Sneak is a toggle with no cursor**, and the game prints nothing
+when it flips, so the panel now reports it: opening the Skilldex says
+"Sneaking." or "Not sneaking." along with the list. Press 1 and re-open it to
+hear where you ended up.
+
 ## In the game world
 
 Once you're on a map, numpad 0-9 are handled **inside the game** by
@@ -202,6 +266,53 @@ nothing:
 
     Door, locked, east 3 hexes. 1 of 4.
 
+## Talking to people
+
+Put the look cursor on someone and press numpad `+`. That starts a conversation
+the same way a sighted player does — a click on a person with the command
+cursor talks to them. You can also press numpad `.` for the action menu and
+choose **talk to it** from the list.
+
+Then the mod reads the screen: what they said, and every reply you can give,
+numbered.
+
+    Conversation. Greetings, Chosen One! It is good to see you. How may I
+    serve you? 3 replies. 1, Just thought I'd say hello. 2, Can you teach me
+    anything? 3, [Done]. Press the reply's number to answer.
+
+**Press the number to say it.** That is Fallout's own binding, not something
+this mod added: the engine has always bound the replies to the number keys, and
+each reply's button carries the key that presses it. So a reply is chosen with a
+keypress, and nothing has to be aimed at. This is the one thing in the mod that
+cannot land on the wrong target.
+
+| Key | Action |
+|---|---|
+| `1` – `9` | **say that reply** — the game's own keys |
+| Numpad 8 / 2 | previous / next reply |
+| Numpad 5 | re-read the reply you are on |
+| Numpad + | say the reply you are on |
+| Numpad / | the whole list of replies again |
+| Numpad . | just what they said, again |
+| Numpad ✳ | all of it, from the top |
+| `B` | barter, if they will trade |
+
+### The numpad does not choose replies
+
+Everywhere else the numpad is the hex cursor. In a conversation the game reads a
+numpad digit as the same character as the number above it, so numpad 4 — west —
+was saying the fourth thing on the list. Out loud. To whoever was standing
+there.
+
+`gl_dialog.ssl` exists to stop that, and it stops the whole numpad rather than
+only the keys the mod uses, because the presses that matter are the ones you
+make by mistake. The rule to remember:
+
+**In a conversation, the number row chooses a reply. The numpad never does.**
+
+Long replies are never cut off or scrolled: the mod reads the whole line out of
+memory, so the scroll arrows a sighted player needs do not exist for you.
+
 ## The game's own words
 
 Fallout talks to you along the bottom of the screen — "You see: a door", "It's
@@ -302,6 +413,33 @@ is what the screen is showing and what you are about to act on.
 Numpad + and - are the mouse-button keys everywhere else. On this screen there
 is nothing worth clicking at, so they are given to the one control that does
 need pointing at: the page arrows, which sfall only offers to the mouse.
+
+### Confirming a save
+
+Pressing Enter on a slot does not save straight away. The game puts up a small
+confirmation box, and until now nothing said so — the screen simply went
+quiet and saving looked like it had hung.
+
+The box is now announced, with the slot it is about:
+
+    Save game already exists, overwrite? Slot 11, QUICK: 22/08/2026 - 03:53:22.
+    Enter to confirm, Escape to cancel.
+
+    Save to slot 20? Enter to confirm, Escape to cancel.
+
+Enter writes the file, Escape backs out and puts you back on the list. Nothing
+is said on the way out of the box: a save that lands is announced by the mod
+watching the savegame folder, and a cancel re-reads the row you are on.
+
+The overwrite wording is the game's own sentence, read out of `lsgame.msg`, so
+it arrives translated. The rest is the mod describing the situation rather than
+reading the box — the box's text is drawn into the window and cannot be
+read back, so what you hear is assembled from what can be: which slot the
+highlight is on, whether the engine says that slot holds a game, and whether
+this screen saves or loads.
+
+If the box has only one button it is a notice rather than a question, and the
+mod says exactly that rather than guessing at its wording.
 
 ### Pages
 
@@ -440,58 +578,38 @@ sentence rather than an action.
 
 ### What can I do to this? — numpad .
 
-Point at something with the numpad and press **numpad .** on the map. You get a
-plain list of everything the game says you can do to that thing:
+Point the look cursor at a hex and press **numpad .**. If more than one thing is
+on that hex you are asked which you mean, and then what to do to it. Two short
+lists, both worked the same way:
 
-    Impenetrable Door. 4 actions. Use it, 1 of 4.
+    2 things here. Door track, 1 of 2.
+    Door, 2 of 2.
+    Use it, 1 of 4.
 
-| Key | In the list |
+| Key | In either list |
 |---|---|
-| Up / Down | move through the actions |
-| Enter | do the selected one |
+| Up / Down | move through the entries |
+| Enter | choose |
 | Escape | back out |
 
-Nothing else to learn — it behaves like every other list. Moving re-announces
-the entry, so there is no separate key to repeat it.
+A hex holding one thing skips straight to the actions, so the usual case costs
+no extra keystroke.
 
-**The contents are the engine's, not the mod's.** This is the same set of icons
-a sighted player gets when they hold the mouse button on something — the eye,
-the hand, the backpack, the skilldex — read out of the memory Fallout fills in
-from the object's own flags. So it stays right for objects this mod has never
-heard of, and an action nobody here has seen still shows up, as "action 42".
+**You are in the list.** Standing on your own hex and pressing numpad . offers
+"yourself", which is how you use an item on yourself — healing powder, a
+stimpak. Nothing else could reach that: everything the mod does with a pointer
+asks the engine what is under it, and that question is asked in a form that
+deliberately excludes your own character.
 
-What the mod supplies is the *presentation*. Fallout's own icon strip cannot be
-driven: it is drawn as a mouse cursor rather than a window, and nothing in the
-process tracks which icon is under the pointer — searched with the button held
-under the command cursor, through the executable's globals and then all 290 MB
-of the address space, with the pointer walked ninety pixels up the strip. Since
-neither you nor the mod can see the screen to check whether it even opens,
-driving it would be guesswork dressed as control. So the mod presents the same
-actions its own way.
-
-The list is tied to the **object**, captured when you built it, not to the hex.
-If something wanders across the tile before you press Enter, the action still
-applies to the thing you chose.
-
-Two honest limits:
-
-- **Building the list takes a couple of seconds.** The pointer has to travel to
-  the object, because that is what makes the engine work out what is possible.
-  It says "Checking" so you know the key landed. Moving through the list
-  afterwards is instant.
-- **Not every action has a route yet.** Enter on one the mod cannot perform says
-  so plainly rather than going quiet. "Look at it" is the notable one — that is
-  the examine description, and it is still to come.
-
-Two of them do work now, and they are the ones that matter for a locked door:
-
-    Use it                 opens it, pulls it, works it
-    Use an item on it      applies whatever is in your active hand
-
-For the second, ready the item in a hand slot first. Then the game speaks for
-itself — whatever it would have told a sighted player appears in the message
-window, which the mod already reads aloud. The mod does **not** invent a verdict
-of its own; the engine knows whether the lock turned and it doesn't.
+**Nothing is aimed.** The list is read straight out of the hex, and the action
+runs on the thing you chose by identity rather than by pointing at it. That is
+why it is instant where it used to pause for several seconds, and why it cannot
+act on the wrong object — there is no pointer to land in the wrong place.
+It is also why the actions offered are the mod's own short list rather than the
+engine's icon strip: reading that strip means holding the button on the object,
+which is the pointer trip being avoided. Use it, use an item on it, look at it
+and talk to it, with talk offered only for something alive. An action the game
+will not perform is still offered, and the game refuses it in its own words.
 
 ### What can I do with this item? — numpad .
 

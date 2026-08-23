@@ -37,6 +37,31 @@ from typing import List, Optional
 # One word per available action, zero-terminated, rebuilt on every menu.
 ACTION_LIST = 0x00596C3C
 
+# How many icons the menu is showing, and which one is lit.
+#
+# Measured live on Klint, whose menu is [talk, look, use an item, use a skill]:
+# the count read 5, one more than the list, because the trailing zero is not
+# only a terminator -- it is a real fifth icon, Cancel. And the index started
+# at 0 when the menu opened, rose as the pointer went down, and stopped at 4.
+#
+# **The index is sixteen bits.** Read as a word it counts 0,1,2,3,4; read as a
+# dword it reads 16580608 upward, because something else lives in the top half.
+# That is the kind of mistake that produces a number which increments
+# convincingly and means nothing at all.
+MENU_COUNT = 0x00518D14
+MENU_INDEX = 0x00518D1C
+
+# How far to nudge the pointer between asking the engine what is lit. Measured
+# at roughly 20 pixels per icon, so this is comfortably less than one -- the
+# point is to creep up on the answer, not to predict it. Nothing here depends
+# on the spacing being right: the engine is asked after every step.
+STEP_PX = 8
+
+# A bound on the walk, not a measurement. Long enough to cross any menu the
+# engine builds at this spacing, short enough that a stuck index gives up
+# quickly rather than dragging the pointer down the screen.
+MAX_STEPS = 40
+
 # The menu is a handful of icons; well past any real list, and a bound rather
 # than a measurement, so it only stops a runaway read.
 MAX_ACTIONS = 12
@@ -100,6 +125,105 @@ def read_list(proc) -> List[int]:
 
 def name(code: int) -> str:
     return NAMES.get(code, "action {}".format(code))
+
+
+def highlighted(proc) -> Optional[int]:
+    """Which menu icon the engine has lit, or None if it cannot be read.
+
+    Sixteen bits. See the note on MENU_INDEX.
+    """
+    return proc.read_i16(MENU_INDEX)
+
+
+def step_toward(index: int, target: int) -> int:
+    """Which way to nudge the pointer to move the highlight toward `target`.
+
+    Down increases the index, which was measured rather than assumed -- the
+    menu can be drawn above the pointer as easily as below it, and getting this
+    backwards walks the highlight to the far end and performs whatever is
+    sitting there.
+    """
+    if index == target:
+        return 0
+    return 1 if index < target else -1
+
+
+def perform(proc, aimer, hwnd, code: int, wanted: Optional[str] = None) -> tuple:
+    """Choose `code` from the engine's own action menu, on the object aimed at.
+
+    Returns (done, why_not).
+
+    This is how look, talk and everything else the engine offers get done:
+    not by reimplementing the action, but by working the menu a sighted player
+    works. What makes that safe is that the engine publishes which icon is lit,
+    so the pointer is crept along and the engine asked after every step. The
+    button is released only when the engine's own answer is the icon the player
+    chose -- never on our belief about how far the pointer has travelled.
+
+    If the highlight cannot be walked onto the wanted icon, nothing is chosen:
+    the pointer steps well clear and releases into empty space, which is the
+    cancel gesture. Failing that way round is the safe one. Releasing on the
+    wrong icon does something to somebody, and there is no undo in this game.
+    """
+    from ..input.send import mouse_down, mouse_up, move_mouse_relative
+
+    ok, _reading, why = aimer.aim()
+    if not ok:
+        return False, why or "could not point at it"
+    what, _offset = aimer.prepare(want_object=True, wanted=wanted)
+    if not what:
+        return False, "nothing under the pointer to act on"
+
+    mouse_down("left")
+    chosen = False
+    reason = ""
+    try:
+        # The engine builds the list while the button is held, and resets the
+        # highlight to the first icon. Reading either too early gets the
+        # PREVIOUS menu, which is never empty and so looks entirely valid.
+        time.sleep(0.6)
+        codes = read_list(proc)
+        if code not in codes:
+            return False, "the engine is not offering that"
+        target = codes.index(code)
+
+        stuck = 0
+        for _ in range(MAX_STEPS):
+            index = highlighted(proc)
+            if index is None:
+                reason = "cannot read which action is highlighted"
+                break
+            direction = step_toward(index, target)
+            if direction == 0:
+                chosen = True
+                break
+            move_mouse_relative(0, direction * STEP_PX, settle=0.05, hwnd=hwnd)
+            time.sleep(0.08)
+            after = highlighted(proc)
+            if after == index:
+                # The highlight can legitimately not move -- an icon is about
+                # twenty pixels tall and a step is eight. Only give up once it
+                # has refused several times running, which is what hitting the
+                # end of the menu looks like.
+                stuck += 1
+                if stuck > 6:
+                    reason = "the highlight stopped moving"
+                    break
+            else:
+                stuck = 0
+        else:
+            reason = "could not reach that action"
+    finally:
+        if chosen:
+            # Release ON the icon. This is the click that performs it.
+            mouse_up("left")
+            time.sleep(0.35)
+        else:
+            move_mouse_relative(CANCEL_DX, CANCEL_DY, settle=0.05, hwnd=hwnd)
+            time.sleep(0.2)
+            mouse_up("left")
+            time.sleep(0.25)
+    return chosen, reason
 
 
 def open_menu(proc, aimer, hwnd, wanted=None) -> tuple:

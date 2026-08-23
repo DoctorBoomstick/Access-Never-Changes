@@ -30,8 +30,8 @@ from .game.aim import Aimer
 from .game.chargen import CharGen
 from .game.combat import CombatWatcher
 from .game.displaywin import DisplayWindow
-from .game import (actions, itemactions, itemmove, slotscreen,
-                   timerwin, uiwindow)
+from .game import (actions, charsheet, dialogue, itemactions, itemmove,
+                   slotscreen, timerwin, uiwindow)
 from .game import inventory
 from .game.inventory import InventoryWatcher
 from .game.premade import PremadeScreen
@@ -60,6 +60,13 @@ RECONNECT_SECONDS = 2.0
 # steady for several consecutive polls before it is believed. At 20Hz this
 # costs 200ms, far below the time any real screen change takes.
 SCREEN_STABLE_TICKS = 4
+
+# The same idea, for a conversation. The engine writes the NPC's line and
+# rebuilds the list of replies on different frames, so a reading taken between
+# the two pairs this line with the previous one's answers. That is not a
+# garbled announcement, which a player would notice -- it is a fluent and
+# entirely wrong one, which they could not. Two polls at 20Hz costs 100ms.
+DIALOGUE_STABLE_TICKS = 2
 
 # Long enough for the in-game script's cursor-restore window (8 script ticks) to
 # finish after the last world read. Reading the world changes the cursor mode,
@@ -206,14 +213,31 @@ class SelectWatcher(Watcher):
 class CharGenWatcher(Watcher):
     key = screens.CHARGEN
 
-    def __init__(self, chargen: CharGen) -> None:
+    def __init__(self, chargen: CharGen, log=None) -> None:
         self.chargen = chargen
+        # The in-game character screen is the same panel as the creation editor,
+        # so the same watcher narrates it -- but its numbers come from a live
+        # character rather than from the editor's working copy. Handing the
+        # reader the script's report is what makes it say 6 where the sheet says
+        # 6, instead of the 8 sitting in the base stat table.
+        self.log = log
         self._prev: Dict[str, object] = {}
 
     def reset(self) -> None:
         self._prev = {}
 
+    def _sync(self) -> None:
+        """Hand the reader the engine's report, if there is one.
+
+        Called from every entry point rather than just the poll, because
+        "repeat that" and "describe that" read the same item and must not
+        answer with the creation-time formulas while the poll answers with the
+        live ones.
+        """
+        self.chargen.sheet = self.log.sheet if self.log is not None else None
+
     def snapshot(self) -> Optional[Dict[str, object]]:
+        self._sync()
         if not self.chargen.is_plausible():
             return None
         return {
@@ -222,15 +246,47 @@ class CharGenWatcher(Watcher):
             "points": self.chargen.char_points(),
             "tags": tuple(self.chargen.tags()),
             "traits": tuple(self.chargen.traits()),
+            # The name buffer was readable all along and simply never watched.
+            # It COMMITS rather than tracks: typing into the dialog does not
+            # touch it, and it changes in one step when the name is accepted.
+            # Measured -- typing "catnip" into the field left this reading
+            # "None", and a scan of the whole module found the text nowhere, so
+            # the in-progress string is a stack local and not something any
+            # address can follow. Character echo while typing therefore belongs
+            # to the screen reader, which already offers it; what belongs here
+            # is saying what the name ended up as.
+            "name": self.chargen.name(),
+            # Name, age and sex are not rows in the editor's list -- they are
+            # three small dialogs behind the N, A and S keys, which is why no
+            # selection index was ever found for them.
+            "dialog": self.chargen.dialog(),
+            "age": self.chargen.age(),
+            "sex": self.chargen.sex(),
+            # What the current row actually says.
+            #
+            # The selection index is not always the thing that moves. The Kills
+            # and Karma lists scroll a row at a time while the index sits still,
+            # so a watcher keyed on the index alone heard nothing and said
+            # nothing -- three rows of a list reported as one, and the others
+            # silent even of a number.
+            "label": self._row_text(),
         }
 
-    def enter(self, ann: Announcer) -> None:
-        self._prev = self.snapshot() or {}
+    def _row_text(self) -> Optional[str]:
         item = self.chargen.current()
-        if item:
-            ann.answer("Character creation. " + item.announce())
-        else:
-            ann.answer("Character creation.")
+        return item.announce() if item else None
+
+    def enter(self, ann: Announcer) -> None:
+        self._sync()
+        self._prev = self.snapshot() or {}
+        # The same panel serves two purposes and they are not the same screen.
+        # Announcing "character creation" over a character who has been played
+        # for an hour is simply wrong, and it is the first thing said on the way
+        # in, so it is the first thing that sounds broken.
+        title = ("Character sheet." if self.chargen.sheet is not None
+                 and self.chargen.sheet.ready else "Character creation.")
+        item = self.chargen.current()
+        ann.answer("{} {}".format(title, item.announce()) if item else title)
 
     def poll(self, ann: Announcer) -> None:
         snap = self.snapshot()
@@ -238,6 +294,33 @@ class CharGenWatcher(Watcher):
             return
         prev, self._prev = self._prev, snap
         if not prev:
+            return
+
+        # One of the three dialogs opening. Said before anything else, because
+        # while one is up it is the entire screen as far as the player is
+        # concerned -- and it is the announcement that tells them the key they
+        # pressed did something at all.
+        if prev.get("dialog") != snap.get("dialog"):
+            opened = snap.get("dialog")
+            if opened:
+                ann.answer(self._dialog_opened(opened))
+                return
+            # Closing says nothing on its own. Escape reverts the value, and the
+            # revert is announced below as the change it is, which tells the
+            # player what they are back to rather than merely that they left.
+
+        # Typing in the name field. Said before anything else remaining, because
+        # while it is being typed nothing else on this screen is changing.
+        if prev.get("name") != snap.get("name"):
+            ann.answer(self._name_change(prev.get("name"), snap.get("name")))
+            return
+
+        if prev.get("age") != snap.get("age"):
+            ann.answer("{}.".format(snap.get("age")))
+            return
+
+        if prev.get("sex") != snap.get("sex"):
+            ann.answer("{}.".format(self.chargen.sex_name() or "sex changed"))
             return
 
         # Tagging or picking a trait: say what it now is, and what's left.
@@ -270,13 +353,95 @@ class CharGenWatcher(Watcher):
             item = self.chargen.current()
             if item:
                 ann.answer(item.announce())
+            else:
+                # An item outside the measured index map. The in-game sheet has
+                # sections the creation editor does not -- the Perks, Karma and
+                # Kills tabs -- and their indices have never been measured.
+                #
+                # Say the number rather than nothing. A confident wrong label
+                # would be worse than silence, but silence is what makes a
+                # screen feel broken: tabbing onto a section and hearing nothing
+                # is indistinguishable from the key not arriving. The index is a
+                # fact, it is honest about not knowing what the section is, and
+                # it is exactly what someone reading it aloud to me needs to
+                # say. It goes to the console too.
+                index = snap.get("selection")
+                print("[chargen] no entry for editor index {}".format(index),
+                      flush=True)
+                ann.answer("Item {}, not covered yet.".format(index))
+            return
+
+        # A row that changed without the index changing.
+        #
+        # **Only for the Perks, Karma and Kills box.** Those three lists scroll
+        # a line at a time and leave the selection index where it was, so
+        # nothing else notices them. Everywhere else the index IS the movement,
+        # and watching the text as well announced things twice and out of
+        # order: the label pointers update a frame after the selection does, so
+        # tabbing to a new section spoke the row on the poll the index changed
+        # and spoke it again on the next, sometimes with the previous section's
+        # text still in the pointer. Tabbing read as "stats, name age sex,
+        # stats again, age sex name".
+        item = self.chargen.current()
+        if (item is not None and item.section == "record"
+                and prev.get("label") != snap.get("label")
+                and snap.get("label")):
+            ann.answer(str(snap.get("label")))
+
+    def _dialog_opened(self, which: str) -> str:
+        """Name the dialog and read its current value.
+
+        The value, not the controls. A player who has just pressed S wants to
+        know what the sex currently IS -- that is the thing they cannot see and
+        the thing they are about to change. Left and right work here the way
+        they work everywhere else in this game, and reciting that every time is
+        the habit the control readout was removed for.
+        """
+        if which == "name":
+            name = self.chargen.name()
+            return "Name. {}".format(
+                name if name and name != "None" else "Empty.")
+        if which == "age":
+            return "Age {}.".format(self.chargen.age())
+        if which == "sex":
+            return "Sex. {}.".format(self.chargen.sex_name() or "not known")
+        return which.capitalize() + "."
+
+    @staticmethod
+    def _name_change(before, after) -> str:
+        """What to say when the name buffer changed.
+
+        In practice this fires once, when the name is accepted, because the
+        buffer commits rather than tracking the keystrokes -- see `snapshot`.
+        From an empty field that is the append case, so accepting "Chosen One"
+        says "Chosen One", which is exactly right.
+
+        The incremental cases are still handled, and cheaply, because they are
+        what the announcement should be if the buffer ever does move a letter at
+        a time: hearing "C", "Ch", "Cho" is how you follow your own typing, and
+        hearing the whole field back on every letter is how you stop being able
+        to. Anything that is neither an append nor a deletion -- a field cleared
+        and refilled -- reads the lot, because then the whole thing is the news.
+        """
+        before, after = before or "", after or ""
+        if not after:
+            return "Name cleared."
+        if after.startswith(before):
+            # Includes the very first letter, where `before` is empty and the
+            # whole of `after` is what was just typed.
+            return after[len(before):]
+        if before.startswith(after):
+            return "{}, {}".format(before[len(after):], after)
+        return "Name {}".format(after)
 
     def repeat(self, ann: Announcer) -> None:
+        self._sync()
         item = self.chargen.current()
         if item:
             ann.answer(item.announce())
 
     def describe(self, ann: Announcer) -> None:
+        self._sync()
         item = self.chargen.current()
         if item and item.description:
             ann.answer("{}. {}".format(item.label, item.description))
@@ -284,22 +449,24 @@ class CharGenWatcher(Watcher):
             ann.answer("{}. No description.".format(item.label))
 
     def summary(self, ann: Announcer) -> None:
+        self._sync()
         ann.answer(self.chargen.summary())
 
 
-# Kept in step with gl_world.ssl's on_key by hand, which is the only way -- the
-# script owns these keys and cannot tell us what it bound them to. This string
-# had been wrong since the keys were remapped: it still promised that numpad 8
-# returned the cursor to you and that numpad 5 re-read the hex, when 5 had
-# become the snap and 8 had become north. It is spoken on every entry to the
-# world and on every summary, so it was the most-heard sentence in the mod and
-# also one of the few untrue ones.
-WORLD_HELP = (
-    "Numpad 7 9 4 6 1 3 move the look cursor around the six hex directions, "
-    "8 and 2 go north and south. Numpad 5 brings the cursor back to you. "
-    "Numpad plus clicks the hex it is on. Brackets scan for things nearby, "
-    "and slash moves the cursor to what you found."
-)
+# The key list that used to be spoken here is gone, on the owner's instruction:
+# it was said on every entry to the world AND on every summary, which made it
+# the most-heard sentence in the mod, and a player who has read the readme is
+# being told what they already know every time they load a game. The keys are
+# documented in README.md and docs/CONTROLS.md, where they can be consulted once
+# rather than recited forever.
+#
+# Note what went with it, since it was the argument for keeping it: this string
+# had to be maintained by hand against gl_world.ssl's on_key, because the script
+# owns those keys and cannot report what it bound them to. It had already been
+# wrong once for a whole release -- promising that numpad 8 returned the cursor
+# to you when 8 had become north -- so the mod's most-repeated sentence was also
+# one of its few untrue ones. A document that is read deliberately can be fixed;
+# a recital nobody asked for is just a lie repeated at volume.
 
 
 # Script lines that must NOT be spoken. Everything else the script emits is,
@@ -351,6 +518,8 @@ class WorldWatcher(Watcher):
         self.hwnd: Optional[int] = None
         # An item-menu choice waiting to be carried out.
         self.pending_item_action: Optional[str] = None
+        # A world action-menu choice waiting to be carried out: look, talk.
+        self.pending_menu_action: Optional[str] = None
         # What the pointer was actually put on when the menu was built.
         # The script names the object it opened the menu for, and the two
         # must agree -- the action array is never cleared, only overwritten,
@@ -360,12 +529,53 @@ class WorldWatcher(Watcher):
         self.combat = CombatWatcher()
         self.scanner = Scanner()
         self.inventory = InventoryWatcher()
+        # A conversation is read straight out of memory rather than reported by
+        # a script, because it is all static globals and Python can see them --
+        # the same reason the character editor never needed a script either.
+        # The scripts exist for what only the engine knows.
+        self.dialogue = dialogue.Dialogue(proc) if proc is not None else None
+        self._dlg_said: Optional[tuple] = None   # last reading announced
+        self._dlg_seen: Optional[tuple] = None   # last reading observed
+        self._dlg_ticks = 0
+        self._dlg_open = False
+        # Which reply the list cursor is on. The mod's own idea, not the
+        # engine's -- Fallout has no selected reply, only whichever one the
+        # mouse happens to be over. It is reset by every new thing the NPC
+        # says, because the replies are new too.
+        self.dlg_index = 0
         self._queue: list = []
         self._mode: Optional[int] = None
+        # skill.msg, resolved lazily -- see _skill_names.
+        self._skills: dict = {}
+
+    def _skill_names(self):
+        """skill.msg, read out of the running game and cached.
+
+        Not cached when empty: the list is only loaded once a game is, so
+        asking too early and keeping the answer would leave every skill in the
+        Skilldex called "skill 9" for the rest of the session.
+        """
+        if not self._skills and self.proc is not None:
+            # One dot, not two. This module is fallout2_access.app, not one of
+            # its game submodules, and the two-dot version reaches past the top
+            # of the package -- an ImportError raised on the first Skilldex line
+            # and, because the loop only caught OSError, took the whole mod with
+            # it. See the note in run().
+            from .msg.memlist import read_message_list
+            from .game.chargen import MSG_SKILL
+
+            lst = read_message_list(self.proc, MSG_SKILL)
+            if lst:
+                self._skills = lst.by_num()
+        return self._skills
 
     def reset(self) -> None:
         self._queue = []
         self.inventory.reset()
+        self._dlg_said = None
+        self._dlg_seen = None
+        self._dlg_ticks = 0
+        self._dlg_open = False
 
     def pump(self) -> None:
         """Consume script output. Runs every tick, whatever screen is active,
@@ -422,10 +632,32 @@ class WorldWatcher(Watcher):
             elif line.startswith("WORLD:useactive"):
                 got = worldlog.use_active_line(line)
                 if got:
-                    name, weapon, said = got
-                    self._queue.append((said, True))
-                    if name and not weapon:
+                    name, _weapon, said = got
+                    if said:
+                        self._queue.append((said, True))
+                    # Arming the item needs the pointer, so it goes to the loop.
+                    # A weapon is not excluded: the slot does attack with one
+                    # live, and that is what it does for a sighted player
+                    # pressing the same control.
+                    if name:
                         self.pending_item_action = "useactive"
+            elif line.startswith("WORLD:menudo"):
+                # A menu entry the script cannot carry out, because it needs
+                # the pointer. Written down and picked up by the loop, off this
+                # parsing path -- driving the engine's menu takes seconds.
+                self.pending_menu_action = line
+            elif line.startswith("SKILLDEX:sneak"):
+                said = charsheet.sneak_line(line)
+                if said:
+                    self._queue.append((said, True))
+            elif line.startswith("SKILLDEX:"):
+                said = charsheet.skilldex_line(line, self._skill_names())
+                if said:
+                    self._queue.append((said, True))
+            elif line.startswith("WORLD:pick"):
+                said = worldlog.pick_line(line)
+                if said:
+                    self._queue.append((said, True))
             elif line.startswith("WORLD:menu"):
                 said = worldlog.menu_line(line, self._menu_aimed_at)
                 if said:
@@ -438,7 +670,17 @@ class WorldWatcher(Watcher):
                 self._queue.append((self.log.last_hex, True))
             elif line.startswith("WORLD:gamemode"):
                 if self._mode is not None and self.log.game_mode != self._mode:
-                    self._queue.append((screens.mode_name(self.log.game_mode), False))
+                    # Not for a conversation. The mode's registered name is the
+                    # bare word "dialogue", and it was landing a beat ahead of
+                    # the conversation itself -- so clicking on somebody to talk
+                    # to them read as "dialogue. Conversation. Greetings, Chosen
+                    # One!". Two announcements of the same event, the first of
+                    # which says less than the second and arrives first.
+                    # _pump_dialogue names the screen and reads it, which is the
+                    # whole announcement rather than a trailer for it.
+                    if not screens.is_dialogue(self.log.game_mode):
+                        self._queue.append(
+                            (screens.mode_name(self.log.game_mode), False))
                     # Arriving at the save or load screen, the slot list IS the
                     # question. Naming the screen and stopping there leaves the
                     # player on a list of ten identical-sounding nothings.
@@ -523,7 +765,7 @@ class WorldWatcher(Watcher):
                 b.press, b.left, b.top, b.width, b.height, key), flush=True)
 
     def enter(self, ann: Announcer) -> None:
-        ann.answer("Exploring. " + WORLD_HELP)
+        ann.answer("Exploring.")
 
     def poll(self, ann: Announcer) -> None:
         while self._queue:
@@ -537,6 +779,106 @@ class WorldWatcher(Watcher):
             # Pressing a key and hearing nothing is indistinguishable from the
             # key not arriving.
             ann.say(text, interrupt=urgent, force=True)
+        self._pump_dialogue(ann)
+
+    def talking(self) -> bool:
+        """Is a conversation the thing on screen?
+
+        The barter window is a conversation's child, and while it is up it is
+        what the player is looking at -- gl_inven.ssl owns it and is already
+        describing both lists. Two voices narrating different halves of the
+        same screen is worse than either on its own.
+        """
+        return (self.dialogue is not None
+                and screens.is_dialogue(self.log.game_mode)
+                and not self.inventory.open)
+
+    def _pump_dialogue(self, ann: Announcer) -> None:
+        """Say what was said, and what can be said back.
+
+        Runs off the memory poll rather than off a script line, because there
+        is no script line: the whole screen is static globals. That also makes
+        this the one watcher that cannot fall behind -- it reports what is on
+        screen at the moment it speaks, not what a log said a moment ago.
+        """
+        if self.dialogue is None:
+            return
+        if not self.talking():
+            if self._dlg_open:
+                # Nothing is said. The mode change back to the map is announced
+                # on its own -- "exploring" -- which is a statement about where
+                # the player now is rather than a note about what just stopped.
+                self.reset_dialogue()
+            return
+
+        reading = self.dialogue.read()
+        if reading is None:
+            return
+
+        # A conversation on its way out is not a conversation saying something.
+        #
+        # Choosing [Done] tears the screen down in stages: the reply list is
+        # emptied while the NPC's last line is still sitting in memory and the
+        # game mode still reads DIALOG. That transient is a perfectly stable
+        # reading with a new identity, so it was announced -- which is why
+        # ending a conversation repeated the last thing said back at you on the
+        # way out. There is nothing left to answer, so there is nothing to say.
+        if self._dlg_open and not reading.options:
+            return
+        key = reading.key()
+        if key != self._dlg_seen:
+            self._dlg_seen = key
+            self._dlg_ticks = 1
+            return
+        self._dlg_ticks += 1
+        if self._dlg_ticks < DIALOGUE_STABLE_TICKS or key == self._dlg_said:
+            return
+
+        opening = not self._dlg_open
+        self._dlg_open = True
+        self._dlg_said = key
+        self.dlg_index = 0
+        # Entering a conversation interrupts: the player clicked on somebody
+        # and the map may still be mid-sentence about the hex they clicked.
+        # A line spoken later in the conversation does not -- it queues behind
+        # whatever is still being said, because losing it would lose the
+        # conversation itself.
+        ann.say(dialogue.say_reading(reading, opening=opening, hint=opening),
+                interrupt=opening, force=True)
+
+    def reset_dialogue(self) -> None:
+        self._dlg_open = False
+        self._dlg_said = None
+        self._dlg_seen = None
+        self._dlg_ticks = 0
+        self.dlg_index = 0
+
+    def dlg_step(self, ann: Announcer, delta: int) -> None:
+        """Walk the reply list. Numpad 8 and 2, as everywhere else in the mod.
+
+        Clamped, not wrapped -- the same choice the action menu made, and for
+        the same reason: a list that wraps is one you can walk off the end of
+        without noticing, and every entry on this one is something you are
+        about to say to somebody.
+        """
+        reading = self.read_dialogue()
+        if reading is None or not reading.options:
+            ann.answer("No replies offered.")
+            return
+        self.dlg_index = max(0, min(self.dlg_index + delta,
+                                    len(reading.options) - 1))
+        ann.answer(dialogue.say_option(self.dlg_index, reading.options))
+
+    def dlg_say(self, ann: Announcer) -> None:
+        """Re-read the reply the list cursor is on."""
+        reading = self.read_dialogue()
+        if reading is None:
+            ann.answer("Cannot read the replies.")
+            return
+        ann.answer(dialogue.say_option(self.dlg_index, reading.options))
+
+    def read_dialogue(self):
+        return self.dialogue.read() if self.dialogue is not None else None
 
     def repeat(self, ann: Announcer) -> None:
         # A panel over the map takes the question with it. "Repeat" while the
@@ -544,6 +886,13 @@ class WorldWatcher(Watcher):
         # the player last looked at before they opened it.
         if self.inventory.open:
             ann.answer(self.inventory.repeat() or HELP_NOTHING)
+            return
+        # In a conversation the question this key asks is "what can I say?".
+        # The hex the player was last looking at is not what is on screen.
+        if self.talking():
+            reading = self.read_dialogue()
+            ann.answer(dialogue.say_options(reading.options) if reading
+                       else "Cannot read the replies.")
             return
         if self.log.last_hex:
             ann.answer(self.log.last_hex.announce())
@@ -572,7 +921,17 @@ class WorldWatcher(Watcher):
                 return
             guarded_tap(self.hwnd, "m", settle=0.2)
             return
-        if self.aimer is None or self.proc is None:
+        # And here it asks the third question this key has been given: what did
+        # they just say? A long reply is a paragraph, and one a player wants to
+        # hear again without the list of answers after it every time.
+        if self.talking():
+            reading = self.read_dialogue()
+            if reading is None:
+                ann.answer("Cannot read what they said.")
+            else:
+                ann.answer(reading.reply or "They have said nothing.")
+            return
+        if self.hwnd is None:
             ann.answer("Not attached to the game.")
             return
         if not screens.is_map_mode(self.log.game_mode):
@@ -580,23 +939,17 @@ class WorldWatcher(Watcher):
                 screens.mode_name(self.log.game_mode).capitalize()))
             return
 
-        # Say so first. Pointing at the object takes a few seconds, and silence
-        # after a keypress reads as the key never having arrived -- the
-        # misreading this project keeps designing against.
-        ann.answer("Checking.")
-        last = self.log.last_hex
-        wanted = None
-        if last and last.contents:
-            first = last.contents.split(",")[0].strip()
-            if first and first not in ("empty", "you"):
-                wanted = first
-        self._menu_aimed_at, why = actions.open_menu(
-            self.proc, self.aimer, self.hwnd, wanted=wanted)
-        if self._menu_aimed_at is None:
-            ann.answer("Cannot check that: {}.".format(why or "no answer"))
-            return
-        # Nothing more is said here. The script announces the menu, and one
-        # voice saying it once beats two saying it differently.
+        # **No aiming.** This used to say "Checking", then spend several seconds
+        # driving the pointer onto the object, holding the button down for the
+        # engine to build its icon strip, and stepping away again -- and it
+        # could still come back with the wrong object, or none, because it was
+        # inferring which thing the player meant from where a pointer landed.
+        #
+        # The script now reads the hex directly with tile_get_objs and offers
+        # what is on it. One keystroke, no pointer, nothing to land wrong, and
+        # nothing to say first because there is no longer a wait to cover.
+        self._menu_aimed_at = None
+        guarded_tap(self.hwnd, "m", settle=0.15)
 
     def summary(self, ann: Announcer) -> None:
         # "Where am I" is answered by whatever currently owns the screen. Each
@@ -606,17 +959,19 @@ class WorldWatcher(Watcher):
                 self.inventory.container or screens.mode_name(self.log.game_mode),
                 self.inventory.repeat() or HELP_NOTHING))
             return
+        if self.talking():
+            reading = self.read_dialogue()
+            ann.answer(dialogue.say_reading(reading, opening=True, hint=True)
+                       if reading else "Cannot read the conversation.")
+            return
         # In a fight, "where am I" means AP and whose turn it is. The hex-cursor
         # key reminder is not what you need while something is biting you.
         if self.combat.in_combat:
             ann.answer(self.combat.summary())
             return
         cursor = screens.cursor_name(self.log.cursor_mode)
-        ann.answer("{}. {}{}".format(screens.mode_name(self.log.game_mode),
-                (cursor + ". ") if cursor else "",
-                WORLD_HELP,
-            ),
-        )
+        ann.answer("{}.{}".format(screens.mode_name(self.log.game_mode),
+                (" " + cursor + ".") if cursor else ""))
 
 
 class SlotScreenWatcher(Watcher):
@@ -640,12 +995,65 @@ class SlotScreenWatcher(Watcher):
         self.saves = saves
         self.pager = pager
         self._selection: Optional[int] = None
+        # Is the confirmation box up? Tracked so it is announced once on
+        # arrival rather than twenty times a second.
+        self._confirm = False
 
     def reset(self) -> None:
         self._selection = None
+        self._confirm = False
 
     def _saved(self):
         return {s.number: s for s in self.saves.scan()}
+
+    def _confirm_line(self, box) -> str:
+        """What to say about the confirmation box the screen just put up.
+
+        This is the screen's last step and it was completely silent: Enter on a
+        slot raised a small window, nothing said so, and the save appeared to
+        hang. Measured on a live save screen -- a box, two buttons, Escape
+        cancels, a second Enter writes the file.
+
+        The question is described rather than transcribed, and the difference
+        matters. Its text is drawn into the window and cannot be read back, so
+        what is said here is assembled from things that CAN be read: which slot
+        the highlight is on, whether the engine says that slot holds a game, and
+        whether this screen saves or loads. For the overwrite case the game's
+        own sentence is used, so it arrives translated.
+
+        One button means a notice rather than a question -- there is nothing to
+        cancel. That is said plainly instead of being guessed at, because an
+        unreadable message is exactly the thing not to invent words for.
+        """
+        if len(box.buttons) < 2:
+            return ("The game is showing a message that cannot be read. "
+                    "Press Enter to dismiss it.")
+
+        index = self.screen.selection()
+        page = self.screen.page()
+        where = "this slot"
+        if index is not None and page is not None:
+            where = "slot {}".format(self.screen.slot_number(page, index))
+
+        occupied = self.screen.occupied()
+        taken = bool(index is not None and index < len(occupied)
+                     and occupied[index])
+        described = ""
+        if taken and index is not None:
+            _character, description = self.screen.header(index)
+            if description:
+                described = ", {}".format(description)
+
+        if self.screen.loading:
+            question = "Load {}{}?".format(where, described)
+        elif taken:
+            # The game's own words for the one case it has words for.
+            question = self.screen.message(slotscreen.MSG_OVERWRITE) or \
+                "Save game already exists, overwrite?"
+            question = "{} {}{}.".format(question, where.capitalize(), described)
+        else:
+            question = "Save to {}?".format(where)
+        return "{} Enter to confirm, Escape to cancel.".format(question)
 
     def _row(self, index: int) -> str:
         occupied = self.screen.occupied()
@@ -713,6 +1121,23 @@ class SlotScreenWatcher(Watcher):
         return self._row(index)
 
     def poll(self, ann: Announcer) -> None:
+        # The confirmation box first, and while it is up nothing else speaks.
+        # It is a modal: the row list behind it is not what the player is
+        # answering, and narrating a highlight they can no longer move would be
+        # actively misleading.
+        box = self.screen.confirm()
+        if box is not None:
+            if not self._confirm:
+                self._confirm = True
+                ann.answer(self._confirm_line(box))
+            return
+        if self._confirm:
+            self._confirm = False
+            # Nothing is said on the way out. Confirming produces a save, which
+            # the savegame watcher announces from the folder; cancelling puts
+            # the highlight back, which the row poll below announces anyway.
+            self._selection = None
+
         index = self.screen.selection()
         if index is None or index == self._selection:
             return
@@ -827,6 +1252,9 @@ class App:
         # Nothing has been sent to the game while this is set -- it is the mod's
         # own note of what the player chose, not a state the game is in.
         self._holding: Optional[tuple] = None
+        # The last fault spoken, so a fault that recurs every tick is reported
+        # to the console each time but announced only once.
+        self._last_fault: Optional[str] = None
 
     def connect(self) -> bool:
         try:
@@ -875,7 +1303,7 @@ class App:
             screens.SLOTS: SlotScreenWatcher(self.slots, self.saves, pager),
             screens.MAIN_MENU: MainMenuWatcher(),
             screens.SELECT: SelectWatcher(PremadeScreen(self.proc)),
-            screens.CHARGEN: CharGenWatcher(CharGen(self.proc)),
+            screens.CHARGEN: CharGenWatcher(CharGen(self.proc), self.world.log),
             screens.WORLD: self.world,
         }
         self.screen = screens.UNKNOWN
@@ -920,6 +1348,18 @@ class App:
             return
         try:
             mode = self.world.log.game_mode
+            # Never click in a conversation. There is nothing here worth
+            # pointing at -- the replies are chosen by their numbers -- and a
+            # click would land wherever the pointer happens to have been left,
+            # which means picking a reply at random and saying it to somebody.
+            # Of all the misplaced clicks this mod guards against, this is the
+            # only one that cannot be walked back.
+            if self.world.talking():
+                if button == "left":
+                    self.say_reply()
+                else:
+                    self.ann.answer(dialogue.HINT)
+                return
             if button == "left" and screens.is_item_window(mode):
                 self.move_item()
                 return
@@ -971,19 +1411,22 @@ class App:
                 # "Impenetrable Door" to every probe, the cursor was set up for
                 # the door, and the click walked onto the item instead of
                 # picking it up.
-                wanted = None
-                if expects_object and last and last.contents:
-                    first = last.contents.split(",")[0].strip()
-                    if first and first not in ("empty", "you"):
-                        wanted = first
+                # Everything the readout named, not just the first of them --
+                # see HexReading.names(). Naming only the first is what made
+                # every door in the game unclickable.
+                wanted = last.names() if (expects_object and last) else None
                 name, _at = self.aimer.prepare(expects_object, wanted=wanted)
                 if expects_object and not name:
-                    self.ann.answer("Cannot point at that.")
+                    self.ann.answer("Cannot point at {}.".format(
+                        wanted[0] if wanted else "that"))
                     return
                 if not expects_object and name is False:
                     # Every part of the hex is underneath something else's
                     # sprite, so a click would act on that instead of walking.
-                    self.ann.answer("That hex is behind something.")
+                    # Name it: "behind Wall" is something a player can act on,
+                    # "behind something" is a shrug.
+                    self.ann.answer("That hex is behind {}.".format(
+                        self.aimer.blocked_by or "something"))
                     return
                 time.sleep(CURSOR_SETTLE)
             guarded_click(self.hwnd, button)
@@ -991,6 +1434,38 @@ class App:
             self.ann.answer("Game is not focused.")
         except Exception as exc:  # never let a hotkey kill the loop
             print("[app] click: {}".format(exc), flush=True)
+
+    def say_reply(self) -> None:
+        """Say the reply the list cursor is on, by pressing its number.
+
+        Note what is NOT here. No aim, no cursor mode, no asking the engine
+        what the pointer is over, no refusal to act on a maybe -- the whole
+        apparatus every other click in this mod needs. Fallout binds the
+        replies to the number keys itself, and the engine says so in its own
+        button table: each reply's button carries the release code 49 + index,
+        which is the key '1' upward. So this presses a key, and the engine does
+        exactly what it does for a sighted player pressing the same one.
+
+        It is the only action in the mod that cannot land on the wrong thing.
+        """
+        reading = self.world.read_dialogue()
+        if reading is None or not reading.options:
+            self.ann.answer("No replies offered.")
+            return
+        index = max(0, min(self.world.dlg_index, len(reading.options) - 1))
+        if index >= 9:
+            # Only 1 to 9 are bound. A tenth reply exists in the array and can
+            # be read out, but saying it would mean clicking on it, and that is
+            # not built. Say so plainly rather than pressing something else.
+            self.ann.answer("The mod cannot say replies past the ninth yet.")
+            return
+        text = reading.options[index]
+        # Said before the key goes down, because this is the one confirmation
+        # the player gets that they said what they meant to. The NPC's answer
+        # follows on its own, off the memory poll.
+        self.ann.answer("Saying: {}".format(
+            text or "reply {}".format(index + 1)))
+        guarded_tap(self.hwnd, str(index + 1), settle=0.2)
 
     def move_item(self) -> None:
         """Move the item the list cursor is on, and say what actually moved.
@@ -1128,9 +1603,11 @@ class App:
             return
         self.world.pending_item_action = None
         if line == "useactive":
-            # The U key, from the map: the item is already in the active hand
-            # and already known not to be a weapon, so this is just the click.
-            done, why = itemactions.click_item_slot(self.proc, self.hwnd)
+            # The U key, from the map: the item is already in the active hand,
+            # so this is just the click that arms it. What it gets used ON is
+            # the player's next choice, which is the point.
+            done, why = itemactions.click_item_slot(
+                self.proc, self.hwnd, log_path=self.world.log.path)
             if not done:
                 self.ann.answer(why or "That did not work.")
             return
@@ -1145,15 +1622,62 @@ class App:
             return
 
         self.ann.answer("{} {}.".format(what.capitalize(), name))
+        log_path = self.world.log.path
         if what.startswith("use"):
-            done, why = itemactions.use(self.proc, self.hwnd, side, index, active)
+            done, why = itemactions.use(self.proc, self.hwnd, side, index,
+                                        active, log_path=log_path)
         elif what.startswith("drop"):
             done, why = itemactions.drop(self.world.finder, self.proc,
-                                         self.hwnd, side, index, total)
+                                         self.hwnd, side, index, total,
+                                         log_path=log_path)
         else:
             done, why = False, "The mod has no way to do that yet."
         if not done:
             self.ann.answer(why or "That did not work.")
+
+    def _run_menu_action(self) -> None:
+        """Carry out a world action-menu choice: look at it, talk to it.
+
+        Both are done by driving the engine's own menu, which means aiming at
+        the object again and creeping the highlight onto the icon -- several
+        seconds, and far too slow to do while parsing a batch of log lines.
+        """
+        line = self.world.pending_menu_action if self.world else None
+        if not line:
+            return
+        self.world.pending_menu_action = None
+        parts = line.split("|")
+        head = parts[0].split()
+        if len(head) < 2 or not head[1].lstrip("-").isdigit():
+            return
+        code = int(head[1])
+        target = parts[1].strip() if len(parts) > 1 else ""
+        if self.proc is None or self.hwnd is None or self.aimer is None:
+            self.ann.answer("Not attached to the game.")
+            return
+
+        # Say so first. This takes a few seconds, and silence after a keypress
+        # reads as the key never having arrived -- the misreading this project
+        # keeps having to design against.
+        self.ann.answer("{}{}.".format(
+            actions.name(code).capitalize(),
+            ": {}".format(target) if target else ""))
+        try:
+            done, why = actions.perform(self.proc, self.aimer, self.hwnd, code,
+                                        wanted=target or None)
+        except FocusLost:
+            self.ann.answer("Game is not focused.")
+            return
+        except Exception as exc:  # never let this kill the loop
+            print("[app] menu action: {}".format(exc), flush=True)
+            self.ann.answer("That did not work.")
+            return
+        if not done:
+            self.ann.answer("Could not {}: {}.".format(
+                actions.name(code), why or "no answer"))
+        # Nothing is said on success. Looking prints the game's own sentence
+        # along the bottom of the screen and talking opens a conversation, and
+        # both of those are already announced by whoever owns them.
 
     def _run_pending(self) -> None:
         while self._pending:
@@ -1166,6 +1690,20 @@ class App:
             self._do_action(what)
 
     def _do_action(self, what: str) -> None:
+        # The reply-list keys are the hex cursor's keys wearing another hat.
+        # In a conversation gl_dialog.ssl swallows them so the engine never
+        # sees them as reply numbers; everywhere else they belong to the map,
+        # and this must not answer for them there.
+        if what.startswith("dlg_"):
+            if not (self.world is not None and self.world.talking()):
+                return
+            if what == "dlg_prev":
+                self.world.dlg_step(self.ann, -1)
+            elif what == "dlg_next":
+                self.world.dlg_step(self.ann, 1)
+            elif what == "dlg_say":
+                self.world.dlg_say(self.ann)
+            return
         if what in ("click", "rclick") and self.screen == screens.TIMER:
             # Nothing to point at here either: the two step buttons are the
             # only controls, and Enter and Escape are already the game's.
@@ -1278,6 +1816,7 @@ class App:
         # same log, so it must not run half way through a screen transition.
         self._run_pending()
         self._run_item_action()
+        self._run_menu_action()
 
     def run(self, on_tick: Optional[Callable[[], None]] = None) -> None:
         period = 1.0 / POLL_HZ
@@ -1297,6 +1836,28 @@ class App:
                     self.tick()
             except OSError:
                 pass
+            except Exception:
+                # **The loop outlives a broken tick.** It used to catch only
+                # OSError, so anything else ended the mod outright: a mistyped
+                # relative import in one log-line handler raised ImportError on
+                # the first Skilldex line and every key went dead from then on,
+                # in a game the player was in the middle of.
+                #
+                # Printed in full rather than swallowed. Silence is this
+                # project's worst failure mode and a caught exception is a very
+                # effective way to produce it -- but a mod that keeps working
+                # for everything else, and says where to look, beats one that
+                # stops. The speech is deliberately once per distinct fault, so
+                # a fault that recurs every tick does not talk over the game.
+                import traceback
+
+                where = traceback.format_exc()
+                print("[app] tick failed:\n{}".format(where), flush=True)
+                summary = where.strip().splitlines()[-1]
+                if summary != self._last_fault:
+                    self._last_fault = summary
+                    self.ann.say("The mod hit an error and carried on. "
+                                 "Check the console.", force=True)
             if on_tick:
                 on_tick()
             time.sleep(period)

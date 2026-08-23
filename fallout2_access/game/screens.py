@@ -118,6 +118,22 @@ def is_item_window(mode: Optional[int]) -> bool:
     return bool(mode & ITEM_WINDOW_MODES)
 
 
+# A conversation, and the review screen that shows one's history. Both are
+# panels over the map, like the loot window -- not screens of their own. That
+# matters structurally: only the active screen's watcher is polled, so making
+# dialogue its own screen would leave every combat and inventory line the
+# scripts emit sitting unspoken in a queue for as long as the player was
+# talking to somebody.
+DIALOGUE_MODES = MODE_DIALOG | MODE_DIALOGVIEW
+
+
+def is_dialogue(mode: Optional[int]) -> bool:
+    """True while a conversation is on screen."""
+    if mode is None:
+        return False
+    return bool(mode & DIALOGUE_MODES)
+
+
 SAVE_SCREEN_MODES = MODE_SAVEGAME | MODE_LOADGAME
 
 
@@ -170,11 +186,22 @@ def mode_name(mode: Optional[int]) -> str:
 CURSOR_MOVEMENT = 0
 CURSOR_COMMAND = 1
 CURSOR_TARGETING = 2
+# Mode 3 had no name, and its silence is what made pressing U look like a dead
+# key. Clicking the interface bar's item slot does not use the item -- it arms
+# it and switches to this cursor, waiting to be told what to use it on. The mod
+# said "Using Healing Powder", the engine said mode 3, nothing named mode 3, and
+# the player was left holding an armed item with no way to know it.
+#
+# Its place in the enum is what identifies it: 4 through 10 are the skill
+# cursors, measured one at a time off the Skilldex, and 3 sits immediately below
+# First Aid where fallout2-ce puts USE_CROSSHAIR.
+CURSOR_USE_ITEM = 3
 
 CURSOR_NAMES = {
     CURSOR_MOVEMENT: "movement cursor. A click walks you there",
     CURSOR_COMMAND: "command cursor. A click interacts instead of walking",
     CURSOR_TARGETING: "targeting cursor. A click attacks",
+    CURSOR_USE_ITEM: "item ready. A click uses it on what you point at",
 }
 
 # mode -> the skill a click will apply.

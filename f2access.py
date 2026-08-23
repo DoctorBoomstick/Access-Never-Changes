@@ -48,6 +48,13 @@ HOTKEYS = {
     106: "summary",   # numpad *   summary / where am I
     111: "repeat",    # numpad /   repeat the current item
     110: "describe",  # numpad .   full description
+    # In a conversation only. Everywhere else these three belong to the hex
+    # cursor inside the game, and the mod ignores them -- gl_dialog.ssl is what
+    # stops the engine reading them as reply numbers while a conversation is
+    # up, which it was doing: numpad 4 said the fourth thing on the list.
+    104: "dlg_prev",  # numpad 8   previous reply
+    98: "dlg_next",   # numpad 2   next reply
+    101: "dlg_say",   # numpad 5   re-read the reply you are on
 }
 
 

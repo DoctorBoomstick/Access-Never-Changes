@@ -1,0 +1,141 @@
+/*
+ * gl_dialog.ssl  --  keep the numpad out of the conversation.
+ *
+ * This is the smallest script in the mod and it exists for one reason: only
+ * the keypress hook can stop a key reaching the engine, and in a conversation
+ * the numpad has to be stopped.
+ *
+ * Fallout binds the number keys to the replies -- pressing 3 says the third
+ * one -- and it reads them as characters, so with Num Lock on a numpad digit
+ * is the same key. Everywhere else in this mod the numpad is the hex cursor:
+ * 4 is west, 2 is south, 8 is north. In a conversation those presses were
+ * going straight through as replies. Numpad 4 said the fourth thing on the
+ * list, out loud, to whoever was standing there, and there is no taking it
+ * back -- unlike a misplaced walk, which you can simply walk back from.
+ *
+ * So the rule this script enforces is a simple one to remember:
+ *
+ *     in a conversation, the NUMBER ROW chooses a reply.
+ *     the NUMPAD never does.
+ *
+ * The number row is left completely alone. It is the engine's own binding, it
+ * already worked before this mod existed, and a blind player pressing 3 to say
+ * the third thing is using Fallout 2 exactly as it was built -- which is the
+ * whole point of the project.
+ *
+ * Nothing here reads the conversation or says anything about it. The dialogue
+ * screen is static memory and the Python half reads it directly, the same way
+ * it reads the character editor; scripts are for what only the engine knows.
+ * This one knows one thing: a key arrived, and the engine must not have it.
+ *
+ * Output goes to debug.log as "DLG:" lines. Requires DebugMode=2.
+ *
+ * Compile from data/scripts (two steps -- packaged compiler preprocessor bug):
+ *   compile.exe -P gl_dialog.ssl
+ *   compile.exe gl_dialog.preprocessed.ssl -o gl_dialog.int
+ */
+
+#include "sfall/sfall.h"
+#include "sfall/dik.h"
+
+// A conversation, and the review screen that shows one's history.
+#define DLG_MODES       (DIALOG bwor DIALOGVIEW)
+
+// The four windows gl_inven.ssl owns. Barter is opened from inside a
+// conversation with the B key, and while it is up it is what is on screen --
+// so this script stands down and lets that one work, exactly as gl_world.ssl
+// stands down for both of them. Each script claims the modes the others
+// decline, which is what lets four of them share one keyboard without any of
+// them knowing the others exist.
+#define ITEM_MODES      (INVENTORY bwor INTFACELOOT bwor INTFACEUSE bwor BARTER)
+
+/*
+ * KEY_SWALLOW  --  how to actually take a key away from the engine.
+ *
+ * **Not zero.** sfall's own documentation for HOOK_KEYPRESS is explicit:
+ *
+ *     int ret0 - overrides the pressed key
+ *                (a new key DX scancode or 0 for no override)
+ *
+ * So returning 0 means "leave the key alone", which is the exact opposite of
+ * what these scripts believed. Every key they thought they were swallowing
+ * reached the game as well, and had done since the first one was written.
+ *
+ * That single misunderstanding is three separate bugs. Numpad 1 stepped the
+ * look cursor south-west and ALSO arrived as the character '1', which on the
+ * map toggles sneak -- so walking turned stealth on and off. The numpad still
+ * picked dialogue replies. The numpad still scrolled the map underneath the
+ * action menu. Each was "fixed" by returning zero once more, and each fix did
+ * nothing at all.
+ *
+ * There is no documented block value, so the key is overridden with one the
+ * game does nothing with. Scroll Lock is bound to nothing in Fallout 2, and to
+ * nothing in ddraw.ini either -- every key setting there is 0, -1, 42 or 29.
+ *
+ * The same documentation adds that the override must be the SAME scancode for
+ * the press and the release. That is why neither handler drops key-up on the
+ * floor any more: hiding the press while letting the release through leaves
+ * the engine holding half an event, which is enough for it to act.
+ */
+#define KEY_SWALLOW  (DIK_SCROLL)
+
+procedure start;
+procedure on_key;
+
+procedure start begin
+   if game_loaded then begin
+      // Type 1: runs wherever the cursor is visible, which includes dialogue.
+      // The default type is tied to the local map loop and does not run in a
+      // conversation at all, so this script would never see a single key.
+      set_global_script_type(1);
+      set_global_script_repeat(2);
+      register_hook_proc(HOOK_KEYPRESS, on_key);
+      debug_msg("DLG:ready|");
+   end
+end
+
+/*
+ * on_key  --  swallow the numpad, and nothing else.
+ *
+ * Both the press AND the release are swallowed. sfall's note on overriding a
+ * key is explicit that the two events have to agree, and a key whose press is
+ * hidden but whose release is not leaves the engine holding half an event.
+ *
+ * The key is taken away with KEY_SWALLOW, never with 0.
+ *
+ * This comment used to say the opposite, at length: that returning 0 swallows,
+ * that the documentation reading "0 for no override" only sounds like the
+ * reverse, and that measured behaviour settled it. Every part of that was
+ * wrong. The documentation is right, 0 leaves the key alone, and the two
+ * scripts cited as proof were not working either -- nobody had checked, because
+ * a numpad press in a conversation does something plausible whether or not the
+ * mod also handles it.
+ *
+ * Following the code that runs beats following the sentence that describes it,
+ * but only when you actually watch it run.
+ */
+procedure on_key begin
+   variable key, m;
+
+   get_sfall_arg;            // event: press or release -- both are swallowed
+   key := get_sfall_arg;
+
+   m := get_game_mode;
+   if (not (m bwand DLG_MODES)) then return;
+   if (m bwand ITEM_MODES) then return;
+
+   /*
+    * Every numpad digit, not just the ones the mod uses.
+    *
+    * Binding 8 and 2 and leaving the rest would fix the keys a player presses
+    * on purpose and leave the ones they press by mistake, which is the wrong
+    * way round: a player reaching for north in a conversation they did not
+    * expect to be in is precisely the person this is protecting.
+    */
+   if (key == DIK_NUMPAD0 or key == DIK_NUMPAD1 or key == DIK_NUMPAD2
+    or key == DIK_NUMPAD3 or key == DIK_NUMPAD4 or key == DIK_NUMPAD5
+    or key == DIK_NUMPAD6 or key == DIK_NUMPAD7 or key == DIK_NUMPAD8
+    or key == DIK_NUMPAD9) then begin
+      set_sfall_return(KEY_SWALLOW);
+   end
+end

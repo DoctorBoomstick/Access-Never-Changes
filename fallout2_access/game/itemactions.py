@@ -51,12 +51,32 @@ def _panel(proc, width, height):
     return None
 
 
-def click_item_slot(proc, hwnd) -> Tuple[bool, str]:
-    """Click the interface bar's item slot: the game's own "use this" control.
+def click_item_slot(proc, hwnd, log_path: Optional[str] = None
+                    ) -> Tuple[bool, str]:
+    """Click the interface bar's item slot, which ARMS the active item.
 
-    Assumes the caller has already established that the active item is worth
-    using. This slot acts on whatever is live, and with a weapon there it
-    ATTACKS -- so every caller checks first, and none of them checks here.
+    Not "uses" -- arms. The engine switches to cursor mode 3, the use
+    crosshair, and waits to be told what to use the item on. That second step
+    is the player's, and it is what makes one key serve a stimpak, a lockpick
+    and a brick of plastic explosive: the target decides what the item does.
+
+    Bypassing it was tried, through sfall's `use_item_on_dude`, and it was a
+    mistake twice over -- it skips the action point cost, and it applies the
+    item to the PLAYER whatever the item is, which points explosives at the
+    person holding them. See the note in gl_world.ssl's report_active.
+
+    **Aimed through the script, not through MenuMouse.** MenuMouse reads the
+    cursor pair the engine keeps for the main menu, and in a loaded game it
+    still moves -- which is what made it look serviceable -- but it does not
+    agree with the real pointer, and the gap grows towards the bottom of the
+    screen. Measured against this slot, whose rectangle is y 694 to 761:
+
+        target (632,727) -- MenuMouse says it arrived at (632,727)
+                            the pointer was really at (648,767)
+
+    Six pixels below the button's bottom edge, so the click landed on the bar
+    and hit nothing while the servo reported success. Reading through the
+    script instead lands it at (632,728), on the slot.
     """
     from ..input.send import guarded_tap, mouse_click
     from .pointer import MenuMouse, aim_to
@@ -73,8 +93,12 @@ def click_item_slot(proc, hwnd) -> Tuple[bool, str]:
     if not slot:
         return False, "Cannot find the item slot."
 
+    # The interface bar only exists in a loaded game, so the script is always
+    # there to ask. MenuMouse stays only as a fallback for a caller with no log
+    # path, and it is the wrong answer whenever the real one is available.
     ok, _where, why = aim_to(proc, hwnd, *slot[0].centre(bar),
-                             reader=MenuMouse(proc))
+                             log_path=log_path,
+                             reader=None if log_path else MenuMouse(proc))
     if not ok:
         return False, "Cannot reach the item slot: {}.".format(why or "no answer")
     mouse_click("left", settle=0.5)
@@ -82,30 +106,35 @@ def click_item_slot(proc, hwnd) -> Tuple[bool, str]:
     return True, ""
 
 
-def use(proc, hwnd, side: int, index: int, active: bool) -> Tuple[bool, str]:
-    """Use the chosen item. Returns (done, what to say).
+def use(proc, hwnd, side: int, index: int, active: bool,
+        log_path: Optional[str] = None) -> Tuple[bool, str]:
+    """Arm the chosen item. Returns (done, what to say).
 
     Refuses clearly rather than clicking hopefully. A refusal that says what to
     do about it is worth more here than an attempt that starts a fight.
     """
-    from ..input.send import guarded_tap
-
     if side != SIDE_WORN or index not in HAND_INDEXES:
-        return False, ("Put it in one of your hands first, then use it.")
+        return False, "Put it in one of your hands first, then use it."
 
     if not active:
-        # One press, not a loop. `b` swaps which hand is live, and pressing it
-        # blind and repeatedly to "fix" an unmeasured state is what started a
-        # fight once already.
-        guarded_tap(hwnd, "b", settle=0.6)
-        time.sleep(0.8)
+        # No blind key-pressing to "fix" this. Which hand is live is something
+        # the mod can read and the player can change, and an unmeasured guess at
+        # swapping it is what started a fight once already.
+        return False, "Make it the active item first, then use it."
 
-    return click_item_slot(proc, hwnd)
+    return click_item_slot(proc, hwnd, log_path=log_path)
 
 
-def drop(finder, proc, hwnd, side: int, index: int, total: int
-         ) -> Tuple[bool, str]:
-    """Drop the chosen item on the ground, by dragging it onto yourself."""
+def drop(finder, proc, hwnd, side: int, index: int, total: int,
+         log_path: Optional[str] = None) -> Tuple[bool, str]:
+    """Drop the chosen item on the ground, by dragging it onto yourself.
+
+    Aimed through the script for the same reason `click_item_slot` is: the
+    inventory only exists in a loaded game, and in one MenuMouse does not agree
+    with the real pointer. The error is smaller here than down on the interface
+    bar, which is worse rather than better -- it is the size that lands on the
+    row above the one you chose while reporting that it arrived.
+    """
     from . import itemmove
 
     win = _panel(proc, PANEL_WIDTH, PANEL_HEIGHT)
@@ -117,25 +146,29 @@ def drop(finder, proc, hwnd, side: int, index: int, total: int
     from ..input.send import mouse_down, mouse_up
     from .pointer import MenuMouse, aim_to
 
+    reader = None if log_path else MenuMouse(proc)
+
+    def go(x, y):
+        return aim_to(proc, hwnd, x, y, log_path=log_path, reader=reader)
+
     rect = (win.left, win.top, win.width, win.height)
     try:
         src = itemmove._target(finder, hwnd, rect, side, index, total, None)
     except itemmove.CannotMove as exc:
         return False, str(exc).capitalize() + "."
 
-    ok, _where, why = aim_to(proc, hwnd, *src, reader=MenuMouse(proc))
+    ok, _where, why = go(*src)
     if not ok:
         return False, "Cannot reach it: {}.".format(why or "no answer")
     time.sleep(0.1)
     mouse_down("left")
     try:
         figure = win.by_press(FIGURE)
-        ok, _where, why = aim_to(proc, hwnd, *figure.centre(win),
-                                 reader=MenuMouse(proc))
+        ok, _where, why = go(*figure.centre(win))
         if not ok:
             # Put it back where it came from rather than letting go at whatever
             # point the pointer stalled at.
-            aim_to(proc, hwnd, *src, reader=MenuMouse(proc))
+            go(*src)
             return False, "Cannot reach the drop point: {}.".format(why or "")
         time.sleep(0.1)
     finally:

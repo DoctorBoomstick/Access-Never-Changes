@@ -9,7 +9,7 @@ whether a row is occupied and the savegame folder only supplies the words.
 import struct
 import unittest
 
-import fakes
+from . import fakes
 
 from fallout2_access.game.saves import OFF_CHARACTER, OFF_DESCRIPTION, SIGNATURE
 from fallout2_access.game.slotscreen import (
@@ -382,6 +382,122 @@ class TestPager(unittest.TestCase):
         self.assertIsNone(pager.goto(screen, 40, budget=3))
         # Two clicks per attempt, and it stops rather than clicking for a minute.
         self.assertLessEqual(len(pager.clicks), 6)
+
+
+class TestConfirmBox(unittest.TestCase):
+    """The little dialog Enter raises over the save screen.
+
+    This was the last silent step on the one screen where silence is expensive:
+    Enter on a slot put up a window, nothing said so, and saving looked like it
+    had hung. Measured live -- an empty slot raises a 290x85 box, an occupied
+    one a 302x127 box because the overwrite question wraps to two lines, both
+    with two buttons, Escape cancels and a second Enter writes the file.
+    """
+
+    def box(self, windows):
+        from fallout2_access.game.slotscreen import confirm_box
+        return confirm_box(fakes.memory_with_windows(windows))
+
+    def test_the_confirmation_is_found_over_the_screen(self):
+        found = self.box([(640, 480, []), (290, 85, [-1, -1])])
+        self.assertIsNotNone(found)
+        self.assertEqual((found.width, found.height), (290, 85))
+
+    def test_the_taller_overwrite_box_is_found_too(self):
+        """Matched by shape, not by exact size -- the size follows the text and
+        the text follows the translation."""
+        found = self.box([(640, 480, []), (302, 127, [-1, -1])])
+        self.assertIsNotNone(found)
+
+    def test_the_escape_menu_is_not_a_confirmation(self):
+        """164x217 with five buttons, and it sits over the same screen."""
+        self.assertIsNone(self.box([(640, 480, []), (164, 217, [1, 2, 3, 4, 5])]))
+
+    def test_no_box_when_none_is_open(self):
+        self.assertIsNone(self.box([(640, 480, [])]))
+
+    def test_a_one_button_notice_still_counts(self):
+        """One button is a notice rather than a question. It is still something
+        the player has to dismiss, so it must not go unmentioned."""
+        found = self.box([(640, 480, []), (290, 85, [-1])])
+        self.assertIsNotNone(found)
+        self.assertEqual(len(found.buttons), 1)
+
+
+class _FakeScreen:
+    """Enough of a SlotScreen to word a confirmation."""
+
+    def __init__(self, loading=False, index=0, page=1, taken=True,
+                 description="QUICK: 22/08/2026"):
+        self.loading = loading
+        self._index = index
+        self._page = page
+        self._taken = taken
+        self._description = description
+
+    def selection(self):
+        return self._index
+
+    def page(self):
+        return self._page
+
+    def occupied(self):
+        return [self._taken] * 10
+
+    def header(self, index):
+        return "Narg", self._description
+
+    def slot_number(self, page, index):
+        return page * 10 + index + 1
+
+    def message(self, num):
+        return "Save game already exists, overwrite?"
+
+
+class _Box:
+    def __init__(self, buttons):
+        self.buttons = [object()] * buttons
+
+
+class TestConfirmWording(unittest.TestCase):
+    """What the box is said to be asking.
+
+    Described rather than transcribed, and the distinction is deliberate: the
+    box's text is drawn into the window and cannot be read back, so the sentence
+    is assembled from things that can be -- which slot the highlight is on,
+    whether the engine says it holds a game, and whether this screen saves or
+    loads.
+    """
+
+    def line(self, screen, buttons=2):
+        from fallout2_access.app import SlotScreenWatcher
+        w = SlotScreenWatcher(screen, None, None)
+        return w._confirm_line(_Box(buttons))
+
+    def test_overwriting_uses_the_game_s_own_sentence(self):
+        said = self.line(_FakeScreen(taken=True, index=0, page=1))
+        self.assertIn("Save game already exists, overwrite?", said)
+        self.assertIn("Slot 11", said)
+        self.assertIn("QUICK: 22/08/2026", said)
+        self.assertIn("Escape to cancel", said)
+
+    def test_an_empty_slot_is_not_called_an_overwrite(self):
+        """Saying "already exists" about an empty slot would be the exact
+        wrong sentence on the exact wrong screen."""
+        said = self.line(_FakeScreen(taken=False, index=9, page=1))
+        self.assertIn("Save to slot 20?", said)
+        self.assertNotIn("overwrite", said)
+
+    def test_the_load_screen_asks_about_loading(self):
+        said = self.line(_FakeScreen(loading=True, taken=True, index=2, page=0))
+        self.assertIn("Load slot 3", said)
+        self.assertNotIn("Save", said)
+
+    def test_a_single_button_admits_it_cannot_be_read(self):
+        """An unreadable notice is exactly the thing not to invent words for."""
+        said = self.line(_FakeScreen(), buttons=1)
+        self.assertIn("cannot be read", said)
+        self.assertNotIn("Escape to cancel", said)
 
 
 if __name__ == "__main__":

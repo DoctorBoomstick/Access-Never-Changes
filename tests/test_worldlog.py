@@ -256,6 +256,23 @@ class TestMenuLine(unittest.TestCase):
                       self.say("WORLD:menu open Impenetrable Door|4|use it|1|",
                                aimed="Impenetrable Door"))
 
+    def test_a_locked_door_is_not_a_mismatch(self):
+        """Both names come from the engine, through two doors that word them
+        differently: the aim reports through obj_label, which appends the
+        state, while the menu reports the bare obj_name. Compared for equality
+        this cried wolf on every locked door and open container -- refusing a
+        perfectly good menu for the one kind of object it matters most for."""
+        text = self.say("WORLD:menu open Door|4|use it|1|", aimed="Door, locked")
+        self.assertNotIn("wrong thing", text)
+        self.assertIn("4 actions", text)
+
+    def test_a_genuinely_different_object_is_still_caught(self):
+        """Tolerance is not surrender: the stale-list check has to keep working
+        or the safety it provides is gone."""
+        self.assertIn("wrong thing",
+                      self.say("WORLD:menu open Pot|4|use it|1|",
+                               aimed="Door, locked"))
+
     def test_an_action_the_mod_cannot_do_says_so(self):
         """Silence after Enter reads as the key never arriving."""
         self.assertIn("no way to do it yet",
@@ -278,7 +295,7 @@ class TestUseActiveLine(unittest.TestCase):
 
     The script reports rather than acts, because using a carried item ends in a
     click on the interface bar's item slot and only the Python side has a
-    pointer. The weapon flag is what stops that click being an attack.
+    pointer. The weapon flag is reported but no longer vetoes anything.
     """
 
     def test_a_usable_item_is_used(self):
@@ -288,18 +305,119 @@ class TestUseActiveLine(unittest.TestCase):
         self.assertFalse(weapon)
         self.assertIn("Using Plastic Explosives", said)
 
-    def test_a_weapon_is_refused_with_the_reason(self):
-        """That slot ATTACKS with a weapon live, which is how a fight started
-        and a live charge ended up on the floor."""
+    def test_a_weapon_is_used_and_said_to_be_one(self):
+        """The slot attacks with a weapon live, and that is the player's call.
+
+        It used to refuse and explain itself. A sighted player presses the same
+        slot with the same spear in hand and the game does not argue; refusing
+        on their behalf is a smaller game, not an accessible one. The flag is
+        still SAID, because what is in your hand is the fact that makes the
+        decision an informed one.
+        """
         name, weapon, said = worldlog.use_active_line("WORLD:useactive Spear|1|")
         self.assertEqual(name, "Spear")
         self.assertTrue(weapon)
-        self.assertIn("would attack", said)
+        self.assertIn("Using Spear", said)
+        self.assertIn("weapon", said)
+        self.assertNotIn("refused", said)
 
     def test_empty_hands_say_what_to_do(self):
+        name, weapon, said = worldlog.use_active_line("WORLD:useactive empty|0||")
+        self.assertIsNone(name)
+        self.assertIn("Ready something", said)
+
+    def test_an_empty_active_hand_names_what_the_other_one_holds(self):
+        """The failure this was written for.
+
+        The slot acts on the ACTIVE hand. With Healing Powder in one hand and
+        the other empty and active, the script used to report the powder, the
+        mod said "Using Healing Powder", the click landed correctly on the item
+        slot, and nothing happened -- every part of the chain working except the
+        question being asked. Saying where the thing actually is turns a key
+        that looks broken into a state the player can fix.
+        """
+        name, weapon, said = worldlog.use_active_line(
+            "WORLD:useactive empty|0|Healing Powder|")
+        self.assertIsNone(name, "nothing to click the slot for")
+        self.assertIn("active hand is empty", said)
+        self.assertIn("Healing Powder", said)
+
+    def test_an_older_compiled_script_still_parses(self):
+        """The third field is new. A game running yesterday's gl_world.int
+        emits the two-field form, and it must not read as a crash."""
         name, weapon, said = worldlog.use_active_line("WORLD:useactive empty|")
         self.assertIsNone(name)
         self.assertIn("Ready something", said)
 
     def test_a_line_that_is_not_ours(self):
         self.assertIsNone(worldlog.use_active_line("WORLD:hex 1 dist 0 : you|"))
+
+
+class TestUseActiveArms(unittest.TestCase):
+    """U arms the active item; the target the player then picks decides what it
+    is used ON. That second step is not a gap to route around -- it is what
+    lets one key serve a stimpak, a lockpick and a brick of explosive.
+
+    Applying the item to the player directly was tried, through sfall's
+    use_item_on_dude, and had to be reverted: it skips the action point cost,
+    and it aims every item at the player, including the ones that should never
+    be pointed there.
+    """
+
+    def test_a_usable_item_is_named_and_handed_on(self):
+        name, weapon, said = worldlog.use_active_line(
+            "WORLD:useactive Healing Powder|0||")
+        self.assertEqual(name, "Healing Powder")
+        self.assertFalse(weapon)
+        self.assertIn("Using Healing Powder", said)
+
+    def test_a_weapon_is_named_as_one_and_still_handed_on(self):
+        name, weapon, said = worldlog.use_active_line("WORLD:useactive Spear|1||")
+        self.assertEqual(name, "Spear")
+        self.assertTrue(weapon)
+        self.assertIn("weapon", said)
+
+
+class TestPickLine(unittest.TestCase):
+    """The target list: which thing on the hex you meant.
+
+    It exists because "which object" used to be answered by where a mouse
+    pointer ended up, and that was wrong twice in ways a player could not see --
+    a door lost to the Door Track sharing its tile, and walkable ground refused
+    because a wall was drawn across it. Choosing from a list cannot land on the
+    wrong thing, because nothing is aimed.
+    """
+
+    def say(self, line):
+        return worldlog.pick_line(line)
+
+    def test_opening_says_how_many_and_which_one(self):
+        """The count is the useful part: it says whether stepping the list is
+        worth doing at all."""
+        self.assertEqual(self.say("WORLD:pick open|Door Track|1|2|"),
+                         "2 things here. Door track, 1 of 2.")
+
+    def test_stepping_does_not_repeat_the_count(self):
+        """Said once on the way in. Repeated on every step it would bury the
+        thing being stepped to."""
+        self.assertEqual(self.say("WORLD:pick at|Door|2|2|"), "Door, 2 of 2.")
+
+    def test_an_empty_hex_says_so(self):
+        self.assertEqual(self.say("WORLD:pick none|"), "Nothing here to act on.")
+
+    def test_escape_is_confirmed(self):
+        """Silence after a keypress is indistinguishable from the key never
+        arriving, which is the misreading this project keeps designing against."""
+        self.assertEqual(self.say("WORLD:pick closed|"), "Cancelled.")
+
+    def test_a_target_that_went_away(self):
+        self.assertEqual(self.say("WORLD:pick gone|"), "That is no longer there.")
+
+    def test_you_are_a_target(self):
+        """The pointer route could never offer this -- prepare_cursor asks
+        obj_under_cursor with includeDude 0 and is blind to the player. Being
+        nameable is what makes "use the powder on me" reachable."""
+        self.assertIn("Yourself", self.say("WORLD:pick at|yourself|1|3|"))
+
+    def test_a_line_that_is_not_ours(self):
+        self.assertIsNone(self.say("WORLD:hex 1 dist 0 : you|"))

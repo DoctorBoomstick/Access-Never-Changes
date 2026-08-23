@@ -6,7 +6,7 @@ one day, in two different files, and cost most of an evening both times.
 
 import unittest
 
-import fakes
+from . import fakes
 
 from fallout2_access.game import screens, slotscreen, uiwindow
 
@@ -252,3 +252,28 @@ class TestSlotScreenDetection(unittest.TestCase):
             if addr < uiwindow.WINDOW_LIST or addr >= uiwindow.WINDOW_LIST + 256:
                 proc.bytes.setdefault(addr, byte)
         self.assertNotEqual(screens.detect(proc, in_game=False), screens.SLOTS)
+
+
+class TestUseItemCursor(unittest.TestCase):
+    """Cursor mode 3, which had no name and needed one.
+
+    Clicking the interface bar's item slot arms the active item and switches to
+    this cursor; the click after it decides what the item is used on. Nothing
+    named the mode, so the mod announced "Using Healing Powder" and then went
+    quiet, and the player was left holding an armed item with no way to know
+    either that it was armed or that a target was wanted.
+    """
+
+    def test_the_use_cursor_is_named(self):
+        said = screens.cursor_name(screens.CURSOR_USE_ITEM)
+        self.assertIn("click", said)
+        self.assertNotIn("cursor mode 3", said)
+
+    def test_it_sits_below_the_skill_cursors(self):
+        """Its identity comes from its place in the enum: 4 to 10 are the skill
+        cursors, measured off the Skilldex one at a time."""
+        self.assertEqual(screens.CURSOR_USE_ITEM, 3)
+        self.assertEqual(min(screens.SKILL_CURSORS), 4)
+
+    def test_an_unknown_mode_is_still_reported_as_a_number(self):
+        self.assertIn("11", screens.cursor_name(11))

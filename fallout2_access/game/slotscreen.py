@@ -86,6 +86,56 @@ def showing(proc) -> bool:
     return uiwindow.live_window_with(
         proc, PANEL_WIDTH, PANEL_HEIGHT, PAGE_NEXT) is not None
 
+# lsgame.msg, the save and load screen's own words.
+#
+# Found by scanning the executable's data for MessageList structures and
+# keeping the one that contains "Save game already exists, overwrite?". It
+# confirms itself structurally: a MessageList is {int count; item* entries},
+# eight bytes, and this sits exactly eight bytes before SLOT_HEADERS below. The
+# screen's text and the screen's slot table are neighbours, which is what you
+# would expect and is a great deal better evidence than one lucky string match.
+MSG_LSGAME = 0x00613D28
+MSG_OVERWRITE = 131        # "Save game already exists, overwrite?"
+
+# The confirmation box the screen puts over itself.
+#
+# Measured, both cases, on a live save screen: an empty slot raises a 290x85
+# box and an occupied one raises a 302x127 box -- taller because the overwrite
+# question runs to two lines. Both carry two buttons, and both are dismissed by
+# Escape and confirmed by Enter, which was checked by watching slot 17 appear on
+# disk after the second Enter.
+#
+# Matched by shape rather than by exact size, because the size follows the text
+# and the text follows the translation. What does not vary is that it is a small
+# panel with one or two buttons sitting over a 640x480 screen: one button is a
+# notice, two is a question. The escape menu is 164x217 with five buttons and is
+# excluded by both bounds.
+CONFIRM_MIN_WIDTH = 200
+CONFIRM_MAX_WIDTH = 520
+CONFIRM_MIN_HEIGHT = 50
+CONFIRM_MAX_HEIGHT = 200
+CONFIRM_MAX_BUTTONS = 2
+
+
+def confirm_box(proc):
+    """The little dialog over the save or load screen, or None.
+
+    Returned as the window itself, because the number of buttons is the one
+    honest signal about what it wants: two means a question with a cancel, one
+    means a notice that can only be acknowledged.
+    """
+    from . import uiwindow
+
+    for win in uiwindow.live_windows(proc, buttons=True):
+        if not CONFIRM_MIN_WIDTH <= win.width <= CONFIRM_MAX_WIDTH:
+            continue
+        if not CONFIRM_MIN_HEIGHT <= win.height <= CONFIRM_MAX_HEIGHT:
+            continue
+        if 1 <= len(win.buttons) <= CONFIRM_MAX_BUTTONS:
+            return win
+    return None
+
+
 # The highlighted row on the visible page: 0..9, clamped at both ends.
 SELECTION = 0x005193B8
 
@@ -202,6 +252,7 @@ class SlotScreen:
         # the module walk is far too slow to repeat on every keypress.
         self._page_addr: Optional[int] = None
         self._page_looked = False
+        self._messages: Optional[dict] = None
 
     def page_address(self) -> Optional[int]:
         if not self._page_looked:
@@ -294,6 +345,24 @@ class SlotScreen:
     def slot_number(self, page: int, index: int) -> int:
         """Which slot on disk a row is. Rows are 0-based, slots are 1-based."""
         return page * SLOTS_PER_PAGE + index + 1
+
+    def message(self, num: int) -> Optional[str]:
+        """One of the save screen's own strings, or None.
+
+        Read from the game rather than written here, so the overwrite warning
+        arrives already translated. Cached, because the list is on the heap and
+        walking it is not free at twenty polls a second.
+        """
+        from ..msg.memlist import read_message_list
+
+        if self._messages is None:
+            lst = read_message_list(self.proc, MSG_LSGAME)
+            self._messages = lst.by_num() if lst else {}
+        return self._messages.get(num)
+
+    def confirm(self):
+        """The confirmation box over this screen, or None."""
+        return confirm_box(self.proc)
 
 
 class Pager:
