@@ -1,6 +1,6 @@
 # Access Never Changes
 
-**0.1.39 "gadget"**
+**0.2.4 "Little Boy"**
 
 A screen reader accessibility mod for **Fallout 2**.
 
@@ -142,9 +142,26 @@ addresses in `fallout2_access/offsets/` were found.
 
 ## Status and limits
 
-- Addresses are absolute, confirmed against the retail Steam `fallout2.exe`.
-  They survive game restarts, but signature scanning is still needed before this
-  works on GOG or other builds.
+- Addresses are found by signature rather than hardcoded. Every engine global
+  the mod reads is recorded in `fallout2_access/offsets/signatures.json` as the
+  bytes of an instruction that references it, with the operand wildcarded, so a
+  build that moves the variable is still readable. The executable is recognised
+  by hash on the build it was measured against and no scan happens; anything
+  else is scanned at startup, and a name that cannot be found is reported and
+  spoken rather than quietly left pointing at the wrong place.
+  Checked across builds: all 41 resolve on the Restoration Project Unofficial's
+  patched executable, using signatures generated against the retail Steam one.
+  Every address turned out to be identical between the two, so that patch moves
+  code rather than data — which also means the run has proved the signatures
+  resolve correctly, and not yet that they survive a build which really does
+  move something.
+- What actually breaks on other installs is configuration, not addresses. RPU
+  ships its own `ddraw.ini`, and `install.py` exists to put the handful of
+  settings the mod depends on back: `DebugMode` and `show_script_messages`
+  decide whether the scripts can be heard at all, `GlobalScriptPaths` whether
+  they are loaded, `AutoQuickSave` whether F6 can save without a mouse, and
+  `HiResMode` which high resolution patch is in charge. Run `install.py`
+  against any install you play on, and again after installing anything else.
 - Skill percentages and derived stats are computed from the SPECIAL values
   during character creation, where that is what the editor is doing too. In a
   loaded game they are read from the engine instead, through `get_critter_stat`

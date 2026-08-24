@@ -41,6 +41,30 @@ class TestHexNames(unittest.TestCase):
         self.assertEqual(hex_reading("Foot Locker, open").names(),
                          ["Foot Locker"])
 
+    def test_a_body_is_one_object_and_keeps_its_name(self):
+        """", dead" is a state word like ", locked", and arrives by the same
+        comma. Left in NOT_A_NAME's gap it would come back as an object called
+        "dead" -- and worse, the corpse's real name would still be there beside
+        it, so the hex would read as two things and a click could be aimed at
+        the word."""
+        self.assertEqual(hex_reading("Warrior, dead").names(), ["Warrior"])
+        self.assertEqual(hex_reading("you, Cameron, dead").names(), ["Cameron"])
+
+    def test_a_facing_is_not_an_object(self):
+        """"Klint, facing north east" is ONE critter. The suffix arrives by the
+        same comma that separates objects, and unmatched it becomes an object
+        called "facing north east" -- which a click could then be aimed at, and
+        which would sit in the list looking exactly like a second thing on the
+        hex. Matched by prefix because the bearing varies."""
+        self.assertEqual(hex_reading("Klint, facing north east").names(),
+                         ["Klint"])
+        self.assertEqual(hex_reading("Klint, facing west").names(), ["Klint"])
+
+    def test_a_corpse_keeps_its_state_word_and_loses_no_name(self):
+        """Dead critters get ", dead" and no facing -- they are not looking at
+        anything. Both suffixes together must still leave one object."""
+        self.assertEqual(hex_reading("you, Warrior, dead").names(), ["Warrior"])
+
     def test_the_words_that_mean_no_object(self):
         for contents in ("empty", "blocked", "you"):
             self.assertEqual(hex_reading(contents).names(), [],
@@ -69,6 +93,33 @@ class TestNameMatching(unittest.TestCase):
         a subtler form -- failing only on locked doors."""
         acceptable = aim._wanted_names(hex_reading("Door, locked").names())
         self.assertTrue(aim._names_match("Door", acceptable))
+
+    def test_a_corpse_matches_the_living_name_the_menu_reports(self):
+        """The same two-doors problem as the locked door, and the one that
+        stops a body being looted: the hex readout says "Warrior, dead" because
+        obj_label appends the state, while the action menu reports the bare
+        obj_name the engine holds, which does not change when a critter dies.
+        Refuse that and "use" on the corpse is discarded as the wrong thing."""
+        acceptable = aim._wanted_names(hex_reading("Warrior, dead").names())
+        self.assertTrue(aim._names_match("Warrior", acceptable))
+        self.assertTrue(aim._names_match("Warrior, dead",
+                                         aim._wanted_names("Warrior")))
+
+    def test_a_dead_warrior_is_not_a_live_radscorpion(self):
+        """Tolerance is not surrender -- the same guard the locked door has."""
+        self.assertFalse(aim._names_match("Radscorpion",
+                                          aim._wanted_names("Warrior, dead")))
+
+    def test_a_facing_critter_matches_the_bare_name(self):
+        """The menu reports obj_name, which knows nothing about facings, while
+        the readout reports obj_label, which appends one. Same two-doors
+        problem as the locked door -- refuse it and every living critter on the
+        map becomes unclickable, which is a far bigger hole than the corpse."""
+        acceptable = aim._wanted_names(
+            hex_reading("Klint, facing north east").names())
+        self.assertTrue(aim._names_match("Klint", acceptable))
+        self.assertTrue(aim._names_match("Klint, facing west",
+                                         aim._wanted_names("Klint")))
 
     def test_a_door_is_not_the_track_it_slides_on(self):
         """"Door" is a substring of "Door Track", and the test used to be a

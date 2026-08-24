@@ -47,6 +47,7 @@ from .input.send import (
     guarded_tap,
     is_foreground,
 )
+from .memory import resolve
 from .memory.process import FALLOUT_EXE_NAMES, Process, ProcessNotFound
 from .speech.backends import Speaker, get_speaker
 
@@ -604,6 +605,14 @@ class WorldWatcher(Watcher):
                 said = inventory.menu_line(line)
                 if said:
                     self._queue.append((said, True))
+            elif line.startswith("INVEN:look"):
+                # The one item action that arrives finished. Use and drop are
+                # deferred to the loop below because they drive the pointer and
+                # take seconds; a description is already a string, so holding it
+                # back would only delay it.
+                said = inventory.look_line(line)
+                if said:
+                    self._queue.append((said, True))
             elif line.startswith("INVEN:do"):
                 # Enter in the item menu. The script cannot do these -- they
                 # need the pointer -- so it writes the choice down and the loop
@@ -916,10 +925,20 @@ class WorldWatcher(Watcher):
             # Same key, same idea, different list: on the map this asks what can
             # be done to the thing you are pointing at, and in the inventory it
             # asks what can be done to the item you have selected.
+            #
+            # gl_inven.ssl reads numpad dot itself now, so the key has already
+            # reached the script and the list is already opening. This used to
+            # synthesise an `m`, and that round trip could lose the press
+            # entirely -- a queued hotkey runs only on a settled tick and is
+            # discarded after a second. The map's menu is where that was caught,
+            # but the fault was in the journey, not the destination, and this
+            # list took the same journey.
+            #
+            # The no-process fallback stays: with nothing attached there is no
+            # script to have read the key, so this is the only thing that can
+            # answer at all.
             if self.hwnd is None:
                 ann.answer(self.inventory.repeat() or HELP_NOTHING)
-                return
-            guarded_tap(self.hwnd, "m", settle=0.2)
             return
         # And here it asks the third question this key has been given: what did
         # they just say? A long reply is a paragraph, and one a player wants to
@@ -939,17 +958,28 @@ class WorldWatcher(Watcher):
                 screens.mode_name(self.log.game_mode).capitalize()))
             return
 
-        # **No aiming.** This used to say "Checking", then spend several seconds
-        # driving the pointer onto the object, holding the button down for the
-        # engine to build its icon strip, and stepping away again -- and it
-        # could still come back with the wrong object, or none, because it was
-        # inferring which thing the player meant from where a pointer landed.
+        # **No aiming, and no keystroke either.** This used to say "Checking",
+        # then spend several seconds driving the pointer onto the object,
+        # holding the button down for the engine to build its icon strip, and
+        # stepping away again -- and it could still come back with the wrong
+        # object, or none, because it was inferring which thing the player
+        # meant from where a pointer landed. The script reads the hex directly
+        # with tile_get_objs instead and offers what is on it.
         #
-        # The script now reads the hex directly with tile_get_objs and offers
-        # what is on it. One keystroke, no pointer, nothing to land wrong, and
-        # nothing to say first because there is no longer a wait to cover.
+        # What is left here is only the bookkeeping. gl_world.ssl now binds
+        # numpad dot itself, so the key the player pressed has already reached
+        # the script by the time this runs and the menu is already opening. It
+        # used to synthesise an `m` at this point, which was the mod pressing a
+        # key it had taken from the game in order to give itself back the thing
+        # it had taken -- and that round trip is what made the menu
+        # intermittent, because a queued hotkey only runs on a settled tick and
+        # is discarded after a second.
+        #
+        # The reset stays, and has to. It is the note that says nothing was
+        # aimed at, so the cross-check on the menu line does not compare the
+        # script's answer against a target left over from some earlier aim and
+        # announce a perfectly good menu as the wrong thing.
         self._menu_aimed_at = None
-        guarded_tap(self.hwnd, "m", settle=0.15)
 
     def summary(self, ann: Announcer) -> None:
         # "Where am I" is answered by whatever currently owns the screen. Each
@@ -1255,6 +1285,9 @@ class App:
         # The last fault spoken, so a fault that recurs every tick is reported
         # to the console each time but announced only once.
         self._last_fault: Optional[str] = None
+        # What address resolution found, from the last connect. Held so the
+        # greeting can say what is missing without resolving a second time.
+        self._offsets = None
 
     def connect(self) -> bool:
         try:
@@ -1262,6 +1295,23 @@ class App:
         except (ProcessNotFound, OSError):
             self.proc = None
             return False
+        # Find the engine's globals before anything reads one. On the build the
+        # mod was measured against this recognises the executable by hash and
+        # changes nothing; on any other it locates them by signature, and says
+        # by name what it could not find rather than reading a plausible number
+        # out of the wrong place.
+        #
+        # Said out loud when something is missing, not merely printed. The
+        # console is not somewhere a blind player can look, and the symptom of
+        # an unresolved address is a screen that goes quiet -- which reads as
+        # the whole mod being broken rather than as one thing being unavailable.
+        # Once per connect, never per tick: a fault that recurs every poll must
+        # not become a stutter.
+        try:
+            self._offsets = resolve.bind(self.proc)
+        except Exception as exc:  # never let address resolution stop the mod
+            self._offsets = None
+            print("[offsets] resolution failed: {}".format(exc), flush=True)
         self.hwnd = find_game_window(self.proc.pid)
         # debug.log lives beside the game's executable -- it is the game that
         # writes it. Ask the process where it lives rather than working it out
@@ -1685,7 +1735,17 @@ class App:
             # Drop anything stale. If the game lost focus the loop stops
             # ticking, and a click that fires when focus comes back lands in a
             # context the player has long since moved on from.
+            #
+            # Say so when it happens. A key that is thrown away here is a key
+            # the player pressed and heard nothing about, which is
+            # indistinguishable from a key that never arrived -- and that
+            # ambiguity is what made this cost a session to find rather than a
+            # minute. It should be rare now that a screen flicker no longer
+            # strands the queue; if it turns out not to be rare, this line is
+            # what will say so.
             if time.time() - queued_at > 1.0:
+                print("[app] dropped hotkey {!r}: {:.1f}s stale".format(
+                    what, time.time() - queued_at), flush=True)
                 continue
             self._do_action(what)
 
@@ -1796,22 +1856,44 @@ class App:
             else:
                 self._pending_screen = detected
                 self._pending_ticks = 1
-            if self._pending_ticks < SCREEN_STABLE_TICKS:
+            if self._pending_ticks >= SCREEN_STABLE_TICKS:
+                # It held. Commit it and do nothing else this tick: the watcher
+                # is being swapped out from under everything below.
+                self.screen = detected
+                self._pending_ticks = 0
+                print("[app] screen: {}".format(detected), flush=True)
+                watcher = self.current_watcher()
+                if watcher:
+                    watcher.reset()
+                    watcher.enter(self.ann)
                 return
-            self.screen = detected
+            # A flicker that has not held is not a transition yet, so fall
+            # through to the hotkeys below -- but without polling the watcher.
+            # `self.screen` has not moved, so the watcher a queued key would
+            # run against is exactly the one that was valid last tick.
+            #
+            # **Returning here is what made numpad dot unreliable.** The two
+            # screen flags are not written atomically -- see the note on
+            # SCREEN_STABLE_TICKS -- so two readings can alternate, and while
+            # they do, `_pending_ticks` is reset to 1 every single tick and
+            # never reaches four. This returned on every one of them,
+            # `_run_pending` was never reached, and the queued press sat in the
+            # list until the one-second staleness check below threw it away
+            # without a sound.
+            #
+            # It failed intermittently because it depended on whether the game
+            # happened to be mid-flicker at the instant the key was pressed,
+            # which is not something a player can see or predict. Pressing `m`
+            # by hand never failed once, because that goes straight to the
+            # engine and touches none of this -- which is precisely the
+            # evidence that located it.
+        else:
+            self._pending_screen = detected
             self._pending_ticks = 0
-            print("[app] screen: {}".format(detected), flush=True)
             watcher = self.current_watcher()
             if watcher:
-                watcher.reset()
-                watcher.enter(self.ann)
-            return
+                watcher.poll(self.ann)
 
-        self._pending_screen = detected
-        self._pending_ticks = 0
-        watcher = self.current_watcher()
-        if watcher:
-            watcher.poll(self.ann)
         # Hotkeys last: an aimed click sends its own keystrokes and reads the
         # same log, so it must not run half way through a screen transition.
         self._run_pending()
@@ -1829,6 +1911,13 @@ class App:
                     last_try = now
                     if self.connect():
                         self.ann.say("Fallout 2 accessibility connected.", force=True)
+                        # And, only if something is wrong, what is missing.
+                        # Said here rather than in connect() so it lands after
+                        # the greeting instead of ahead of it.
+                        warning = (self._offsets.summary()
+                                   if self._offsets is not None else None)
+                        if warning:
+                            self.ann.say(warning, force=True)
                 time.sleep(RECONNECT_SECONDS)
                 continue
             try:

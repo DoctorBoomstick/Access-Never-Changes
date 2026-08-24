@@ -55,11 +55,58 @@ REQUIRED = {
         "ExtraSaveSlots": "1",
         "AutoQuickSave": "1",
         "AutoQuickSavePage": "1",
+        # **Which high resolution patch is in charge.**
+        #
+        # 1 uses sfall's built-in one; 0 hands the job to an external
+        # f2_res.dll if the folder has one. Both exist in most installs, so
+        # this is a live choice rather than a formality, and the Restoration
+        # Project ships a ddraw.ini with it set to 0.
+        #
+        # The mod needs the built-in one because it needs the window and the
+        # configuration to agree. Under the external patch the title bar read
+        # "Fallout II @640x480x1" while f2_res.ini said 1024x768 -- so every
+        # screen coordinate the mod worked out was for a screen that was not
+        # there, and the pointer landed nowhere. The symptom is specific and
+        # worth recognising: the map reads out perfectly, because that is the
+        # script talking, and nothing that needs the mouse works at all --
+        # cannot walk, cannot move an item to a hand, "cannot point at that"
+        # about everything.
+        #
+        # Compare the two titles to tell at a glance which is running. sfall's
+        # own says so: "FALLOUT II @sfall 4.4.8 : 1024x768 [DX9]".
+        "HiResMode": "1",
     },
     "f2_res.ini": {
         # Exclusive-fullscreen DirectX starves the low-level keyboard hook the
         # mod's hotkeys rely on. Windowed is not a preference here.
         "WINDOWED": "1",
+    },
+    "fallout2.cfg": {
+        # **The other half of DebugMode, and the one that was missing.**
+        #
+        # DebugMode=2 in ddraw.ini turns Fallout's debug patch on and points it
+        # at debug.log. It does NOT decide what gets written there -- that is
+        # this file's job, and sfall's own comment beside DebugMode says so:
+        # "you do still need to set the appropriate lines in fallout2.cfg".
+        #
+        # With show_script_messages=0 the engine's own chatter reaches the log
+        # and every debug_msg from gl_world.ssl is dropped on the floor. The
+        # scripts run perfectly; nothing can hear them. That is indistinguishable
+        # from the scripts not loading, and it cost a session to tell apart:
+        # ddraw.ini was correct, the .int files were in place and up to date,
+        # sfall logged a clean startup with no errors, and the log filled with
+        # engine output while holding not one WORLD: line.
+        #
+        # A fresh install rewrites fallout2.cfg with this at 0, so it is not a
+        # one-time setup step -- it comes back every time the game is
+        # reinstalled, which is exactly when someone is least likely to suspect
+        # a config file they did not touch.
+        #
+        # The symptom is a good one to recognise: with no script talking, the
+        # Python side has no game mode, falls back to reading memory flags, and
+        # cannot tell a loaded map from the premade-character screen -- so it
+        # announces "character selection" at somebody standing in Arroyo.
+        "show_script_messages": "1",
     },
 }
 
@@ -86,7 +133,41 @@ def looks_like_fallout2(path: str) -> bool:
     )
 
 
+# Where to remember the folder you actually play, when it is not one of the
+# usual ones. Kept beside the code and out of git: it is a fact about this
+# machine, not about the mod.
+GAME_PATH_FILE = os.path.join(HERE, ".game-path")
+GAME_PATH_ENV = "F2_GAME"
+
+
+def chosen_game() -> Optional[str]:
+    """The folder this machine has been told to use, if any."""
+    env = os.environ.get(GAME_PATH_ENV, "").strip().strip('"')
+    if env and looks_like_fallout2(env):
+        return env
+    try:
+        with open(GAME_PATH_FILE, "r", encoding="utf-8") as fh:
+            saved = fh.read().strip().strip('"')
+    except OSError:
+        return None
+    return saved if saved and looks_like_fallout2(saved) else None
+
+
 def find_game() -> Optional[str]:
+    """The folder to install into.
+
+    An explicit choice wins over the usual locations, and that ordering is the
+    point. With two installs on one machine -- a clean one for development and
+    a modded one to play -- guessing picks whichever is listed first, installs
+    there, and reports complete success. The next launch then runs the copy
+    that was not updated, so a fix that landed perfectly appears to have done
+    nothing, and the thing you go looking at is the fix.
+
+    Set it with `--game PATH --remember`, or the F2_GAME environment variable.
+    """
+    picked = chosen_game()
+    if picked:
+        return picked
     for path in COMMON_LOCATIONS:
         if looks_like_fallout2(path):
             return path
@@ -239,7 +320,20 @@ def main() -> int:
     ap.add_argument("--replace-config", action="store_true",
                     help="overwrite ddraw.ini / f2_res.ini with the reference "
                          "copies instead of patching individual settings")
+    ap.add_argument("--remember", action="store_true",
+                    help="save this folder as the one to use from now on")
     args = ap.parse_args()
+
+    if args.remember:
+        if not args.game:
+            print("--remember needs a folder: install.py PATH --remember")
+            return 1
+        if not looks_like_fallout2(args.game):
+            print("{} does not look like Fallout 2".format(args.game))
+            return 1
+        with open(GAME_PATH_FILE, "w", encoding="utf-8") as fh:
+            fh.write(args.game)
+        print("remembered: {}".format(args.game))
 
     game = args.game or find_game()
     if not game:

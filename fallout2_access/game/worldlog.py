@@ -288,7 +288,17 @@ def use_item_line(line: str) -> Optional[str]:
 # "Door Track, Door" (two). Both halves of that pair are ours rather than the
 # game's, so listing them does not break a translation the way filtering on an
 # object name would.
-NOT_A_NAME = frozenset(("empty", "blocked", "you", "locked", "open"))
+# The words the mod appends to a name, plus the ones it says instead of a name.
+# `names()` splits the readout on commas, so every state word obj_label can add
+# has to be listed here or it comes back as an object called "dead".
+NOT_A_NAME = frozenset(("empty", "blocked", "you", "locked", "open", "dead"))
+
+# The same problem, but the suffix carries a value so it cannot be a fixed word.
+# "Klint, facing north east" is ONE object, and without this the readout parses
+# as two -- an object called "facing north east" that a click could then be
+# aimed at. Matched by prefix because the six bearings are the mod's own words
+# and always follow this one.
+NOT_A_NAME_PREFIXES = ("facing ",)
 
 
 def wanted_names(wanted) -> List[str]:
@@ -369,6 +379,8 @@ class HexReading(NamedTuple):
         for field in self.contents.split(","):
             name = field.strip()
             if not name or name.lower() in NOT_A_NAME:
+                continue
+            if name.lower().startswith(NOT_A_NAME_PREFIXES):
                 continue
             if name not in out:
                 out.append(name)

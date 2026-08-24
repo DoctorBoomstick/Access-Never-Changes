@@ -108,6 +108,26 @@ variable g_scan_type := 0;
 variable g_scan_inst := 0;
 variable g_restore_ticks := 0;
 variable g_playercursor := 0;
+/*
+ * The cursor the PLAYER asked for, or -1 for "they have not said".
+ *
+ * Distinct from g_playercursor, which is only ever a note of what the mode was
+ * last set to, by anyone, so that a scroll can put it back. This one records an
+ * intention, and prepare_cursor treats it as one.
+ *
+ * prepare_cursor GUESSES the cursor from what is under the pointer, and the
+ * guess is usually right. Right-clicking is how a player says it is wrong this
+ * time -- "I know it is a body, I want to walk onto its hex" -- and until this
+ * existed the guess was simply recomputed over the top of that, so the
+ * correction could not be made at all. It was not that the toggle failed; it
+ * took, and was then overruled a tick later by a procedure with no idea a
+ * person had spoken.
+ *
+ * Cleared whenever the look hex moves, because the guess is about a particular
+ * hex and so is the correction. Carrying one hex's answer to the next is how a
+ * single right-click would go on quietly overriding every hex after it.
+ */
+variable g_usercursor := -1;
 variable g_armedskill := 0;
 // Which way the north/south staircase currently leans. See step_north.
 variable g_ndrift := 0;
@@ -355,9 +375,29 @@ procedure poll_state begin
       g_lastcursormode := c;
    end else if (c != g_lastcursormode) then begin
       // Nothing of ours is in flight, so this is the player's own doing -- a
-      // Skilldex key, a right click. Remember it as what to restore to.
+      // Skilldex key, a right click. Remember it as what to restore to, and as
+      // what they actually asked for: prepare_cursor's guess must not be
+      // recomputed over the top of a choice the player just made by hand.
       g_lastcursormode := c;
       g_playercursor := c;
+      g_usercursor := c;
+      /*
+       * Changing the cursor by hand is how a skill gets put away.
+       *
+       * While a skill is armed the engine's cursor IS that skill's -- the
+       * numbering is the same, which is why prepare_cursor can set the mode to
+       * g_armedskill directly. So a cursor that is no longer the skill's is the
+       * player saying they are done with it, and keeping our own note of it
+       * past that point is how a lockpick stayed readied into the next fight.
+       *
+       * This is what M being M buys. The manual gives it the mouse mode toggle,
+       * and a toggle away from the skill cursor now means "never mind" as well,
+       * without a dedicated key having to be found and pressed for it.
+       */
+      if (g_armedskill > 0 and c != g_armedskill) then begin
+         g_armedskill := 0;
+         debug_msg("WORLD:skilloff|");
+      end
       debug_msg("WORLD:cursormode " + c);
    end
 
@@ -479,6 +519,7 @@ end
 procedure map_enter_p_proc begin
    g_cursor := tile_num(dude_obj);
    g_lastdude := g_cursor;
+   g_usercursor := -1;
    g_moving := 0;
    g_stillticks := 0;
    g_lastunder := -1;
@@ -583,10 +624,12 @@ procedure on_key begin
          set_sfall_return(KEY_SWALLOW);
          return;
       end
+      // Numpad dot joins them now that it opens the menu: pressing it again
+      // with a list already up would build a second list on top of the first.
       if (key == DIK_NUMPAD0 or key == DIK_NUMPAD1 or key == DIK_NUMPAD2
        or key == DIK_NUMPAD3 or key == DIK_NUMPAD4 or key == DIK_NUMPAD5
        or key == DIK_NUMPAD6 or key == DIK_NUMPAD7 or key == DIK_NUMPAD8
-       or key == DIK_NUMPAD9) then begin
+       or key == DIK_NUMPAD9 or key == DIK_DECIMAL) then begin
          set_sfall_return(KEY_SWALLOW);
          return;
       end
@@ -616,10 +659,12 @@ procedure on_key begin
          set_sfall_return(KEY_SWALLOW);
          return;
       end
+      // Numpad dot joins them now that it opens the menu: pressing it again
+      // with a list already up would build a second list on top of the first.
       if (key == DIK_NUMPAD0 or key == DIK_NUMPAD1 or key == DIK_NUMPAD2
        or key == DIK_NUMPAD3 or key == DIK_NUMPAD4 or key == DIK_NUMPAD5
        or key == DIK_NUMPAD6 or key == DIK_NUMPAD7 or key == DIK_NUMPAD8
-       or key == DIK_NUMPAD9) then begin
+       or key == DIK_NUMPAD9 or key == DIK_DECIMAL) then begin
          set_sfall_return(KEY_SWALLOW);
          return;
       end
@@ -720,7 +765,27 @@ procedure on_key begin
    end
    else if (key == DIK_SEMICOLON) then dir := ACT_STATUS;
    else if (key == DIK_SLASH) then dir := ACT_SCAN_JUMP;
-   else if (key == DIK_M) then dir := ACT_MENU;
+   /*
+    * The action menu, on the key the player actually presses.
+    *
+    * It was on M, and M is not ours to take: the manual gives it to the mouse
+    * mode toggle, movement to command and back -- the vanilla equivalent of
+    * numpad 0, as docs/CONTROLS.md says in as many words. Binding the menu
+    * there and swallowing the key deleted a control the game ships with.
+    *
+    * Numpad dot was then added on top, and its whole job was to synthesise the
+    * M the mod had just taken: a hotkey on the Python side, queued, run from
+    * the main loop, turned back into a keystroke. Two bindings for one action,
+    * one of them a round trip out of the game and back.
+    *
+    * That round trip was not free. A queued key is only run on a tick where
+    * the screen detection is settled, and is thrown away after a second -- so
+    * the menu failed intermittently, exactly when the flags happened to be
+    * mid-flicker, while a hand-pressed M never failed once. Reading the key
+    * here removes the queue, the staleness window and the second binding
+    * together, because there is no longer a journey to go wrong.
+    */
+   else if (key == DIK_DECIMAL) then dir := ACT_MENU;
    else if (key == DIK_U) then dir := ACT_USE_ACTIVE;
    else if (key == DIK_BACKSLASH) then dir := ACT_PREPARE;
    else return;
@@ -766,6 +831,9 @@ procedure step_cursor(variable dir) begin
    variable next := tile_num_in_direction(g_cursor, dir, 1);
    if (next > 0) then begin
       g_cursor := next;
+      // A different hex is a different question, so any correction the player
+      // made about the last one stops applying here.
+      g_usercursor := -1;
    end
    // Scroll the view so the cursor hex sits at the centre of the viewport.
    // Deliberate: with the cursor always dead centre, the Python side can later
@@ -1010,14 +1078,34 @@ procedure scan_keep(variable obj) begin
    if (not obj_on_screen(obj)) then return;
    if (not obj_is_visible_flag(obj)) then return;
 
-   // A corpse is worth knowing about, but it is not a critter you can deal
-   // with, and offering one as a target wastes a turn.
+   /*
+    * A corpse stays in the list, and the filter that used to drop it here was
+    * in the wrong procedure rather than merely too strict.
+    *
+    * Its reasoning was about combat -- "offering one as a target wastes a
+    * turn" -- but nothing here targets anything. That decision belongs to
+    * force_action_cursor, which asks live_critter_at_cursor and still checks
+    * aliveness for itself, so dropping the dead a second time in this place
+    * bought no safety at all. What scan_keep governs is whether a thing can be
+    * FOUND, and a body is the one object a player most needs to find: it is
+    * the only container the game makes where a critter used to be standing,
+    * and the scanner is the only route to something you cannot see.
+    *
+    * The perception test is skipped for the dead rather than trusted. It asks
+    * whether one critter notices another, which is not a question a corpse has
+    * an answer to, and what obj_can_see_obj actually returns for one has never
+    * been measured here -- so making the only route to a body depend on it
+    * would be building on an unknown. obj_on_screen above is the visibility
+    * test that survives, and it is the honest one: the engine does not draw a
+    * body that is not there to be seen.
+    */
    if (ty == OBJ_TYPE_CRITTER) then begin
-      if (is_critter_dead(obj)) then return;
-      // Only critters get the perception test, and only critters:
-      // obj_can_see_obj reaches for critter fields and null-dereferenced at
-      // 0x004AA6AE when handed scenery.
-      if (not obj_can_see_obj(dude_obj, obj)) then return;
+      if (not is_critter_dead(obj)) then begin
+         // Only critters get the perception test, and only critters:
+         // obj_can_see_obj reaches for critter fields and null-dereferenced at
+         // 0x004AA6AE when handed scenery.
+         if (not obj_can_see_obj(dude_obj, obj)) then return;
+      end
    end
 
    g_hascritter := 1;
@@ -1167,6 +1255,7 @@ procedure scan_do(variable level, variable dojump) begin
 
    if (dojump) then begin
       g_cursor := tile_num(cands[chosen]);
+      g_usercursor := -1;
       call recenter_view;
       debug_msg("SCAN:jump " + g_cursor + "|");
       call describe_cursor;
@@ -1570,7 +1659,14 @@ procedure pick_collect begin
                   // Only critters get the line-of-sight test, and only
                   // critters: obj_can_see_obj reaches for critter fields and
                   // null-dereferenced when handed scenery.
-                  if (obj_can_see_obj(dude_obj, obj)) then begin
+                  //
+                  // The dead are exempt, for the reason set out in
+                  // describe_cursor -- and with more riding on it here, because
+                  // this list is what the action menu opens onto, and "use" on
+                  // a body is the whole of looting it. A corpse dropped here is
+                  // a corpse that cannot be looted at all.
+                  if (is_critter_dead(obj)
+                      or obj_can_see_obj(dude_obj, obj)) then begin
                      set_array(g_pick_objs, g_pick_count, obj);
                      g_pick_count := g_pick_count + 1;
                   end
@@ -1907,7 +2003,7 @@ procedure obj_is_real(variable obj) begin
 end
 
 procedure prepare_cursor begin
-   variable want, ou, ouname, ouflat, iscritter, isitem;
+   variable want, ou, ouname, ouflat, iscritter, isitem, isbody;
 
    // Decide from what is UNDER THE POINTER, not from what is on the look hex.
    // Those are not the same thing: the pointer is walked up an object's sprite
@@ -1942,6 +2038,7 @@ procedure prepare_cursor begin
    ouflat := 0;
    iscritter := 0;
    isitem := 0;
+   isbody := 0;
    if (ou) then begin
       call obj_label(ou);
       ouname := g_label;
@@ -1977,8 +2074,22 @@ procedure prepare_cursor begin
        * the same shape as the null dereference that hard crashed this script
        * during development.
        */
+      /*
+       * A body is its own answer, and falling between the two below is what
+       * made a corpse unclickable.
+       *
+       * It is not a live critter, so `iscritter` stayed 0 -- correctly, since
+       * you do not attack or talk to it. It is type CRITTER, not ITEM, so
+       * `isitem` stayed 0 too. With neither set the chain below fell all the
+       * way through to "walkable ground", and it IS walkable ground: a dead
+       * critter stops blocking its tile, so the click was a perfectly valid
+       * order to walk, carried out exactly as issued. Nothing errored and
+       * nothing warned; the player simply stepped onto the body they were
+       * trying to loot.
+       */
       if (obj_type(ou) == OBJ_TYPE_CRITTER) then begin
-         if (not is_critter_dead(ou)) then iscritter := 1;
+         if (is_critter_dead(ou)) then isbody := 1;
+         else iscritter := 1;
       end else if (obj_type(ou) == OBJ_TYPE_ITEM) then begin
          isitem := 1;
       end
@@ -1986,15 +2097,39 @@ procedure prepare_cursor begin
 
    if (g_armedskill > 0) then begin
       want := g_armedskill;
+   end else if (g_usercursor >= 0) then begin
+      /*
+       * The player has said which cursor they want, since the last time the
+       * look hex moved, and that outranks anything inferred below.
+       *
+       * Everything under this line is a guess from what is under the pointer.
+       * The guesses are good, but they are guesses about intent, and a right
+       * click is the player stating the intent outright. A body is exactly
+       * where the two part company: the guess says "container, you mean to
+       * loot it" and is right nearly always, but a corpse does not block its
+       * tile, so "walk onto that hex" is a real thing to want and was the one
+       * thing that could not be asked for.
+       *
+       * An armed skill still wins, because that is a choice too -- a more
+       * specific one, made through the Skilldex, and it says what to do rather
+       * than merely how to click.
+       */
+      want := g_usercursor;
    end else if (iscritter) then begin
       if (combat_is_initialized) then begin
          want := CURSOR_TARGETING;   // a click attacks
       end else begin
          want := CURSOR_COMMAND;     // a click talks, or whatever is default
       end
-   end else if (isitem) then begin
+   end else if (isitem or isbody) then begin
       // Something lying on the ground. Items do not block, so the hex is
       // walkable -- but you want to pick it up, not stand on it.
+      //
+      // A body is the same case in every respect that matters here. It does
+      // not block either, it is a container, and "loot it" is as clearly the
+      // intent of a click on it as "pick it up" is for an item. That the
+      // engine files one as ITEM and the other as CRITTER is a fact about the
+      // engine, not about what the player meant.
       want := CURSOR_COMMAND;
    end else if (g_cursor == tile_num(dude_obj)) then begin
       // Your own hex counts as blocked -- by you. Walking to where you already
@@ -2032,9 +2167,59 @@ end
  * category as distances and bearings -- scaffolding describing how to get
  * around, which the game has no phrase for because it simply shows you.
  */
+/*
+ * facing_name  --  which way a critter is looking, in the mod's own compass.
+ *
+ * obj_get_rot answers 0 to 5 and those are exactly DIR_NE through DIR_NW, the
+ * same six the look cursor steps by, so a facing can be compared to a bearing
+ * without either being translated first.
+ *
+ * There is no "north", and saying so would be inventing a direction the grid
+ * does not have -- the same reason step_north has to alternate NE and NW to
+ * fake one. Six real answers beat eight tidy ones that do not correspond to
+ * anything a critter can actually be turned to.
+ */
+procedure facing_name(variable rot) begin
+   if (rot == DIR_NE) then return "north east";
+   if (rot == DIR_E)  then return "east";
+   if (rot == DIR_SE) then return "south east";
+   if (rot == DIR_SW) then return "south west";
+   if (rot == DIR_W)  then return "west";
+   if (rot == DIR_NW) then return "north west";
+   return "";
+end
+
 procedure obj_label(variable obj) begin
+   variable face;
    g_label := obj_name(obj);
-   if (obj_type(obj) != OBJ_TYPE_CRITTER) then begin
+   if (obj_type(obj) == OBJ_TYPE_CRITTER) then begin
+      // A body is a container, and this is the word that says so. Without it
+      // "Warrior" is the same sound whether it is about to swing at you or
+      // waiting to be looted -- and worse, the scanner groups by this label, so
+      // a corpse and its living cousins collapse into one entry and stepping
+      // through "Warrior" walks past the body without ever naming it.
+      if (is_critter_dead(obj)) then begin
+         g_label := g_label + ", dead";
+      end else begin
+         /*
+          * Which way they are looking, for the living only.
+          *
+          * This is not colour. Sneaking and stealing both turn on where a
+          * critter's back is -- the engine has a whole tile_behind_obj for it
+          * -- and it is the one fact about a critter a sighted player reads
+          * off the screen without looking for it, by seeing which way the
+          * figure points. Without it there is no way to tell whether you are
+          * creeping up behind somebody or walking into their eyeline.
+          *
+          * Withheld from the dead, who are not looking at anything, and whose
+          * label already says the useful thing about them.
+          */
+         face := facing_name(obj_get_rot(obj));
+         if (face != "") then begin
+            g_label := g_label + ", facing " + face;
+         end
+      end
+   end else begin
       if (obj_is_locked(obj)) then begin
          g_label := g_label + ", locked";
       end else if (obj_is_open(obj)) then begin
@@ -2045,6 +2230,22 @@ end
 
 procedure live_critter_at_cursor begin
    variable objs, total, i, obj;
+   /*
+    * Both answers are cleared HERE, at the top, rather than left to the caller.
+    *
+    * This procedure used to clear g_hascritter on its LAST line instead --
+    * after the loop that sets it -- so it discarded its own finding every time
+    * and the flag read false no matter who was standing on the hex. It sat
+    * directly beneath the free_array note, which is what let a live assignment
+    * pass for part of the cleanup.
+    *
+    * force_action_cursor is the only caller and its entire decision hangs on
+    * that flag, so the targeting cursor could never be selected: numpad 0 in a
+    * fight always chose movement, and a click meant as an attack was issued as
+    * an order to walk -- which is the precise failure the cursor logic exists
+    * to prevent, left in place by the line that was supposed to enforce it.
+    */
+   g_hascritter := 0;
    g_hasobject := 0;
    objs := tile_get_objs(g_cursor, elevation(dude_obj));
    total := 0;
@@ -2075,7 +2276,6 @@ procedure live_critter_at_cursor begin
    end
    // No free_array: tile_get_objs returns a temporary array, auto-deleted at
    // end of frame. Freeing it by hand is a double free and crashes the engine.
-   g_hascritter := 0;
 end
 
 /*
@@ -2168,6 +2368,7 @@ end
 
 procedure snap_to_dude begin
    g_cursor := tile_num(dude_obj);
+   g_usercursor := -1;
    call recenter_view;
    debug_msg("WORLD:snap");
    call describe_cursor;
@@ -2221,10 +2422,24 @@ procedure describe_cursor begin
                // Only critters get the line-of-sight and stealth test, and
                // only critters: obj_can_see_obj reaches for critter fields and
                // null-dereferenced at 0x004AA6AE when handed scenery.
-               debug_msg("WORLD:dbgLOS obj=" + obj);
-               if (obj_can_see_obj(dude_obj, obj)) then begin
+               //
+               // The dead are exempt. The test asks whether one critter
+               // notices another, which is the stealth question, and a corpse
+               // is not sneaking. What it answers ABOUT a corpse has not been
+               // measured here, so both readings are logged: the next body
+               // this cursor crosses settles it from the log rather than from
+               // another session of guessing.
+               //
+               // obj_label rather than obj_name, because that is what appends
+               // ", dead". A body announced as a plain "Warrior" is the bug
+               // this is fixing wearing a different hat.
+               debug_msg("WORLD:dbgLOS obj=" + obj
+                  + " dead=" + is_critter_dead(obj)
+                  + " see=" + obj_can_see_obj(dude_obj, obj));
+               if (is_critter_dead(obj) or obj_can_see_obj(dude_obj, obj)) then begin
                   if (count > 0) then names := names + ", ";
-                  names := names + obj_name(obj);
+                  call obj_label(obj);
+                  names := names + g_label;
                   count := count + 1;
                end
             end else begin

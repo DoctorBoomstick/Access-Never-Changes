@@ -31,6 +31,37 @@ from typing import Optional
 
 from ..memory.process import Process
 
+# **These are absolute into fallout2.exe, and they do not survive a patched one.**
+#
+# The values below are the retail Steam build. Measured against the Restoration
+# Project Unofficial, which rewrites the executable in place -- same 1,189,888
+# bytes, a different SHA256 -- the editor's window handle sat eight bytes lower:
+#
+#     0x006ADDA8   retail Steam
+#     0x006ADDA0   under RPU, found by watching it flip sign across four
+#                  editor open/closes, which is the only test that separates a
+#                  handle from a number that happens to be positive
+#
+# Recorded rather than adopted. RPU is not the build this mod is developed
+# against, and hardcoding its address would only move the breakage to the other
+# build.
+#
+# **The failure was silent, which is the part worth remembering.** Every read
+# still succeeded and returned -1 -- the value meaning "no editor open" -- so
+# the mod concluded there was nothing to describe and said nothing at all.
+# Character creation was mute on a screen it reads perfectly well. Only the
+# pre-game screens depend on these: once a game is loaded the screen comes from
+# the script's own game mode, so a patched executable leaves play working and
+# breaks only the menu, selection and the editor.
+#
+# An eight-byte shift also moves the neighbours. uiwindow.py's WINDOW_LIST and
+# WINDOW_COUNT sit just above this address and would have gone with it, while
+# pointer.py's sit below and would not -- which matches what was observed:
+# pointing worked, finding a panel to click in did not.
+#
+# The durable answer is memory/scan.py, which was written for exactly this and
+# is still wired to nothing. Signature the instruction that READS the variable
+# and the variable may move where it likes.
 EDITOR_WINDOW = 0x006ADDA8  # >= 0 only while the character editor window exists
 MENU_FLAG = 0x00519504      # 1 on the main menu
 EDITOR_FLAG = 0x00518490    # 0 in the character editor

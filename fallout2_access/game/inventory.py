@@ -68,6 +68,32 @@ _NONE = re.compile(r"INVEN:none (\d+)\|")
 _MENU = re.compile(r"INVEN:menu (\w+)\|?([^|]*)\|?([^|]*)\|?([^|]*)\|?")
 # action | item | side | index | total | is it the ACTIVE item
 _DO = re.compile(r"INVEN:do\|([^|]*)\|([^|]*)\|(\d+)\|(\d+)\|(\d+)\|(\d+)\|")
+# item | the prototype's description. Answered by the script and complete on
+# arrival, unlike the rest of this menu -- nothing here needs the pointer.
+_LOOK = re.compile(r"INVEN:look\|([^|]*)\|(.*)\|", re.DOTALL)
+
+
+def look_line(line):
+    """Turn an INVEN:look line into the sentence to say, or None.
+
+    The name is repeated before the description on purpose. The list cursor can
+    be moved between opening the menu and choosing from it, so "look at it"
+    has to say which "it" it answered for -- otherwise a description is a
+    paragraph with nothing tying it to the thing you thought you asked about.
+
+    An item whose prototype carries no description says so rather than going
+    quiet. Silence here reads as the key not working, which is the failure this
+    codebase keeps having to fix in other places.
+    """
+    m = _LOOK.match(line)
+    if not m:
+        return None
+    name, text = m.group(1).strip(), m.group(2).strip()
+    if not name:
+        name = "That"
+    if not text:
+        return "{}. No description.".format(name)
+    return "{}. {}".format(name, text)
 
 
 def menu_line(line):

@@ -19,3 +19,6 @@ sfall-log.txt
 *.dat
 *.exe
 *.dll
+
+# The Fallout 2 folder this machine plays -- see install.py
+.game-path

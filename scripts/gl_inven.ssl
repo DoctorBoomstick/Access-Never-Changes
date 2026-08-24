@@ -491,9 +491,10 @@ end
  * it is up. The ACTIONS belong to the Python side, which can drive the pointer,
  * so Enter writes a line for it to act on rather than doing the work here.
  */
-#define IMENU_COUNT     (2)
+#define IMENU_COUNT     (3)
 #define IMENU_USE       (0)
 #define IMENU_DROP      (1)
+#define IMENU_LOOK      (2)
 
 procedure worn_slot(variable index) begin
    // The middle column, in the order this script reports it: armour, then the
@@ -507,6 +508,7 @@ end
 procedure imenu_label(variable which) begin
    if (which == IMENU_USE)  then return "use it";
    if (which == IMENU_DROP) then return "drop it";
+   if (which == IMENU_LOOK) then return "look at it";
    return "action " + which;
 end
 
@@ -546,6 +548,29 @@ procedure imenu_do begin
    call imenu_close;
    if (not g_item) then begin
       debug_msg("INVEN:menu gone" + SEP);
+      return;
+   end
+
+   /*
+    * Look is answered here and goes no further.
+    *
+    * Every other entry on this list ends in a pointer: "use it" is a click on
+    * the interface bar's item slot, "drop it" is a drag onto the character.
+    * A description needs none of that -- it is a string the engine is already
+    * holding -- so it is read and spoken without anything being aimed, which
+    * makes it the one action on this menu that cannot land on the wrong thing.
+    *
+    * The words are the game's own, out of the item's prototype, so a
+    * translated game reads out translated and no English is shipped here.
+    *
+    * Reported alongside the name rather than instead of it: "look at it" on a
+    * list you navigated by name should confirm which name it answered for,
+    * because the list cursor can be moved between opening the menu and
+    * choosing from it.
+    */
+   if (which == IMENU_LOOK) then begin
+      debug_msg("INVEN:look" + SEP + g_label + SEP
+         + proto_data(obj_pid(g_item), it_description) + SEP);
       return;
    end
    /*
@@ -608,7 +633,22 @@ procedure on_key begin
       end
    end
 
-   if (key == DIK_M) then begin
+   /*
+    * Numpad dot opens the item menu, read straight off the keyboard.
+    *
+    * It was reached by the Python side synthesising an M, the same round trip
+    * gl_world.ssl has just stopped doing, and with the same fault: a queued
+    * hotkey only runs on a tick where the screen detection has settled, and is
+    * discarded without a sound after a second. The map's menu is where that was
+    * noticed, but nothing about the bug was particular to the map -- this list
+    * was reached the same way and could be lost the same way.
+    *
+    * M is kept here, unlike on the map. There it had to go because the manual
+    * gives it the mouse mode toggle; in an inventory panel there is no mouse
+    * mode to toggle, so holding onto it costs the player nothing and leaves a
+    * second way in for anyone who has learned it.
+    */
+   if (key == DIK_DECIMAL or key == DIK_M) then begin
       call imenu_open;
       set_sfall_return(KEY_SWALLOW);
       return;
