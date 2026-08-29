@@ -13,7 +13,7 @@ and it started saying which way a critter is looking, because where somebody's
 back is turned is half of sneaking and all of stealing.
 """
 
-VERSION = "0.2.4"
+VERSION = "0.2.9"
 NAME = "Little Boy"
 
 

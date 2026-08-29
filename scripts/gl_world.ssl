@@ -286,6 +286,10 @@ procedure start begin
       // finds hundreds of false positives. This finds exactly one thing.
       display_msg("Access Never Changes ready.");
       debug_msg("WORLD:ready");
+      // And again here, not only on a map change. Attaching to a game already
+      // in progress fires no map_enter, and until the player walked through a
+      // door the readout would have had no name to say.
+      debug_msg("WORLD:dudename " + obj_name(dude_obj) + "|");
       /*
        * Which slot F6 will write to. Read-only, and reported rather than set.
        *
@@ -524,6 +528,24 @@ procedure map_enter_p_proc begin
    g_stillticks := 0;
    g_lastunder := -1;
    debug_msg("WORLD:map " + g_cursor + " elev " + elevation(dude_obj));
+   /*
+    * Who you are, in the game's own words.
+    *
+    * The hex readout says "you" because that word is load-bearing on the other
+    * side -- it is how the parser knows the hex holds nothing to point at --
+    * and "you" is nobody's name. So the name is sent here and put in at the
+    * moment the line is spoken.
+    *
+    * Read off the character rather than out of a memory address, which is the
+    * whole reason it is worth a line of script: the addresses in this project
+    * are the reason it does not run everywhere, and obj_name is the same
+    * question the game answers for every other critter on the map.
+    *
+    * Sent on every map change rather than once. It costs one line per map, it
+    * cannot go stale, and it lands again after a load -- which is exactly when
+    * the Python side has thrown away everything it knew.
+    */
+   debug_msg("WORLD:dudename " + obj_name(dude_obj) + "|");
 end
 
 procedure on_key begin
@@ -1021,7 +1043,32 @@ end
 #define SCAN_CRITTERS       (0)
 #define SCAN_ITEMS          (1)
 #define SCAN_SCENERY        (2)
-#define SCAN_CATEGORIES     (3)
+/*
+ * SCAN_EXITS  --  the way off the map, which nothing could find.
+ *
+ * An exit grid is the one thing on a Fallout map that a sighted player sees
+ * and this mod could not report. It is a MISC object, so it is in none of the
+ * three lists above -- critters, ground items and scenery are three of the
+ * engine's six -- and it is drawn with the blank placeholder art, so the
+ * furniture filter would have thrown it out even if a list had held it.
+ *
+ * **Both of those were right about everything except this.** The art filter
+ * exists because a live map is carpeted in blocking hexes and light sources
+ * that no player perceives, and reading them out would be describing the
+ * engine rather than the world. The exit grid is genuinely different: what a
+ * sighted player sees is not the object at all but the shimmering border drawn
+ * into the FLOOR under it, which is tile art and belongs to no object anyone
+ * can ask about. The object is the only handle on a thing that is plainly
+ * visible. Filtering it is the one case where the rule hides something the
+ * screen is showing.
+ *
+ * Its own category rather than a fourth entry in scenery, because it is a
+ * different question. The other three answer "what is around me"; this one
+ * answers "how do I leave", and that is a question with two or three answers
+ * on any map, which a player wants to hear as a short list of its own.
+ */
+#define SCAN_EXITS          (3)
+#define SCAN_CATEGORIES     (4)
 
 // Art index of the blank placeholder frame. Objects drawn with it are the
 // engine's own invisible furniture; see scan_keep.
@@ -1030,6 +1077,7 @@ end
 procedure scan_list_type(variable cat) begin
    if (cat == SCAN_CRITTERS) then return LIST_CRITTERS;
    if (cat == SCAN_ITEMS)    then return LIST_GROUNDITEMS;
+   if (cat == SCAN_EXITS)    then return LIST_MISC;
    return LIST_SCENERY;
 end
 
@@ -1071,8 +1119,32 @@ procedure scan_keep(variable obj) begin
    //
    // Critters are exempt because a critter's fid encodes animation state, not a
    // scenery art index, so the comparison would be meaningless for them.
-   if (ty != OBJ_TYPE_CRITTER) then begin
+   //
+   // So is the exits category, and only that category. Everything it holds is
+   // drawn with the blank placeholder, exit grids included -- see SCAN_EXITS
+   // for why theirs is the one case the rule gets wrong. Nothing else can
+   // reach this exemption: the three ordinary categories ask the engine for
+   // three lists that a MISC object is not in, so relaxing the filter here
+   // cannot let a blocking hex into "scenery".
+   if (ty != OBJ_TYPE_CRITTER and g_scan_cat != SCAN_EXITS) then begin
       if ((obj_art_fid(obj) bwand 0xFFF) == ART_INVISIBLE) then return;
+   end
+
+   /*
+    * Every MISC object considered, logged once per press with what identifies
+    * it. The exits list is the one category whose contents have never been
+    * measured here, and the filter it deserves is a fact about the engine's
+    * proto numbering that this session cannot check.
+    *
+    * So it ships reporting all of them, grouped by the game's own names, which
+    * is honest and immediately useful -- an exit grid is named and the player
+    * can step to it -- and this line is what the next session tightens it
+    * from. It is the same route the art filter itself came by: 81,000 logged
+    * objects, then a rule.
+    */
+   if (g_scan_cat == SCAN_EXITS) then begin
+      debug_msg("WORLD:miscobj pid=" + obj_pid(obj) + " fid=" + obj_art_fid(obj)
+         + " nm=" + obj_name(obj) + "|");
    end
 
    if (not obj_on_screen(obj)) then return;
@@ -1360,13 +1432,30 @@ end
  * because armour class in particular has modifiers this mod knows nothing about.
  */
 procedure report_status begin
+   /*
+    * Level and experience ride along on the same line.
+    *
+    * They belong to the character sheet and are reported there, and that was
+    * the whole problem: the sheet is a screen you have to open, close and
+    * navigate, and "what level am I" is a question with a one-word answer. It
+    * had no key at all. This one is already the key for the numbers a sighted
+    * player never has to ask for, because the interface bar shows them
+    * permanently, and the level box is three inches to the left of it.
+    *
+    * Appended rather than inserted. The Python side matches the first six
+    * fields and treats these two as optional, so a game running last session's
+    * compiled script still reads out health, action points and armour class
+    * instead of failing to match and saying nothing at all.
+    */
    debug_msg("WORLD:status "
       + get_critter_stat(dude_obj, STAT_current_hp) + "|"
       + get_critter_stat(dude_obj, STAT_max_hit_points) + "|"
       + get_critter_current_ap(dude_obj) + "|"
       + get_critter_stat(dude_obj, STAT_max_move_points) + "|"
       + get_critter_stat(dude_obj, STAT_ac) + "|"
-      + (combat_is_initialized != 0) + "|");
+      + (combat_is_initialized != 0) + "|"
+      + get_pc_stat(PCSTAT_level) + "|"
+      + get_pc_stat(PCSTAT_experience) + "|");
 end
 
 /*
@@ -2375,7 +2464,7 @@ procedure snap_to_dude begin
 end
 
 procedure describe_cursor begin
-   variable elev, here, dist, objs, total, count, names, i, obj, nm, ty;
+   variable elev, here, dist, objs, total, count, names, i, obj, nm, ty, face;
 
    elev := elevation(dude_obj);
    here := tile_num(dude_obj);
@@ -2406,7 +2495,25 @@ procedure describe_cursor begin
 
          if (obj == dude_obj) then begin
             if (count > 0) then names := names + ", ";
+            /*
+             * You get a facing too, and for the same reason everyone else
+             * does: sneaking and stealing turn on where a back is, and yours
+             * is the one a sighted player can see at a glance and a blind
+             * player could not find out at all. The `<` and `>` keys turn you
+             * on the spot and printed nothing at all when they did.
+             *
+             * Still the word "you" and not your name. This string is parsed
+             * back on the other side to work out whether the hex holds
+             * anything to point at, and "you" is one of the words that means
+             * it does not -- your own character is not something the engine
+             * will confirm a pointer is over, by design. The name is sent
+             * separately and put in at the moment it is spoken, so the wire
+             * keeps a word the parser can trust and the player still hears
+             * who is standing there.
+             */
             names := names + "you";
+            face := facing_name(obj_get_rot(dude_obj));
+            if (face != "") then names := names + ", facing " + face;
             count := count + 1;
 
          // Filter out the engine's invisible furniture. A live map is carpeted

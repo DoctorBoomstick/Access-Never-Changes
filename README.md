@@ -1,6 +1,6 @@
 # Access Never Changes
 
-**0.2.4 "Little Boy"**
+**0.2.9 "Little Boy"**
 
 A screen reader accessibility mod for **Fallout 2**.
 
@@ -25,11 +25,31 @@ Built for NVDA, with SAPI and accessible_output2 as fallbacks.
   dragging it the way the engine expects.
 - **Talking to people.** What they said and every reply you can give, read out
   and numbered. The number keys say a reply — that is the engine's own binding,
-  so nothing has to be aimed at. Numpad 8 and 2 walk the list.
+  so nothing has to be aimed at. Up and down walk the list.
 - **How you are doing.** `;` reads health, action points and armour class.
 - **Saving and loading.** F6 and F7 are the engine's own quick keys and need no
   screen; the mod watches the savegame folder and says when a save lands. The
   save and load screens read out which slots hold a game.
+- **The Pip-Boy, and resting.** `P` opens it and the arrows walk it. The clock
+  is read out, and the alarm clock's fourteen ways to rest are read out and
+  chosen with a keypress — which is how you heal without a doctor. What
+  actually happened is reported from the clock rather than from the button:
+  "Rested 8 hours", or that nothing moved and so you cannot rest here.
+- **The world map.** A cursor walks the world in squares and reads out the
+  ground, the fog and the places, the same way the look cursor walks a map in
+  hexes — but on a square grid, so all eight directions are real ones and
+  numpad 8 and 2 are simply north and south. `[` and `]` step through the
+  places you know, nearest first, and `/` takes the cursor to one. Numpad plus
+  sets off, and says nothing until the engine's own destination confirms where
+  you are going. Arriving, and being stopped short of arriving by something
+  walking out of the desert, are told apart and said differently.
+- **Your quests, and your holodisks.** The Status page lists the places you
+  have something to do and the disks you are carrying; one key reads a place's
+  tasks out, saying which are done, or reads a holodisk from end to end. None
+  of it is on the screen to be read — the Pip-Boy paints its text as a picture
+  — so it is rebuilt from the tables the engine parses and the variables it
+  gates them on, using the engine's own rule, and checked against the engine's
+  own count before it is spoken.
 
 ## Installing
 
@@ -67,7 +87,7 @@ what gets announced. The short version:
 | Numpad 7 9 4 6 1 3 | move the look cursor one hex |
 | Numpad 8 / 2 | north / south — the directions a hex grid lacks |
 | Numpad 5 | bring the cursor back to you |
-| Numpad 8 / 2 / 4 / 6 | in a container or the inventory: walk the item lists |
+| Arrow keys | in a container or the inventory: walk the item lists |
 | `A` | in a container: take everything — the game's own TAKE ALL |
 | Numpad + | left click on the look cursor's hex — walk, or attack |
 | Numpad - | right click — cycles the cursor mode |
@@ -77,8 +97,21 @@ what gets announced. The short version:
 | `Ctrl+[` / `Ctrl+]` | scanner: category |
 | `/` | move the look cursor to the scanned thing |
 | F6 / F7 | quick save / quick load — the game's own keys, now announced |
+| `P` | the Pip-Boy — the game's own key |
+| `Z` | the Pip-Boy's alarm clock, straight to resting — the game's own key |
+| Up / Down | in the Pip-Boy: walk the list |
+| Numpad + | in the Pip-Boy: choose what you are on |
+| Numpad - | in the Pip-Boy: back to its main list |
 | `1` – `9` | in a conversation: say that reply — the game's own keys |
-| Numpad 8 / 2 / 5 | in a conversation: walk the reply list, re-read one |
+| Up / Down | in a conversation: walk the reply list |
+| Numpad 5 | in a conversation: re-read the reply you are on |
+| Numpad 7 8 9 4 6 1 3 2 | on the world map: walk the cursor — all eight are real directions here |
+| Numpad 5 | on the world map: bring the cursor back to you |
+| `[` / `]` | on the world map: step through the places you know |
+| `/` | on the world map: take the cursor to that place |
+| Numpad + | on the world map: travel to the cursor's square, or go into the place you are on |
+| Arrows / Home / `T` | on the world map: the game's own keys — scroll, centre, town map — now announced |
+| `1` – `9` | in a town map: go in that way — the game's own keys |
 
 **Do not hold Ctrl while using the numpad.** sfall binds Ctrl plus the numpad to
 the game speed controls. [docs/CONTROLS.md](docs/CONTROLS.md) covers that and
@@ -92,6 +125,14 @@ Two halves that meet in a log file.
 never writes to the game. It polls real state twenty times a second and reports
 differences rather than remembering what it thinks is true, which is why the
 speech cannot drift out of sync with the game.
+
+The world map is the exception that proves where the line falls, and it falls
+the other way from everywhere else. No map is loaded there, so no script can
+help — and none is needed: the player's position, the destination, the sixty-one
+places with their names and entrances, and the 28×30 grid of terrain and fog are
+all plain structures in memory. So the whole screen is read by the Python half,
+which makes it the one part of a loaded game that can be changed without
+restarting it.
 
 **In process**, four sfall scripts run inside Fallout 2 — `gl_world.ssl` for the
 map, `gl_combat.ssl` for fighting, `gl_inven.ssl` for containers and the
@@ -149,7 +190,7 @@ addresses in `fallout2_access/offsets/` were found.
   by hash on the build it was measured against and no scan happens; anything
   else is scanned at startup, and a name that cannot be found is reported and
   spoken rather than quietly left pointing at the wrong place.
-  Checked across builds: all 41 resolve on the Restoration Project Unofficial's
+  Checked across builds: all 74 resolve on the Restoration Project Unofficial's
   patched executable, using signatures generated against the retail Steam one.
   Every address turned out to be identical between the two, so that patch moves
   code rather than data — which also means the run has proved the signatures
@@ -167,7 +208,14 @@ addresses in `fallout2_access/offsets/` were found.
   loaded game they are read from the engine instead, through `get_critter_stat`
   and `has_skill`, so drugs, armour, tag skills and spent points are all
   included.
-- The Pipboy is not covered yet, and is now the largest remaining gap.
+- **The Pip-Boy's Automaps page is counted rather than named, on purpose.** An
+  automap is a floor plan drawn from tile data with no text in it, so naming
+  the list would only take you to a picture. The page says how many maps it
+  holds and lets you move through them; it does not pretend to describe one.
+- **The Vault 13 holodisk is the one disk that cannot be named.** It is the
+  only one of the twenty-one that is not in the table the engine parses from
+  `holodisk.txt`, so the mod has no record of it to reconstruct from. It is not
+  invented; it is simply absent from the list.
 - Dialogue reads and answers, but a conversation of more than nine replies can
   only have its first nine said: the engine binds `1` to `9` and a tenth would
   have to be clicked on. Nothing in the tutorial or in Arroyo has that many.

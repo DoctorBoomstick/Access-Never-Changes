@@ -47,15 +47,24 @@ MODE_CHARSCREEN = 0x200
 # part of the object list and spoken aloud.
 _HEX_RE = re.compile(r"WORLD:hex\s+(\d+)\s+dist\s+(\d+)\s*:\s*([^|]*)")
 _MODE_RE = re.compile(r"WORLD:gamemode\s+(-?\d+)")
+# "WORLD:dudename Tara|" -- who the hex readout means by "you".
+_DUDENAME_RE = re.compile(r"WORLD:dudename ([^|]*)\|")
 # Both forms report the current cursor mode: "cursormode" when it changed,
 # "cursorok" when a press found it already correct. Parsing only the first left
 # the mode unknown exactly when nothing had changed, which is the common case.
 _CURSOR_RE = re.compile(r"WORLD:cursor(?:mode|ok)\s+(-?\d+)")
 
 
-# "WORLD:status 48|48|8|10|8|1|"
+# "WORLD:status 48|48|8|10|8|1|" and, since level was added, "...|1|2|1450|"
+#
+# The last two are optional so that a game still running the previously compiled
+# script keeps working. A regex that demanded eight fields would not merely lose
+# the level -- it would fail to match at all, and the one key that reports how
+# you are doing would go silent, which is a far worse trade than a missing
+# level.
 _STATUS_RE = re.compile(
     r"WORLD:status\s+(-?\d+)\|(-?\d+)\|(-?\d+)\|(-?\d+)\|(-?\d+)\|(-?\d+)\|"
+    r"(?:(-?\d+)\|(-?\d+)\|)?"
 )
 
 
@@ -63,7 +72,9 @@ def status_line(line: str) -> Optional[str]:
     """Turn a WORLD:status line into the sentence to say, or None.
 
     Health first, then action points, then armour class -- the order asked for,
-    and the order they matter in when something is biting you.
+    and the order they matter in when something is biting you. Level and
+    experience last, because they are the only two on this line that do not
+    change in the middle of a fight.
 
     Action points are only a live figure during a fight. Outside one the engine
     still reports a running count, but it is not a number anyone is spending, so
@@ -74,14 +85,45 @@ def status_line(line: str) -> Optional[str]:
     m = _STATUS_RE.match(line)
     if not m:
         return None
-    hp, max_hp, ap, max_ap, ac, fighting = (int(g) for g in m.groups())
+    hp, max_hp, ap, max_ap, ac, fighting = (int(g) for g in m.groups()[:6])
     parts = ["Health {} of {}.".format(hp, max_hp)]
     if fighting:
         parts.append("{} of {} action points.".format(ap, max_ap))
     else:
         parts.append("{} action points.".format(max_ap))
     parts.append("Armor class {}.".format(ac))
+    parts.extend(_level_words(m.group(7), m.group(8)))
     return " ".join(parts)
+
+
+def _level_words(level, experience) -> List[str]:
+    """Your level, and how much experience the next one still wants.
+
+    The character sheet has shown both for a while and there was no way to hear
+    either without opening it, which makes "what level am I" a four-keystroke
+    round trip for a one-word answer.
+
+    **How much further, not how much altogether.** The sheet prints the total
+    the next level costs, because a sighted player reads it against the total
+    you have on the line above. Read aloud one after the other, two large
+    similar numbers are something the listener has to subtract themselves, and
+    the answer they wanted was the difference all along.
+
+    The threshold is arithmetic rather than a reading -- see
+    `charsheet.next_level_experience` -- so it is quietly dropped if it comes
+    out at or below what you already have. That happens at the level cap and
+    whenever a mod retables the progression, and a negative number of points to
+    go would be worse than saying nothing.
+    """
+    if level is None or experience is None:
+        return []
+    level, experience = int(level), int(experience)
+    said = ["Level {}.".format(level)]
+    needed = charsheet.next_level_experience(level)
+    if needed is not None and needed > experience:
+        said.append("{} experience to the next level.".format(
+            needed - experience))
+    return said
 
 
 # "WORLD:useactive Plastic Explosives|0||"  and, for an empty active hand,
@@ -346,14 +388,39 @@ def names_match(name: str, acceptable) -> bool:
     return any(low == bare_name(w) for w in wanted_names(acceptable))
 
 
+def _say_as(contents: str, player_name: str) -> str:
+    """Swap the script's word for you with your name, and nothing else.
+
+    Field by field, and only on a whole field. A blanket replace would find the
+    "you" inside "Young Radscorpion", and a hex holding one of those is a hex
+    where being told the wrong thing has consequences.
+    """
+    fields = [f.strip() for f in contents.split(",")]
+    return ", ".join(player_name if f.lower() == "you" else f for f in fields)
+
+
 class HexReading(NamedTuple):
     tile: int
     distance: int
     contents: str
 
-    def announce(self) -> str:
-        """What to say when the cursor lands here."""
+    def announce(self, player_name: Optional[str] = None) -> str:
+        """What to say when the cursor lands here.
+
+        `player_name` replaces the word the script uses for you. The script
+        cannot send the name in the first place: "you" is one of the words that
+        tells the parser this hex holds nothing to point at, and a hex reading
+        "Tara" would have the click machinery trying to aim at a character the
+        engine deliberately refuses to confirm a pointer is over.
+
+        So the substitution happens here, at the last possible moment, on the
+        string nobody parses again. Everything upstream keeps a word it can
+        trust, and the player hears their own name -- which is what the readout
+        was already doing for every other critter on the map.
+        """
         what = self.contents.strip() or "empty"
+        if player_name:
+            what = _say_as(what, player_name)
         if self.distance == 0:
             return what
         return "{}, {} hex{}".format(what, self.distance, "" if self.distance == 1 else "es")
@@ -398,6 +465,10 @@ class WorldLog:
         # rather than on a watcher because the script fills it and a different
         # watcher reads it.
         self.sheet = charsheet.Sheet()
+        # The name the readout says instead of "you". None until the script has
+        # sent it, and the readout falls back to "you" until then -- which is
+        # true, and better than a name nobody has checked.
+        self.player_name: Optional[str] = None
         self.session_live = False
         # Bumped every time the script announces itself, which it does once per
         # game load. The display window's buffer is reallocated at the same
@@ -412,6 +483,7 @@ class WorldLog:
         self.cursor_mode = None
         self.last_hex = None
         self.sheet = charsheet.Sheet()
+        self.player_name = None
         self.session_live = False
         self.ready_count = 0
 
@@ -471,6 +543,15 @@ class WorldLog:
             if line.startswith("WORLD:ready"):
                 self.session_live = True
                 self.ready_count += 1
+                continue
+
+            m = _DUDENAME_RE.match(line)
+            if m:
+                # Absorbed rather than passed on: it is a fact to keep, not an
+                # event to announce. Nobody wants their own name read out every
+                # time they walk through a door.
+                self.player_name = m.group(1).strip() or None
+                self.session_live = True
                 continue
 
             m = _MODE_RE.match(line)

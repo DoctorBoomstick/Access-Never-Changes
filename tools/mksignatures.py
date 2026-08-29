@@ -109,10 +109,73 @@ REGISTRY = {
     "SLOT_SELECTION":    (0x005193B8, [("..game.slotscreen", "SELECTION")]),
     "SLOT_OCCUPIED":     (0x00614280, [("..game.slotscreen", "OCCUPIED")]),
     "SLOT_HEADERS":      (0x00613D30, [("..game.slotscreen", "SLOT_HEADERS")]),
+    # -- the Pip-Boy ---------------------------------------------------------
+    #
+    # Two, and only two: everything else about that panel is read off GNW's own
+    # button list, which is found through WINDOW_LIST above. GAME_TIME is the
+    # one this most needs to survive a patch -- resting until morning is a
+    # decision made on the clock, and a clock that reads out of the wrong place
+    # would be confidently wrong rather than missing.
+    "MSG_PIPBOY":        (0x00664348, [("..game.pipboy", "MSG_PIPBOY")]),
+    "GAME_TIME":         (0x0051C720, [("..game.pipboy", "GAME_TIME")]),
+    # -- and what its pages are lists of -------------------------------------
+    #
+    # The tables the engine parses out of quests.txt and holodisk.txt, the
+    # global variables they are gated on, and the counters the engine keeps of
+    # what it drew. Everything the Status and Archives pages say comes through
+    # these, so a build that moved one of them would take the quest list with
+    # it -- which is exactly the failure signatures exist to turn from silence
+    # into a spoken complaint.
+    "MSG_QUESTS":        (0x00664410, [("..game.pipboy", "MSG_QUESTS")]),
+    # map.msg is shared: the Pip-Boy names quest locations out of it and the
+    # world map names areas and entrances out of it. Found independently by
+    # both, which is a cross-check worth having on the one list two screens
+    # depend on.
+    "MSG_MAP":           (0x00631D48, [("..game.pipboy", "MSG_MAP"),
+                                       ("..game.worldmap", "MSG_MAP")]),
+    "QUEST_TABLE":       (0x0051C128, [("..game.pipboy", "QUEST_TABLE")]),
+    "QUEST_COUNT":       (0x0051C12C, [("..game.pipboy", "QUEST_COUNT")]),
+    "HOLODISK_TABLE":    (0x0051C130, [("..game.pipboy", "HOLODISK_TABLE")]),
+    "HOLODISK_COUNT":    (0x0051C134, [("..game.pipboy", "HOLODISK_COUNT")]),
+    "REST_OPTION_COUNT": (0x0051C138, [("..game.pipboy", "REST_OPTION_COUNT")]),
+    "GAME_GLOBALS":      (0x005186C0, [("..game.pipboy", "GAME_GLOBALS")]),
+    "MOVIES_SEEN":       (0x00596C78, [("..game.pipboy", "MOVIES_SEEN")]),
+    "LINES_QUEST_LOCATIONS": (0x00664418,
+                              [("..game.pipboy", "LINES_QUEST_LOCATIONS")]),
+    "LINES_STATUS_HOLODISKS": (0x0066444C,
+                               [("..game.pipboy", "LINES_STATUS_HOLODISKS")]),
+    "LINES_ARCHIVES":    (0x00664520, [("..game.pipboy", "LINES_ARCHIVES")]),
+    "LINES_AUTOMAPS":    (0x0066450C, [("..game.pipboy", "LINES_AUTOMAPS")]),
     # -- the engine's own action menu ----------------------------------------
     "ACTION_LIST":       (0x00596C3C, [("..game.actions", "ACTION_LIST")]),
     "ACTION_MENU_COUNT": (0x00518D14, [("..game.actions", "MENU_COUNT")]),
     "ACTION_MENU_INDEX": (0x00518D1C, [("..game.actions", "MENU_INDEX")]),
+    # -- the world map -------------------------------------------------------
+    #
+    # Two clusters, and the split is the engine's own. 0x00672Exx is the world
+    # map's live state -- where the player is, where they are going, whether
+    # they are moving -- and 0x0051DDxx is what was parsed out of city.txt and
+    # worldmap.txt when the game loaded. sfall reads the first pair itself, for
+    # its worldmap_xpos and worldmap_ypos metarules, which is how they were
+    # found: its ddraw.dll names the address where the engine only indexes it.
+    "WM_WORLD_X":        (0x00672E0C, [("..game.worldmap", "WORLD_X")]),
+    "WM_WORLD_Y":        (0x00672E10, [("..game.worldmap", "WORLD_Y")]),
+    "WM_DEST_X":         (0x00672E5C, [("..game.worldmap", "DEST_X")]),
+    "WM_DEST_Y":         (0x00672E60, [("..game.worldmap", "DEST_Y")]),
+    "WM_CURRENT_AREA":   (0x00672E08, [("..game.worldmap", "CURRENT_AREA")]),
+    "WM_TRAVELLING":     (0x00672E1C, [("..game.worldmap", "TRAVELLING")]),
+    "WM_SCROLL_X":       (0x0051DE2C, [("..game.worldmap", "SCROLL_X")]),
+    "WM_SCROLL_Y":       (0x0051DE30, [("..game.worldmap", "SCROLL_Y")]),
+    "WM_TILE_LIST":      (0x0051DDEC, [("..game.worldmap", "TILE_LIST")]),
+    "WM_TILE_COUNT":     (0x0051DDF0, [("..game.worldmap", "TILE_COUNT")]),
+    "WM_TILES_ACROSS":   (0x0051DDF4, [("..game.worldmap", "TILES_ACROSS")]),
+    "WM_AREA_LIST":      (0x0051DDF8, [("..game.worldmap", "AREA_LIST")]),
+    "WM_AREA_COUNT":     (0x0051DDFC, [("..game.worldmap", "AREA_COUNT")]),
+    "WM_TOWN_ROWS":      (0x0051DE94, [("..game.worldmap", "TOWN_ROWS")]),
+    "WM_TOWN_ROW_COUNT": (0x0051DE98, [("..game.worldmap", "TOWN_ROW_COUNT")]),
+    "WM_TOWN_SCROLL":    (0x00672F10, [("..game.worldmap", "TOWN_SCROLL")]),
+    "MSG_WORLDMAP":      (0x00672FB0, [("..game.worldmap", "MSG_WORLDMAP")]),
+    "WM_ENCOUNTER_ODDS": (0x00672FB8, [("..game.worldmap", "ENCOUNTER_CHANCE")]),
     # -- where the pointer really is -----------------------------------------
     "MOUSE_X":           (0x006AC750, [("..game.pointer", "MOUSE_X")]),
     "MENU_MOUSE_X":      (0x006AC794, [("..game.pointer", "MENU_MOUSE_X")]),

@@ -137,5 +137,28 @@ procedure on_key begin
     or key == DIK_NUMPAD6 or key == DIK_NUMPAD7 or key == DIK_NUMPAD8
     or key == DIK_NUMPAD9) then begin
       set_sfall_return(KEY_SWALLOW);
+      return;
+   end
+
+   /*
+    * Up and down walk the reply list, which is what every other list in this
+    * mod uses them for.
+    *
+    * They are swallowed here for the same reason the numpad is, one step
+    * milder: the engine gives the arrows to the REVIEW box's scroll bar, so
+    * an unswallowed press walks the mod's list and scrolls the game's at the
+    * same time. Nothing breaks either way -- the replies are read whole out of
+    * memory and the number keys pick them regardless of what is scrolled into
+    * view -- but a key doing two things at once is a key nobody can reason
+    * about, and this script exists to stop exactly that.
+    *
+    * **Only in DIALOG, never in DIALOGVIEW.** The review screen is a wall of
+    * conversation history with no reply list at all, and scrolling it is the
+    * only thing its arrows are for. Taking them there would remove the screen's
+    * one control and put nothing in its place.
+    */
+   if (m bwand DIALOGVIEW) then return;
+   if (key == DIK_UP or key == DIK_DOWN) then begin
+      set_sfall_return(KEY_SWALLOW);
    end
 end

@@ -226,7 +226,22 @@ preferences.
 Save and load: single-click a slot to select, double-click or press DONE to
 commit; type a description and press Enter.
 
-*Mod status: nothing.*
+*Mod status: the save and load screens, the character screen, the Skilldex, the
+Pip-Boy and the world map are all read; the automap and preferences are not.*
+
+The manual is wrong about the world map, and wrong in the direction that
+mattered. It is **not** all mouse-driven: the engine's own dispatch binds the
+arrow keys to scrolling the view, Home to centring it on you, and `T` to opening
+the town view of wherever you are standing. The town view goes further — each of
+its entrances answers to a number key, `1` for the first, `2` for the second,
+and Escape backs out, exactly like a conversation. None of that is documented
+anywhere and all of it was already there. What genuinely needs the mouse is
+choosing a destination, which is the one thing this mod has to click for you.
+
+The manual is right that the Pip-Boy has no hotkeys of its own **inside** the
+panel — every one of its controls answers only to a click. It is wrong by
+omission about getting there: `Z` opens it directly onto the alarm clock, which
+is the whole of resting without a single click. Measured, not read.
 
 ---
 
@@ -275,3 +290,17 @@ Ranked by how much of the game each unlocks per unit of work:
    do. Cheap, and useful in every other screen.
 5. **Barter, Pipboy, world map.** Each needs the dialogue-style UI aiming, so
    they get much cheaper once dialogue is solved.
+
+That prediction held for the first two. The Pip-Boy took a day once the
+UI-rectangle aiming existed, and almost none of that day went on the aiming — it
+went on proving that the panel's text is not anywhere to be read, and on the
+arithmetic of the clock.
+
+**The world map was the one the prediction got wrong, and it was wrong in the
+useful direction.** It was ranked with barter and the Pip-Boy as needing
+UI-rectangle aiming, and it barely needs aiming at all. Everything on it — where
+you are, where you are going, which places you know, what the ground is, which
+squares you have seen — is a plain structure in memory that the Python half can
+read directly, and half its controls turned out to be bound to the keyboard
+already. It is the only screen in a loaded game that needs no in-game script,
+and therefore the only one that can be changed without restarting the game.

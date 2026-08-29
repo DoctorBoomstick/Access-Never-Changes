@@ -266,6 +266,55 @@ class TestWalkingPastScenery(ScriptedProbes):
         self.assertEqual(a.blocked_by, "Rat Meat")
 
 
+class TestAnArmedSkillIsNotAWalk(ScriptedProbes):
+    """Arming a skill and clicking a hex was refused, whatever the hex held.
+
+    Reported as first aid on yourself answering "that hex is behind a wall",
+    and it was neither about walls nor about yourself. An armed skill sets the
+    cursor to one of modes 4 to 10, the acceptance test here was `mode == 0`,
+    and so every probe fell through to blocked_by until the search ran out.
+
+    The stepping-aside this refusal belongs to protects a WALK from landing on
+    a sprite. Somebody who armed Lockpick was not walking.
+    """
+
+    def test_a_skill_cursor_is_accepted_where_it_stands(self):
+        (name, _off), a, moved = self._prepare(
+            [(4, "Cave Wall", 20314, 20314, False)])   # 4 is First Aid
+        self.assertIsNone(name, "None means 'go ahead and click'")
+        self.assertIsNone(a.blocked_by)
+        self.assertEqual(moved, [], "an armed skill needs no room made for it")
+
+    def test_every_skill_cursor_is_accepted(self):
+        """All seven, because the enum has a gap where Sneak would be and a
+        range written out by hand is exactly the kind of thing that loses an
+        end."""
+        for mode in aim.SKILL_CURSORS:
+            with self.subTest(mode=mode):
+                (name, _off), a, _moved = self._prepare(
+                    [(mode, "Wall", 20314, 20314, False)])
+                self.assertIsNone(name)
+
+    def test_your_own_hex_is_clickable_with_a_skill_armed(self):
+        """Healing yourself, which is the case this was found on. Your own hex
+        names no object -- the engine's question about what is under the
+        pointer excludes your own character -- so the search runs on bare
+        ground with a skill cursor set."""
+        (name, _off), a, _moved = self._prepare(
+            [(5, "", 17488, 17488, False)])            # 5 is Doctor
+        self.assertIsNone(name)
+        self.assertIsNone(a.blocked_by)
+
+    def test_the_command_cursor_still_steps_aside(self):
+        """The guard that was doing real work is untouched: mode 1 is not a
+        skill anybody armed, it is the engine deciding a click would pick up
+        what is drawn over the hex."""
+        answers = [(1, "Rat Meat", 20314, 20314, False)] * len(aim.CLEAR_STEPS)
+        (name, _off), a, _moved = self._prepare(answers)
+        self.assertIs(name, False)
+        self.assertEqual(a.blocked_by, "Rat Meat")
+
+
 class TestTheDoorAndTheTrackUnderIt(ScriptedProbes):
     """The skill that was spent on a length of rail.
 

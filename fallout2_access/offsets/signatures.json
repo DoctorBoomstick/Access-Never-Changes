@@ -222,6 +222,94 @@
       "owners": [],
       "pattern": "00 00 00 B8 ?? ?? ?? ?? 89 DA E8 90"
     },
+    "GAME_GLOBALS": {
+      "address": 5342912,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "GAME_GLOBALS"
+        ]
+      ],
+      "pattern": "74 61 8B 15 ?? ?? ?? ?? 83 3C 9A 00"
+    },
+    "GAME_TIME": {
+      "address": 5359392,
+      "operand_offset": 6,
+      "owners": [
+        [
+          "..game.pipboy",
+          "GAME_TIME"
+        ]
+      ],
+      "pattern": "5E 5A 59 5B C3 A1 ?? ?? ?? ?? C3 8B C0 51 56 57"
+    },
+    "HOLODISK_COUNT": {
+      "address": 5357876,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "HOLODISK_COUNT"
+        ]
+      ],
+      "pattern": "31 D2 89 3D ?? ?? ?? ?? 8B 82 C8 44"
+    },
+    "HOLODISK_TABLE": {
+      "address": 5357872,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "HOLODISK_TABLE"
+        ]
+      ],
+      "pattern": "FE FF 8B 0D ?? ?? ?? ?? 85 C9 74 0F"
+    },
+    "LINES_ARCHIVES": {
+      "address": 6702368,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "LINES_ARCHIVES"
+        ]
+      ],
+      "pattern": "30 FF 89 3D ?? ?? ?? ?? 88 3D 2A 45"
+    },
+    "LINES_AUTOMAPS": {
+      "address": 6702348,
+      "operand_offset": 6,
+      "owners": [
+        [
+          "..game.pipboy",
+          "LINES_AUTOMAPS"
+        ]
+      ],
+      "pattern": "03 00 00 31 DB A3 ?? ?? ?? ?? 89 C2 B8 02 00 00"
+    },
+    "LINES_QUEST_LOCATIONS": {
+      "address": 6702104,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "LINES_QUEST_LOCATIONS"
+        ]
+      ],
+      "pattern": "00 00 83 3D ?? ?? ?? ?? 00 75 25 BB"
+    },
+    "LINES_STATUS_HOLODISKS": {
+      "address": 6702156,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "LINES_STATUS_HOLODISKS"
+        ]
+      ],
+      "pattern": "66 00 89 3D ?? ?? ?? ?? 30 FF 89 3D"
+    },
     "MENU_FLAG": {
       "address": 5346564,
       "operand_offset": 4,
@@ -277,6 +365,17 @@
       ],
       "pattern": "6A 00 89 35 ?? ?? ?? ?? 89 35 54 C7"
     },
+    "MOVIES_SEEN": {
+      "address": 5860472,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "MOVIES_SEEN"
+        ]
+      ],
+      "pattern": "00 31 D2 B8 ?? ?? ?? ?? E8 8A 1A 0A"
+    },
     "MSG_EDITOR": {
       "address": 5700776,
       "operand_offset": 4,
@@ -298,6 +397,43 @@
         ]
       ],
       "pattern": "01 00 00 B8 ?? ?? ?? ?? E8 58 8F 00"
+    },
+    "MSG_MAP": {
+      "address": 6495560,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "MSG_MAP"
+        ],
+        [
+          "..game.worldmap",
+          "MSG_MAP"
+        ]
+      ],
+      "pattern": "3F 48 00 B8 ?? ?? ?? ?? E8 54 29 00"
+    },
+    "MSG_PIPBOY": {
+      "address": 6701896,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "MSG_PIPBOY"
+        ]
+      ],
+      "pattern": "05 00 00 B8 ?? ?? ?? ?? E8 56 D6 FE"
+    },
+    "MSG_QUESTS": {
+      "address": 6702096,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "MSG_QUESTS"
+        ]
+      ],
+      "pattern": "00 31 DB B8 ?? ?? ?? ?? 89 1D 2C C1"
     },
     "MSG_SKILL": {
       "address": 6717568,
@@ -344,6 +480,17 @@
       ],
       "pattern": "01 00 00 B8 ?? ?? ?? ?? E8 48 0F FD"
     },
+    "MSG_WORLDMAP": {
+      "address": 6762416,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "MSG_WORLDMAP"
+        ]
+      ],
+      "pattern": "00 00 00 B8 ?? ?? ?? ?? E8 90 80 FC"
+    },
     "PREMADE_COUNTER": {
       "address": 5366496,
       "operand_offset": 8,
@@ -354,6 +501,39 @@
         ]
       ],
       "pattern": "3D 50 01 00 31 D2 89 15 ?? ?? ?? ?? 89 15 E4 E2 51 00 E8 26"
+    },
+    "QUEST_COUNT": {
+      "address": 5357868,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "QUEST_COUNT"
+        ]
+      ],
+      "pattern": "66 00 89 1D ?? ?? ?? ?? E8 59 D0 FE"
+    },
+    "QUEST_TABLE": {
+      "address": 5357864,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "QUEST_TABLE"
+        ]
+      ],
+      "pattern": "72 FC FF A1 ?? ?? ?? ?? 85 C0 74 0D"
+    },
+    "REST_OPTION_COUNT": {
+      "address": 5357880,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.pipboy",
+          "REST_OPTION_COUNT"
+        ]
+      ],
+      "pattern": "31 C0 89 15 ?? ?? ?? ?? E8 A0 DD FF"
     },
     "SLOT_HEADERS": {
       "address": 6372656,
@@ -467,6 +647,193 @@
         ]
       ],
       "pattern": "FC FE FF A3 ?? ?? ?? ?? 85 C0 75 34"
+    },
+    "WM_AREA_COUNT": {
+      "address": 5365244,
+      "operand_offset": 6,
+      "owners": [
+        [
+          "..game.worldmap",
+          "AREA_COUNT"
+        ]
+      ],
+      "pattern": "0C DE 51 00 89 15 ?? ?? ?? ?? 85 DB 74 0D 89 D8"
+    },
+    "WM_AREA_LIST": {
+      "address": 5365240,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "AREA_LIST"
+        ]
+      ],
+      "pattern": "31 FF 8B 2D ?? ?? ?? ?? 89 3D 38 30"
+    },
+    "WM_CURRENT_AREA": {
+      "address": 6761992,
+      "operand_offset": 6,
+      "owners": [
+        [
+          "..game.worldmap",
+          "CURRENT_AREA"
+        ]
+      ],
+      "pattern": "04 2E 67 00 89 0D ?? ?? ?? ?? 89 35 0C 2E 67 00"
+    },
+    "WM_DEST_X": {
+      "address": 6762076,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "DEST_X"
+        ]
+      ],
+      "pattern": "67 00 89 15 ?? ?? ?? ?? 89 15 60 2E"
+    },
+    "WM_DEST_Y": {
+      "address": 6762080,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "DEST_Y"
+        ]
+      ],
+      "pattern": "67 00 89 15 ?? ?? ?? ?? 89 15 64 2E"
+    },
+    "WM_ENCOUNTER_ODDS": {
+      "address": 6762424,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "ENCOUNTER_CHANCE"
+        ]
+      ],
+      "pattern": "02 00 00 BE ?? ?? ?? ?? BD 9C EE 50"
+    },
+    "WM_SCROLL_X": {
+      "address": 5365292,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "SCROLL_X"
+        ]
+      ],
+      "pattern": "31 D2 89 15 ?? ?? ?? ?? 89 15 30 DE"
+    },
+    "WM_SCROLL_Y": {
+      "address": 5365296,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "SCROLL_Y"
+        ]
+      ],
+      "pattern": "51 00 89 15 ?? ?? ?? ?? E8 A8 07 00"
+    },
+    "WM_TILES_ACROSS": {
+      "address": 5365236,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "TILES_ACROSS"
+        ]
+      ],
+      "pattern": "74 66 8B 1D ?? ?? ?? ?? 69 C3 5E 01"
+    },
+    "WM_TILE_COUNT": {
+      "address": 5365232,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "TILE_COUNT"
+        ]
+      ],
+      "pattern": "00 00 8B 15 ?? ?? ?? ?? A3 FC 2E 67"
+    },
+    "WM_TILE_LIST": {
+      "address": 5365228,
+      "operand_offset": 6,
+      "owners": [
+        [
+          "..game.worldmap",
+          "TILE_LIST"
+        ]
+      ],
+      "pattern": "E4 DD 51 00 8B 0D ?? ?? ?? ?? 85 C9 74 0F 89 C8"
+    },
+    "WM_TOWN_ROWS": {
+      "address": 5365396,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "TOWN_ROWS"
+        ]
+      ],
+      "pattern": "FA FF FF A1 ?? ?? ?? ?? 8B 34 B0 69"
+    },
+    "WM_TOWN_ROW_COUNT": {
+      "address": 5365400,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "TOWN_ROW_COUNT"
+        ]
+      ],
+      "pattern": "01 C6 3B 35 ?? ?? ?? ?? 0F 8D EA FA"
+    },
+    "WM_TOWN_SCROLL": {
+      "address": 6762256,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "TOWN_SCROLL"
+        ]
+      ],
+      "pattern": "67 00 89 15 ?? ?? ?? ?? 89 2D 18 2F"
+    },
+    "WM_TRAVELLING": {
+      "address": 6762012,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "TRAVELLING"
+        ]
+      ],
+      "pattern": "67 00 89 15 ?? ?? ?? ?? 89 CB 89 0D"
+    },
+    "WM_WORLD_X": {
+      "address": 6761996,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "WORLD_X"
+        ]
+      ],
+      "pattern": "DE 51 00 A1 ?? ?? ?? ?? E8 DF 6B 00"
+    },
+    "WM_WORLD_Y": {
+      "address": 6762000,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.worldmap",
+          "WORLD_Y"
+        ]
+      ],
+      "pattern": "00 00 8B 15 ?? ?? ?? ?? A3 34 DE 51"
     }
   }
 }

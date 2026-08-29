@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 
 import os
 
@@ -31,7 +31,7 @@ from .game.chargen import CharGen
 from .game.combat import CombatWatcher
 from .game.displaywin import DisplayWindow
 from .game import (actions, charsheet, dialogue, itemactions, itemmove,
-                   slotscreen, timerwin, uiwindow)
+                   pipboy, slotscreen, timerwin, uiwindow)
 from .game import inventory
 from .game.inventory import InventoryWatcher
 from .game.premade import PremadeScreen
@@ -39,6 +39,7 @@ from .game.saves import SaveWatcher
 from .game.slotscreen import Pager, SlotScreen
 from .game.scanner import Scanner
 from .game import worldlog
+from .game import worldcursor, worldmap, worldtravel
 from .game.worldlog import HexReading, WorldLog
 from .input.send import (
     FocusLost,
@@ -47,6 +48,7 @@ from .input.send import (
     guarded_tap,
     is_foreground,
 )
+from . import sound
 from .memory import resolve
 from .memory.process import FALLOUT_EXE_NAMES, Process, ProcessNotFound
 from .speech.backends import Speaker, get_speaker
@@ -61,6 +63,28 @@ RECONNECT_SECONDS = 2.0
 # steady for several consecutive polls before it is believed. At 20Hz this
 # costs 200ms, far below the time any real screen change takes.
 SCREEN_STABLE_TICKS = 4
+
+# Leaving the character editor and arriving at character selection are the same
+# three flags, and only time tells them apart.
+#
+# Pressing DONE closes the editor's window and clears the menu flag, which is
+# character selection exactly as the flags describe it -- and it stays that way
+# for the whole of the map load that follows. So finishing a character announced
+# the premade screen in full, stat block, trait list, "press T to take this
+# one", at a player who was on their way into the game, and the announcement was
+# still going when the map arrived and cut it off. It read as the mod being
+# confused about where it was, which is the one impression this project can
+# least afford, and it was worse than that: it delayed the only announcement
+# that mattered.
+#
+# Cancelling out of the editor reaches the same flags and IS the selection
+# screen, so the reading cannot simply be refused. What separates the two is
+# what happens next: DONE is followed within a second or two by a live game
+# session, and CANCEL is followed by nothing at all. So this one transition
+# waits and sees. Three seconds of quiet after backing out of the editor, and
+# then the screen is read; against announcing the wrong screen entirely, that is
+# a cheap trade -- and it costs nothing on the path players take far more often.
+SELECT_AFTER_EDITOR_TICKS = 60
 
 # The same idea, for a conversation. The engine writes the NPC's line and
 # rebuilds the list of replies on different frames, so a reading taken between
@@ -481,6 +505,12 @@ WORLD_QUIET = (
     "WORLD:snap",     # always followed by the hex reading that explains it
     "WORLD:btn",      # mouse-button telemetry; read from the log, not aloud
     "WORLD:dude",     # the player's tile changed -- "Moved n hexes" covers it
+    # Who you are. Absorbed by the log, which puts it into the hex readout in
+    # place of the word "you". Listed in its own right rather than left to the
+    # prefix above: it is only silent by accident of sharing four letters with
+    # a different line, and nobody wants their own name announced on every map.
+    "WORLD:dudename",
+    "WORLD:miscobj",  # every MISC object the exits scanner considered
     "WORLD:under",    # which hex the pointer is over; diagnostic
     "WORLD:prepare",  # the click setting its own cursor; internal
     "WORLD:skillused",  # the engine spent the armed skill
@@ -504,9 +534,14 @@ class WorldWatcher(Watcher):
     key = screens.WORLD
 
     def __init__(self, log: WorldLog, saves: Optional[SaveWatcher] = None,
-                 proc=None) -> None:
+                 proc=None, ticker=None) -> None:
         self.log = log
         self.saves = saves
+        # One short tick per hex walked. Defaulted rather than required so the
+        # tests, which drive this watcher with nothing but log lines, do not
+        # have to hand it anything -- and a disabled Ticker plays nothing and
+        # loads nothing, so constructing one costs a test nothing either.
+        self.ticker = ticker if ticker is not None else sound.Ticker(enabled=False)
         # Only for reading the engine's window structures. Optional so the
         # tests can drive this watcher with nothing but log lines.
         self.proc = proc
@@ -701,6 +736,22 @@ class WorldWatcher(Watcher):
                 # moves you somewhere entirely different, and the only other
                 # cue is the music changing.
                 self._queue.append(("New area.", False))
+            elif line.startswith("WORLD:dude "):
+                # One hex, and a tick rather than a sentence.
+                #
+                # This line has always been here and has always been silenced,
+                # correctly: twelve "moved 1 hex" across one room is why the
+                # arrival is announced at the end instead. What that left was
+                # several seconds of nothing in the middle of a walk -- and
+                # nothing is also what a mod that has stopped working sounds
+                # like, which is exactly how players read it.
+                #
+                # A sound is what speech could not be here. It does not
+                # interrupt, does not queue, and does not have to be listened
+                # to; its rhythm is the pace, the way footsteps are for a
+                # sighted player. The trailing space in the prefix matters --
+                # "WORLD:dudename" is a different line entirely.
+                self.ticker.step()
             elif line.startswith("WORLD:arrive"):
                 # You walked and stopped. This is the confirmation that a click
                 # did what it was meant to -- and its absence was why a working
@@ -779,7 +830,8 @@ class WorldWatcher(Watcher):
     def poll(self, ann: Announcer) -> None:
         while self._queue:
             item, urgent = self._queue.pop(0)
-            text = item.announce() if isinstance(item, HexReading) else str(item)
+            text = (item.announce(self.log.player_name)
+                    if isinstance(item, HexReading) else str(item))
             # force=True throughout: the Announcer suppresses a line identical
             # to the one before, which is right for a 20Hz memory poll and
             # wrong for anything that actually happened. Numpad 5 re-reads the
@@ -863,7 +915,7 @@ class WorldWatcher(Watcher):
         self.dlg_index = 0
 
     def dlg_step(self, ann: Announcer, delta: int) -> None:
-        """Walk the reply list. Numpad 8 and 2, as everywhere else in the mod.
+        """Walk the reply list. Up and down, as everywhere else in the mod.
 
         Clamped, not wrapped -- the same choice the action menu made, and for
         the same reason: a list that wraps is one you can walk off the end of
@@ -904,7 +956,7 @@ class WorldWatcher(Watcher):
                        else "Cannot read the replies.")
             return
         if self.log.last_hex:
-            ann.answer(self.log.last_hex.announce())
+            ann.answer(self.log.last_hex.announce(self.log.player_name))
         else:
             ann.answer("No hex read yet. Press numpad 5.")
 
@@ -1025,12 +1077,14 @@ class SlotScreenWatcher(Watcher):
         self.saves = saves
         self.pager = pager
         self._selection: Optional[int] = None
+        self._page: Optional[int] = None
         # Is the confirmation box up? Tracked so it is announced once on
         # arrival rather than twenty times a second.
         self._confirm = False
 
     def reset(self) -> None:
         self._selection = None
+        self._page = None
         self._confirm = False
 
     def _saved(self):
@@ -1168,6 +1222,29 @@ class SlotScreenWatcher(Watcher):
             # the highlight back, which the row poll below announces anyway.
             self._selection = None
 
+        # The page, before the row. Left and right are the game's own page
+        # controls and the mod had no idea they existed: it watched the
+        # highlight, which does not move when the page does, so paging with the
+        # arrows changed all ten rows under a player in complete silence. That
+        # was survivable only while numpad + and - were the paging keys the mod
+        # knew about, and they are gone -- the arrows do it better and without a
+        # pointer.
+        #
+        # Reading the page rather than counting the presses, as everywhere else
+        # on this screen: on a screen that overwrites saved games, a page number
+        # nobody checked is worse than none.
+        page = self.screen.page()
+        if page != self._page:
+            first = self._page is None
+            self._page = page
+            if not first:
+                # The row comes with it. Landing on a new page means a different
+                # slot under the highlight, and that is the thing about to be
+                # saved over or loaded.
+                ann.answer(self._page_line() + " " + self._current())
+                self._selection = self.screen.selection()
+                return
+
         index = self.screen.selection()
         if index is None or index == self._selection:
             return
@@ -1192,13 +1269,11 @@ class SlotScreenWatcher(Watcher):
             "{} {} on this page.".format(taken, "game" if taken == 1 else "games"),
             self._page_line(), where, self._current()) if x))
 
-    def page(self, ann: Announcer, delta: int) -> None:
-        landed = self.pager.step(self.screen, delta)
-        if landed is None:
-            ann.answer("Could not change page.")
-            return
-        self._selection = self.screen.selection()
-        ann.answer(self._page_line() + " " + self._current())
+    # There is no `page` here any more. Stepping the pages by driving their
+    # buttons with the pointer was the mod's answer before anybody tried the
+    # arrow keys, which do it outright. The Pager itself stays: `_seek_saves`
+    # still uses it to walk to the page your games are actually on, and that is
+    # a move nobody asked for and so has to be made rather than suggested.
 
 
 class TimerWatcher(Watcher):
@@ -1262,10 +1337,847 @@ class TimerWatcher(Watcher):
         ann.answer(self._time() + ".")
 
 
+def _say_count(n: int, thing: str) -> str:
+    return "{} {}{}".format(n, thing, "" if n == 1 else "s")
+
+
+def _say_span(minutes: int) -> str:
+    """How long a rest lasted, in the units a person would use.
+
+    "Rested 480 minutes" is a number to convert while you are trying to work out
+    whether to rest again, which is exactly what the countdown window taught.
+    """
+    hours, rest = divmod(minutes, 60)
+    parts = []
+    if hours:
+        parts.append("{} hour{}".format(hours, "" if hours == 1 else "s"))
+    if rest or not hours:
+        parts.append("{} minute{}".format(rest, "" if rest == 1 else "s"))
+    return " ".join(parts)
+
+
+class PipboyWatcher(Watcher):
+    """The Pip-Boy 2000.
+
+    Two lists, and only one of them is on screen at a time in any useful sense:
+    the five **destinations** down the left of the panel, and the **rows** of
+    whichever page you opened. Up and down walk whichever list you are in,
+    numpad plus chooses, numpad minus comes back out to the destinations. The
+    arrows are the keys to reach for; the panel is mouse-only in the engine, so
+    nothing is being taken away from anybody.
+
+    **The cursor belongs to the mod here, and that is a departure worth being
+    explicit about.** Everywhere else this project refuses to remember what is
+    selected, because the engine has a selection and remembering one alongside
+    it is how the speech drifts out of sync. The Pip-Boy has no selection to
+    read: it is a mouse screen, and what is "highlighted" is whatever the
+    pointer happens to be over. So there is nothing to desync *from*. What is
+    still read every time is the list itself -- the destinations and rows come
+    off the engine's buttons on every keypress, and the index is clamped to what
+    is really there rather than trusted.
+    """
+
+    key = screens.PIPBOY
+
+    # How long to let the panel rebuild after a page is opened, before reading
+    # its rows. A page swap is a click and a redraw, and reading in the same
+    # breath returns the previous page's rows -- which reads as the key not
+    # having worked.
+    SETTLE = 0.9
+
+    # `page` holds the destination whose page is open. This stands in for one
+    # that is open but was not opened from here -- `Z` arrives straight on the
+    # alarm clock, and a page nobody chose is still a page you are on. Nothing
+    # reads the value except the test for "am I on a page at all"; it is a
+    # marker, not an address.
+    OTHER_PAGE = -1
+
+    def __init__(self, pip) -> None:
+        self.pip = pip
+        self.index = 0
+        self._announced = False
+        # None while on the destination list; otherwise the destination whose
+        # page is open. This is the mod's note of where it took you, not a
+        # reading -- but `_rows()` never trusts it, and `pipboy.is_alarm_page`
+        # asks the engine instead when it matters.
+        self.page: Optional[int] = None
+
+    # -- reading -----------------------------------------------------------
+
+    def reset(self) -> None:
+        self.index = 0
+        self.page = None
+        self._announced = False
+
+    def _window(self):
+        return self.pip.window()
+
+    def _entries(self, win) -> list:
+        """(name, button, code) for whichever list the cursor is in.
+
+        The code travels with the entry rather than being looked up by
+        position afterwards. A destination the engine is not offering is not in
+        this list, so an index into it is not an index into `DESTINATIONS` --
+        which is the kind of quiet off-by-one that would open Archives when you
+        asked for Automaps.
+        """
+        if self.page is None:
+            return [(self.pip.name_of(code), b, code)
+                    for code, b in pipboy.destinations(win)]
+        rows = pipboy.rows(win)
+        names = self.pip.rest_names(rows)
+        if names is not None:
+            return [(n, b, b.release) for n, b in zip(names, rows)]
+        listed = self._listed(rows)
+        if listed is not None:
+            return listed
+        # A page whose words cannot be read is still a page that can be walked
+        # and clicked. Numbering them says the one thing that is certainly
+        # true, and it is a great deal more than the silence this screen used
+        # to answer with.
+        return [("Entry {}".format(i + 1), b, b.release)
+                for i, b in enumerate(rows)]
+
+    def _listed(self, rows) -> Optional[list]:
+        """The Status and Archives pages, named from the engine's own tables.
+
+        These two are not read off the panel -- nothing on it can be read --
+        they are rebuilt from the tables the engine parsed and the global
+        variables it gates them on, using the rule taken from the engine's own
+        drawing loop.
+
+        **And the rebuild is checked against the panel before it is trusted.**
+        The Status page draws one more row button than it has entries, which is
+        the engine's own spare; Archives draws exactly as many as it lists. If
+        the count the mod computes does not fit, the rule is wrong for this
+        state and the rows are numbered instead of named. That check is the
+        whole reason this is allowed to speak at all: a reconstruction that
+        cannot be compared with anything is just a guess with more steps.
+        """
+        if self.page == pipboy.STATUS:
+            entries = self.pip.status_entries()
+            if entries is None:
+                return None
+            places = sum(1 for kind, _n, _p in entries if kind == "place")
+            # Checked against the engine's own counters and **not against the
+            # row buttons**. The engine already creates one button past the end
+            # of this list, and sfall's `UseScrollingQuestsList` adds controls
+            # of its own on top of that -- so how many rows there are is a fact
+            # about the install, not about the list. Nothing is clicked on this
+            # page anyway; the entries are read out.
+            if self.pip.engine_drew(pipboy.LINES_QUEST_LOCATIONS) != places:
+                return None
+            if (self.pip.engine_drew(pipboy.LINES_STATUS_HOLODISKS)
+                    != len(entries) - places):
+                return None
+            return [(name, None, payload) for _kind, name, payload in entries]
+        if self.page == pipboy.ARCHIVES:
+            names = self.pip.archive_entries()
+            # This page **is** clicked -- choosing a film plays it -- so each
+            # name has to line up with the button that plays it, and the row
+            # count is part of the check rather than noise.
+            if names is None or len(names) != len(rows):
+                return None
+            if self.pip.engine_drew(pipboy.LINES_ARCHIVES) != len(names):
+                return None
+            return [(n, b, None) for n, b in zip(names, rows)]
+        return None
+
+    def _clamp(self, entries) -> int:
+        if not entries:
+            self.index = 0
+        else:
+            self.index = max(0, min(self.index, len(entries) - 1))
+        return self.index
+
+    def _current(self, win=None) -> str:
+        win = win or self._window()
+        if win is None:
+            return "The Pip-Boy is not open."
+        entries = self._entries(win)
+        if not entries:
+            return "Nothing on this page."
+        i = self._clamp(entries)
+        return "{}, {} of {}.".format(entries[i][0], i + 1, len(entries))
+
+    def _names(self, win) -> list:
+        return [entry[0] for entry in self._entries(win)]
+
+    def _time(self) -> str:
+        reading = self.pip.clock()
+        return reading.say() if reading else "The time cannot be read."
+
+    def _read_out(self, ann: Announcer, name: str, payload) -> None:
+        """Say what a Status entry holds: a place's tasks, or a disk's text."""
+        if isinstance(payload, pipboy.Holodisk):
+            paragraphs = self.pip.disk_text(payload)
+            if not paragraphs:
+                ann.answer("{}. Nothing on it that can be read.".format(name))
+                return
+            ann.answer("{}. {} of text.".format(
+                name, _say_count(len(paragraphs), "page")))
+            for n, text in enumerate(paragraphs):
+                # Queued rather than announced. A holodisk runs to several
+                # paragraphs and each one interrupting the last would leave
+                # only the final sentence alive -- the failure that made combat
+                # read as two numbers and nothing in between.
+                ann.say("Page {}. {}".format(n + 1, text),
+                        interrupt=False, force=True)
+            return
+
+        lines = self.pip.quest_lines(payload)
+        if not lines:
+            ann.answer("{}. Nothing to do there.".format(name))
+            return
+        ann.answer("{}. {}.".format(name, _say_count(len(lines), "task")))
+        for n, text in enumerate(lines):
+            ann.say("{}. {}".format(n + 1, text), interrupt=False, force=True)
+
+    def _rested(self, before) -> str:
+        """What resting actually did, measured off the clock.
+
+        **Reported from what moved, not from what was sent**, which is the rule
+        every click in this mod follows and which happens to solve a problem
+        that looked unsolvable here. The engine's refusal -- "You cannot rest at
+        this location!" -- is painted onto the panel like everything else on it,
+        so there is no way to read it. But a refused rest is a clock that did
+        not move, and the clock can be read exactly.
+
+        So the mod does not say what it asked for. It says what happened, and
+        the case where nothing happened is the one a player most needs told.
+        """
+        after = self.pip.clock()
+        if before is None or after is None:
+            return self._time()
+        minutes = self._minutes_between(before, after)
+        if minutes <= 0:
+            return ("The clock has not moved, so no time passed. Either you "
+                    "cannot rest here, or there was nothing to rest for. "
+                    "It is still {}".format(self._time()))
+        return "Rested {}. {}".format(_say_span(minutes), after.say())
+
+    @staticmethod
+    def _minutes_between(before, after) -> int:
+        days = (after.date - before.date).days
+        return ((days * 24 + after.hour - before.hour) * 60
+                + after.minute - before.minute)
+
+    def _page_line(self, win) -> str:
+        """What to say about the page that just opened."""
+        rows = pipboy.rows(win)
+        if not rows:
+            return "Nothing on this page."
+        if self.pip.rest_names(rows) is not None:
+            return "{} ways to rest.".format(len(rows))
+        listed = self._listed(rows)
+        if listed is not None:
+            if self.page == pipboy.STATUS:
+                places = sum(1 for e in listed if not isinstance(e[2],
+                                                                pipboy.Holodisk))
+                disks = len(listed) - places
+                parts = [_say_count(places, "place")]
+                if disks:
+                    parts.append(_say_count(disks, "holodisk"))
+                return "{}. Numpad plus reads one out.".format(
+                    " and ".join(parts))
+            return "{}.".format(_say_count(len(listed), "film"))
+        # Said once, on arrival, and never per row. The player needs to know
+        # that the blank names are the mod's limit rather than an empty page --
+        # otherwise a working list reads as a broken one.
+        return ("{} entries. The Pip-Boy paints this page as a picture, so "
+                "they can be counted and chosen but not read out."
+                .format(len(rows)))
+
+    # -- announcing --------------------------------------------------------
+
+    def enter(self, ann: Announcer) -> None:
+        self.page = None
+        self.index = 0
+        self._announced = False
+        self.poll(ann)
+
+    def poll(self, ann: Announcer) -> None:
+        """Announce the panel, once, as soon as it is really there.
+
+        The engine sets the PIPBOY mode a frame or two before the window
+        exists, so `enter` can arrive to nothing. That is the only thing this
+        poll is for -- the panel changes only when this class clicks it, and
+        the click already says what it did, so re-reading the buttons twenty
+        times a second would be watching for an event that cannot happen
+        without us causing it.
+        """
+        if self._announced:
+            return
+        win = self._window()
+        if win is None:
+            return
+        self._announced = True
+
+        # **You do not always arrive on the main list.** `Z` is the engine's
+        # own key for the alarm clock and it opens the panel already on that
+        # page -- measured, thirteen rows and no clicking involved. Landing
+        # there and being read the five destinations instead would be the mod
+        # describing a screen the player is not looking at, and would hide the
+        # one thing they pressed Z to get to.
+        if pipboy.rows(win):
+            self.page = (pipboy.ALARM_CLOCK
+                         if pipboy.is_alarm_page(pipboy.rows(win))
+                         else self.OTHER_PAGE)
+            ann.answer("Pip-Boy. {} {} {} Numpad minus goes to the Pip-Boy's "
+                       "main list.".format(self._time(), self._page_line(win),
+                                           self._current(win)))
+            return
+
+        names = self._names(win)
+        ann.answer("Pip-Boy. {} {} Up and down move, numpad plus chooses, "
+                   "numpad minus comes back here.".format(
+                       self._time(),
+                       ". ".join(names) + "." if names else ""))
+
+    def repeat(self, ann: Announcer) -> None:
+        ann.answer(self._current())
+
+    def describe(self, ann: Announcer) -> None:
+        """The whole list, which is what a sighted player takes in at once."""
+        win = self._window()
+        if win is None:
+            ann.answer("The Pip-Boy is not open.")
+            return
+        entries = self._entries(win)
+        if not entries:
+            ann.answer("Nothing on this page.")
+            return
+        i = self._clamp(entries)
+        ann.answer("{} of {}. {}".format(
+            i + 1, len(entries),
+            " ".join("{}, {}.".format(n + 1, entry[0])
+                     for n, entry in enumerate(entries))))
+
+    def summary(self, ann: Announcer) -> None:
+        ann.answer("Pip-Boy. {} {}".format(self._time(), self._current()))
+
+    # -- keys --------------------------------------------------------------
+
+    def step(self, ann: Announcer, delta: int) -> None:
+        win = self._window()
+        if win is None:
+            ann.answer("The Pip-Boy is not open.")
+            return
+        entries = self._entries(win)
+        if not entries:
+            ann.answer("Nothing on this page.")
+            return
+        before = self._clamp(entries)
+        self.index = max(0, min(before + delta, len(entries) - 1))
+        if self.index == before:
+            # Clamped rather than wrapped, and said so. A list that silently
+            # wraps is a list you can walk off the end of without noticing.
+            ann.answer("{} {}".format(
+                "Top." if delta < 0 else "Bottom.", self._current(win)))
+            return
+        ann.answer(self._current(win))
+
+    def back(self, ann: Announcer) -> None:
+        """Out of a page and back to the five destinations.
+
+        The mod's own cursor moving, not a click: the destination lights are
+        drawn on every page, so leaving a page's rows means nothing has to be
+        sent to the game at all.
+        """
+        if self.page is None:
+            ann.answer("Already at the Pip-Boy's main list. {}"
+                       .format(self._current()))
+            return
+        self.page = None
+        self.index = 0
+        ann.answer("Pip-Boy main list. {}".format(self._current()))
+
+    def choose(self, ann: Announcer) -> None:
+        win = self._window()
+        if win is None:
+            ann.answer("The Pip-Boy is not open.")
+            return
+        entries = self._entries(win)
+        if not entries:
+            ann.answer("Nothing to choose here.")
+            return
+        i = self._clamp(entries)
+        name, button, code = entries[i]
+        opening_page = self.page is None
+
+        # A Status entry is read out, not clicked. The mod already knows what
+        # the page would draw -- it computed the list -- so there is nothing to
+        # gain by aiming at a rectangle and a second of pointer-driving to lose.
+        # It is the same choice the world's action menu makes: act on the thing
+        # you picked, by identity, rather than by pointing at it.
+        if button is None:
+            self._read_out(ann, name, code)
+            return
+
+        resting = not opening_page and pipboy.is_alarm_page(pipboy.rows(win))
+        before = self.pip.clock() if resting else None
+
+        # Say it before doing it. Driving the pointer onto a rectangle takes
+        # the better part of a second, and silence after a keypress is this
+        # project's most persistent misreading -- it is what a mod that has
+        # stopped working sounds like.
+        ann.answer("{}.".format(name))
+        ok, why = self.pip.press(win, button)
+        if not ok:
+            ann.answer("Could not choose {}: {}.".format(name, why))
+            return
+
+        if opening_page and code == pipboy.CLOSE:
+            return          # the panel is going away; the screen change speaks
+        if not opening_page:
+            time.sleep(self.SETTLE)
+            if not pipboy.showing(self.pip.proc):
+                return
+            if resting:
+                ann.say(self._rested(before), interrupt=False, force=True)
+            else:
+                # Any other page has moved to something that cannot be read, so
+                # say where the cursor is rather than pretending to describe it.
+                ann.say(self._current(), interrupt=False, force=True)
+            return
+
+        # A destination was opened. Let it draw, then read what it offers.
+        self.page = code
+        self.index = 0
+        time.sleep(self.SETTLE)
+        again = self._window()
+        if again is None:
+            self.page = None
+            return
+        ann.say(self._page_line(again) + " " + self._current(again),
+                interrupt=False, force=True)
+
+
+class WorldMapWatcher(Watcher):
+    """Travelling between places.
+
+    The one screen the mod reads entirely for itself. Everywhere else in a
+    loaded game the in-game scripts are the source of truth, because only a
+    script can ask the engine what is on a hex; here every answer -- the
+    player's position, the places, the ground, the fog, the destination -- is a
+    plain structure in memory. So there is no log to tail and nothing to wait
+    for, and this watcher reads the game directly on every tick.
+
+    **What it watches for, rather than what it was told.** Three things move
+    without the mod touching them: the view scrolls when the arrow keys or Home
+    are pressed, the journey advances, and it ends -- sometimes because you
+    arrived and sometimes because something walked out of the desert at you.
+    All three are noticed by comparing this tick's reading against last tick's,
+    which is the same discipline the rest of the mod keeps and the reason the
+    speech cannot claim a journey that is not happening.
+    """
+
+    key = screens.WORLDMAP
+
+    # How far the view must scroll before it is worth mentioning. A press of an
+    # arrow key moves it tens of pixels; anything smaller is the engine nudging
+    # the view to keep the player's marker in sight while they travel, which is
+    # not a thing anybody did and not worth a sentence.
+    SCROLL_NOTICE = 8
+
+    # How often the journey may be reported, in seconds. Travel takes in-game
+    # days and real seconds, and a progress line on every one of twenty ticks a
+    # second is not information, it is a wall.
+    PROGRESS_SECONDS = 3.0
+
+    def __init__(self, proc, hwnd=None, log_path: Optional[str] = None,
+                 ticker=None) -> None:
+        self.proc = proc
+        self.hwnd = hwnd
+        self.log_path = log_path
+        self.ticker = ticker if ticker is not None else sound.Ticker(enabled=False)
+        self.cursor = worldcursor.WorldCursor()
+        self._scroll: Optional[Tuple[int, int]] = None
+        self._travelling = False
+        self._dest: Optional[Tuple[int, int]] = None
+        self._area: Optional[int] = None
+        self._town: Optional[int] = None
+        self._spoke_at = 0.0
+
+    def reset(self) -> None:
+        self.cursor.reset()
+        self._scroll = None
+        self._travelling = False
+        self._dest = None
+        self._area = None
+        self._town = None
+        self._spoke_at = 0.0
+
+    # -- arriving ------------------------------------------------------------
+
+    def enter(self, ann: Announcer) -> None:
+        if self.proc is None:
+            return
+        self.cursor.snap(self.proc)
+        self._scroll = worldmap.scroll(self.proc)
+        self._travelling = worldmap.travelling(self.proc)
+        self._dest = worldmap.destination(self.proc)
+        self._area = worldmap.current_area(self.proc)
+        ann.answer("World map. " + self._where())
+
+    def _where(self) -> str:
+        """Where the player is standing, in one sentence."""
+        if self.proc is None:
+            return ""
+        table = worldmap.areas(self.proc)
+        index = worldmap.current_area(self.proc)
+        if index is not None and 0 <= index < len(table):
+            return "At {}.".format(table[index].name)
+        here = worldmap.player_subtile(self.proc)
+        if here is None:
+            return ""
+        square = worldmap.subtile(self.proc, *here)
+        names = worldmap.terrain_names(self.proc)
+        ground = names.get(square.terrain) if square else None
+        return "In open country. {}.".format(ground) if ground else "In open country."
+
+    # -- the cursor ----------------------------------------------------------
+
+    def _step(self, ann: Announcer, dx: int, dy: int) -> None:
+        if self.proc is None:
+            return
+        moved, why = self.cursor.step_by(self.proc, dx, dy)
+        if not moved:
+            ann.answer(why)
+            return
+        self.ticker.step()
+        said = self.cursor.say_step(self.proc)
+        if said:
+            ann.answer(said)
+
+    def wm_nw(self, ann: Announcer) -> None: self._step(ann, -1, -1)
+    def wm_n(self, ann: Announcer) -> None: self._step(ann, 0, -1)
+    def wm_ne(self, ann: Announcer) -> None: self._step(ann, 1, -1)
+    def wm_w(self, ann: Announcer) -> None: self._step(ann, -1, 0)
+    def wm_e(self, ann: Announcer) -> None: self._step(ann, 1, 0)
+    def wm_sw(self, ann: Announcer) -> None: self._step(ann, -1, 1)
+    def wm_s(self, ann: Announcer) -> None: self._step(ann, 0, 1)
+    def wm_se(self, ann: Announcer) -> None: self._step(ann, 1, 1)
+
+    def wm_snap(self, ann: Announcer) -> None:
+        """Numpad 5: the cursor comes back to you."""
+        if self.proc is None or not self.cursor.snap(self.proc):
+            return
+        said = self.cursor.say_step(self.proc)
+        if said:
+            ann.answer(said)
+
+    # -- the scanner ---------------------------------------------------------
+
+    def wm_scan_next(self, ann: Announcer) -> None:
+        self._scan(ann, 1)
+
+    def wm_scan_prev(self, ann: Announcer) -> None:
+        self._scan(ann, -1)
+
+    def _scan(self, ann: Announcer, delta: int) -> None:
+        if self.proc is None:
+            return
+        said = self.cursor.scan(self.proc, delta)
+        if said:
+            ann.answer(said)
+
+    def wm_scan_jump(self, ann: Announcer) -> None:
+        """Slash: put the cursor on the place being read out."""
+        if self.proc is None:
+            return
+        complaint = self.cursor.scan_jump(self.proc)
+        if complaint:
+            ann.answer(complaint)
+            return
+        said = self.cursor.say_step(self.proc)
+        if said:
+            ann.answer(said)
+
+    # -- the three readout keys ----------------------------------------------
+
+    def repeat(self, ann: Announcer) -> None:
+        said = self.cursor.repeat()
+        ann.answer(said if said else "Nothing read yet. Press numpad 5.")
+
+    def describe(self, ann: Announcer) -> None:
+        if self.proc is None:
+            return
+        said = self.cursor.say_full(self.proc)
+        ann.answer(said if said else "Nothing to describe.")
+
+    def summary(self, ann: Announcer) -> None:
+        """Where you are, what the day is, and whether you are going anywhere.
+
+        The date and time are on this screen for a sighted player -- the panel
+        down the right prints both -- so they belong here rather than being
+        something only the Pip-Boy will say.
+        """
+        if self.proc is None:
+            return
+        parts = [self._where()]
+        clock = pipboy.clock(self.proc)
+        if clock is not None:
+            parts.append(clock.say())
+        if worldmap.travelling(self.proc):
+            parts.append(self._journey())
+        ann.answer(" ".join(p for p in parts if p))
+
+    def _journey(self) -> str:
+        """How far there is left to go, in the cursor's own units."""
+        if self.proc is None:
+            return ""
+        dest = worldmap.destination(self.proc)
+        here = worldmap.player(self.proc)
+        if dest is None or here is None:
+            return ""
+        dx = dest[0] // worldmap.SUBTILE - here[0] // worldmap.SUBTILE
+        dy = dest[1] // worldmap.SUBTILE - here[1] // worldmap.SUBTILE
+        name = self._area_name_at(dest)
+        left = worldcursor.steps_away(dx, dy)
+        unit = "square" if left == 1 else "squares"
+        if name:
+            return "Travelling to {}, {} {} away.".format(name, left, unit)
+        return "Travelling, {} {} away.".format(left, unit)
+
+    def _area_name_at(self, world: Tuple[int, int]) -> str:
+        for area in worldmap.areas(self.proc):
+            if area.on_map and (area.x, area.y) == world:
+                return area.name
+        return ""
+
+    # -- setting off ---------------------------------------------------------
+
+    def travel(self, ann: Announcer) -> None:
+        """Numpad plus: go to the square the cursor is on.
+
+        Three cases, and only the last of them involves the pointer.
+
+        The cursor on your own square means "go into this place", which is what
+        clicking your own marker does in the engine -- so that is what it does
+        here, through the engine's own T rather than through a click.
+
+        The cursor on a place you know goes through the list of places down the
+        right of the panel, whose buttons never move and whose destination comes
+        back as that place's exact coordinates.
+
+        Anywhere else is a click on the map, scrolled into view first.
+        """
+        if self.proc is None or self.hwnd is None:
+            ann.answer("Not attached to the game.")
+            return
+        if not self.cursor.ensure(self.proc):
+            ann.answer("Cannot read the world map.")
+            return
+        if worldmap.travelling(self.proc):
+            ann.answer("Already travelling.")
+            return
+
+        sx, sy = self.cursor.x, self.cursor.y
+        here = worldmap.player_subtile(self.proc)
+        if here == (sx, sy):
+            ok, why = worldtravel.enter_town_view(self.proc, self.hwnd)
+            if not ok:
+                ann.answer(why or "Nothing to go into here.")
+            return
+
+        area = worldmap.area_at(self.proc, sx, sy)
+        if area is not None:
+            ok, said = worldtravel.travel_to_area(
+                self.proc, self.hwnd, area, self.log_path)
+            if ok:
+                self._begin(ann, said)
+                return
+            if said:
+                ann.answer(said)
+                return
+            # Not in the engine's list. Fall through to the map click.
+
+        centre = (sx * worldmap.SUBTILE + worldmap.SUBTILE // 2,
+                  sy * worldmap.SUBTILE + worldmap.SUBTILE // 2)
+        ok, said = worldtravel.travel_to_point(
+            self.proc, self.hwnd, centre[0], centre[1], self.log_path)
+        if not ok:
+            ann.answer(said or "That did not work.")
+            return
+        if not said:
+            reading = self.cursor.read(self.proc)
+            said = "Travelling. {}".format(reading.step() if reading else "")
+        self._begin(ann, said)
+
+    def _begin(self, ann: Announcer, said: str) -> None:
+        """Note that a journey started, so `poll` does not announce it twice."""
+        self._travelling = True
+        self._dest = worldmap.destination(self.proc)
+        self._spoke_at = time.time()
+        ann.answer(said)
+
+    # -- watching ------------------------------------------------------------
+
+    def poll(self, ann: Announcer) -> None:
+        if self.proc is None:
+            return
+        self._watch_town_view(ann)
+        self._watch_scroll(ann)
+        self._watch_travel(ann)
+
+    def _watch_town_view(self, ann: Announcer) -> None:
+        """Read the town picture out when it opens.
+
+        There is no game mode for this -- the engine stays in WORLDMAP -- so it
+        is recognised by the buttons it creates, one per entrance, with codes
+        from 0x31. Those codes are below 256, which in GNW means they are
+        keyboard codes: entrance one answers to the "1" key, entrance two to
+        "2", and so on. So this panel needs no pointer at all, exactly like the
+        conversation screen, and all the mod has to do is say what is on it.
+        """
+        showing = self._town_entrances()
+        if showing is None:
+            if self._town is not None:
+                self._town = None
+                ann.say("Back to the world map.", interrupt=True, force=True)
+            return
+        area, ways = showing
+        if self._town == area.index:
+            return
+        self._town = area.index
+        listed = ", ".join(
+            "{} {}".format(e.key, e.name) for e in ways if e.key and e.name)
+        ann.say("{} map. {}. Escape to go back.".format(area.name, listed),
+                interrupt=True, force=True)
+
+    def _town_entrances(self):
+        """The town view's area and its offered ways in, or None if it is shut."""
+        win = worldtravel.panel(self.proc)
+        if win is None:
+            return None
+        index = worldmap.current_area(self.proc)
+        if index is None:
+            return None
+        table = worldmap.areas(self.proc)
+        if not 0 <= index < len(table):
+            return None
+        area = table[index]
+        ways = area.ways_in
+        if not ways:
+            return None
+        # The view is open only while the engine has built a button for the
+        # first entrance. Asked of the window rather than remembered, because
+        # the player can leave this panel with Escape and the mod never sees it.
+        if win.by_code(worldmap.ENTRANCE_KEY_BASE + ways[0].index) is None:
+            return None
+        return area, ways
+
+    def _watch_scroll(self, ann: Announcer) -> None:
+        """Say where the view went when the engine's own keys move it.
+
+        The arrow keys and Home scroll the map, and the mod does not bind any of
+        them -- they are the engine's and they work. What was missing is that
+        scrolling is a purely visual act, so a player who cannot see the map got
+        no answer at all. Noticing the offset moved covers every cause at once:
+        the arrow keys, Home, and the view being dragged along by a journey.
+        """
+        now = worldmap.scroll(self.proc)
+        if now is None:
+            return
+        was, self._scroll = self._scroll, now
+        if was is None or worldmap.travelling(self.proc):
+            return
+        dx, dy = now[0] - was[0], now[1] - was[1]
+        if max(abs(dx), abs(dy)) < self.SCROLL_NOTICE:
+            return
+        ann.say("View {}.".format(self._view_says(now, dx, dy)),
+                interrupt=True, force=True)
+
+    def _view_says(self, offset: Tuple[int, int], dx: int, dy: int) -> str:
+        """Which way the view moved, and what is in the middle of it now."""
+        way = worldcursor.bearing(dx, dy)
+        middle = ((offset[0] + worldmap.VIEW_W // 2) // worldmap.SUBTILE,
+                  (offset[1] + worldmap.VIEW_H // 2) // worldmap.SUBTILE)
+        area = worldmap.area_at(self.proc, middle[0], middle[1])
+        if area is not None:
+            return "{}, centred on {}".format(way, area.name)
+        here = worldmap.player_subtile(self.proc)
+        if here is not None:
+            gap = worldcursor.steps_away(middle[0] - here[0], middle[1] - here[1])
+            if gap == 0:
+                return "{}, centred on you".format(way) if way else "centred on you"
+            return "{}, {} squares from you".format(way, gap)
+        return way
+
+    def _watch_travel(self, ann: Announcer) -> None:
+        """Set off, keep going, and stop -- reported from the engine's state.
+
+        The end of a journey is the part worth getting right. It has two very
+        different causes: you arrived, or something interrupted you. The engine
+        does not distinguish them in one flag, but it does not need to -- if the
+        destination is reached the journey finished, and if the flag drops while
+        the player is nowhere near it, something stopped them. Saying which is
+        the difference between "you are at Klamath" and "you have stopped, and
+        you are not where you were going", and a player who cannot see the map
+        has no other way to find out.
+        """
+        travelling = worldmap.travelling(self.proc)
+        dest = worldmap.destination(self.proc)
+
+        if travelling and not self._travelling:
+            self._travelling = True
+            self._dest = dest
+            self._spoke_at = time.time()
+            return
+
+        if travelling:
+            self._dest = dest or self._dest
+            if time.time() - self._spoke_at >= self.PROGRESS_SECONDS:
+                self._spoke_at = time.time()
+                said = self._journey()
+                if said:
+                    ann.say(said, interrupt=False, force=True)
+            return
+
+        if self._travelling:
+            self._travelling = False
+            ann.say(self._stopped(), interrupt=True, force=True)
+            self._dest = None
+            self.cursor.snap(self.proc)
+
+        # Arriving at a place is worth saying even when nothing was travelling
+        # -- walking out of a location puts you on its marker.
+        area = worldmap.current_area(self.proc)
+        if area != self._area:
+            self._area = area
+            if area is not None:
+                table = worldmap.areas(self.proc)
+                if 0 <= area < len(table):
+                    ann.say("At {}. Press T for its map.".format(table[area].name),
+                            interrupt=False, force=True)
+
+    def _stopped(self) -> str:
+        here = worldmap.player(self.proc)
+        want = self._dest
+        if here is None:
+            return "Stopped."
+        name = self._area_name_at(here) or self._area_name_at(want or here)
+        if want is not None:
+            gap = max(abs(want[0] - here[0]), abs(want[1] - here[1]))
+            # The engine stops the marker when it is within three pixels of the
+            # destination -- its own test, at 0x004C0688 -- so anything inside
+            # that arrived, and anything outside it was interrupted.
+            if gap > 3:
+                left = worldcursor.steps_away(
+                    (want[0] - here[0]) // worldmap.SUBTILE,
+                    (want[1] - here[1]) // worldmap.SUBTILE)
+                return ("Stopped short, {} squares from where you were going."
+                        .format(left))
+        return "Arrived at {}.".format(name) if name else "Arrived."
+
+
 class App:
-    def __init__(self, speaker: Optional[Speaker] = None, require_focus: bool = True) -> None:
+    def __init__(self, speaker: Optional[Speaker] = None, require_focus: bool = True,
+                 step_sound: bool = True) -> None:
         self.ann = Announcer(speaker or get_speaker())
         self.require_focus = require_focus
+        self.ticker = sound.Ticker(enabled=step_sound)
         self.proc: Optional[Process] = None
         self.hwnd: Optional[int] = None
         self.watchers: Dict[str, Watcher] = {}
@@ -1333,7 +2245,8 @@ class App:
                   "in game, check DebugMode=2 in ddraw.ini".format(game_dir),
                   flush=True)
         self.saves = SaveWatcher(game_dir)
-        self.world = WorldWatcher(WorldLog(log_path), self.saves, self.proc)
+        self.world = WorldWatcher(WorldLog(log_path), self.saves, self.proc,
+                                  ticker=self.ticker)
         self.aimer = Aimer(self.hwnd, log_path) if self.hwnd else None
         # The world watcher needs these for the one question that
         # requires a pointer: what can be done to the selected object.
@@ -1351,10 +2264,16 @@ class App:
             screens.TIMER: TimerWatcher(
                 timerwin.Timer(self.proc, self.hwnd, self.finder)),
             screens.SLOTS: SlotScreenWatcher(self.slots, self.saves, pager),
+            screens.PIPBOY: PipboyWatcher(
+                pipboy.Pipboy(self.proc, self.hwnd)),
             screens.MAIN_MENU: MainMenuWatcher(),
             screens.SELECT: SelectWatcher(PremadeScreen(self.proc)),
             screens.CHARGEN: CharGenWatcher(CharGen(self.proc), self.world.log),
             screens.WORLD: self.world,
+            # The world map reads the game for itself, so unlike every other
+            # in-game watcher it is handed the process rather than the log.
+            screens.WORLDMAP: WorldMapWatcher(self.proc, self.hwnd, log_path,
+                                              ticker=self.ticker),
         }
         self.screen = screens.UNKNOWN
         self.ann.reset()
@@ -1445,9 +2364,20 @@ class App:
                     # only knew "empty" and "you", was not told about it.
                     self.ann.answer("That hex is blocked.")
                     return
-                expects_object = bool(
-                    last and last.contents and last.contents not in ("empty", "you")
-                )
+                # Is there anything on this hex a click could be aimed at?
+                #
+                # Asked of `names()` rather than of the raw string. The old test
+                # compared the whole readout against "empty" and "you", which
+                # worked only while those were the entire line -- and the moment
+                # your own hex started reporting which way you are facing, "you,
+                # facing north east" was neither of them, so the click set off
+                # hunting for an object called "you" that the engine will never
+                # confirm a pointer is over.
+                #
+                # `names()` already knows every word the mod appends and every
+                # word it says instead of a name, because the same question is
+                # asked of it three lines further down. One list, in one place.
+                expects_object = bool(last and last.names())
                 # Set the cursor for what this click is about to do, AFTER
                 # aiming, because every read during the aim disturbs it. If the
                 # hex holds something, walk the pointer up its sprite until the
@@ -1641,6 +2571,15 @@ class App:
         """
         self._pending.append((what, time.time()))
 
+    def _travel(self) -> None:
+        """Numpad plus on the world map. Kept here so the screen test that
+        routes it and the guard that it can run at all sit together."""
+        watcher = self.current_watcher()
+        if watcher is None:
+            self.ann.answer("No screen recognised.")
+            return
+        watcher.travel(self.ann)
+
     def _run_item_action(self) -> None:
         """Carry out an item-menu choice, off the log-parsing path.
 
@@ -1749,12 +2688,53 @@ class App:
                 continue
             self._do_action(what)
 
+    # The numpad's three middle keys, and what they mean where the arrows do
+    # not already mean it. Everywhere but the world map these are the same
+    # three actions the arrow keys raise, which is how they behaved when the
+    # hotkey table bound them straight to these names.
+    _NUMPAD_AS_ARROWS = {"num8": "dlg_prev", "num2": "dlg_next",
+                         "num5": "dlg_say"}
+    # On the world map they are the cursor's north, south, and come-back-to-me.
+    # They cannot be the arrows there: the arrow keys are the engine's own and
+    # they scroll the view.
+    _NUMPAD_ON_WORLDMAP = {"num8": "wm_n", "num2": "wm_s", "num5": "wm_snap"}
+
     def _do_action(self, what: str) -> None:
+        if what in self._NUMPAD_AS_ARROWS:
+            what = (self._NUMPAD_ON_WORLDMAP if self.screen == screens.WORLDMAP
+                    else self._NUMPAD_AS_ARROWS)[what]
+        if self.screen == screens.WORLDMAP and what in ("click", "rclick"):
+            # Numpad plus sets off for the square the cursor is on. Numpad minus
+            # is left alone: there is nothing on this screen a right click does
+            # that the player would want, and falling through to `click()` would
+            # send a real one at wherever the pointer was last left.
+            if what == "click":
+                self._travel()
+            return
         # The reply-list keys are the hex cursor's keys wearing another hat.
         # In a conversation gl_dialog.ssl swallows them so the engine never
         # sees them as reply numbers; everywhere else they belong to the map,
         # and this must not answer for them there.
         if what.startswith("dlg_"):
+            # Up and down are the Pip-Boy's keys too. They arrive under the
+            # dialogue names because that is where they were first bound, and
+            # renaming them would only move the confusion: what they are is the
+            # two keys everyone already reaches for to walk a list.
+            #
+            # The engine does nothing with them on this panel -- it is mouse
+            # only -- so nothing is being taken from anybody, and unlike the
+            # conversation screen no script has to swallow them first.
+            if self.screen == screens.PIPBOY:
+                watcher = self.current_watcher()
+                if watcher is None:
+                    return
+                if what == "dlg_prev":
+                    watcher.step(self.ann, -1)
+                elif what == "dlg_next":
+                    watcher.step(self.ann, 1)
+                else:
+                    watcher.repeat(self.ann)
+                return
             if not (self.world is not None and self.world.talking()):
                 return
             if what == "dlg_prev":
@@ -1771,13 +2751,38 @@ class App:
             if watcher:
                 watcher.adjust(self.ann, 1 if what == "click" else -1)
             return
-        if what in ("click", "rclick") and self.screen == screens.SLOTS:
-            # There is nothing to click at on this screen -- the arrow keys
-            # already move the highlight -- so the two mouse-button keys are
-            # given to the one thing that does need pointing at: the pages.
+        if what in ("click", "rclick") and self.screen == screens.PIPBOY:
+            # Numpad plus chooses what you are on, numpad minus comes back out
+            # of a page. Neither is a mouse button here in the sense they are on
+            # the map: there is no hex under the pointer and nothing to aim at
+            # that the player picked by looking. Falling through to `click()`
+            # would send a real click at wherever the pointer was last left,
+            # which on this panel is a page you did not ask for.
             watcher = self.current_watcher()
-            if watcher:
-                watcher.page(self.ann, 1 if what == "click" else -1)
+            if watcher is None:
+                return
+            if what == "click":
+                watcher.choose(self.ann)
+            else:
+                watcher.back(self.ann)
+            return
+        if what in ("click", "rclick") and self.screen == screens.SLOTS:
+            # **Nothing at all.** This screen is the game's own keyboard from
+            # end to end -- up and down move the highlight, left and right turn
+            # the page, Enter commits, Escape backs out -- and the mod has no
+            # business adding a key to it.
+            #
+            # What was here has been wrong twice. First it drove the page arrows
+            # with the pointer, on the belief that sfall offered the pages to
+            # the mouse alone; the arrow keys had been turning them all along.
+            # Then it spoke a reminder of what to press instead, which is still
+            # a binding, still something to press by accident, and still a
+            # sentence nobody asked for.
+            #
+            # The `return` is the whole point and must stay: without it these
+            # fall through to the click below, which sends a real click at
+            # wherever the pointer was last left -- on the screen that
+            # overwrites saved games.
             return
         if what in ("click", "rclick"):
             self.click("left" if what == "click" else "right")
@@ -1828,6 +2833,19 @@ class App:
         for line in self.display.poll():
             self.ann.say(line, force=True)
 
+    def _ticks_to_believe(self, detected: str) -> int:
+        """How long a reading must hold before the mod acts on it.
+
+        One transition needs more than the usual four polls, and it is the one
+        where the flags are not lying: leaving the character editor really does
+        read as character selection, because the two screens set the same three
+        flags and DONE and CANCEL both close the same window. Only what happens
+        afterwards separates them, so this one waits for it.
+        """
+        if self.screen == screens.CHARGEN and detected == screens.SELECT:
+            return SELECT_AFTER_EDITOR_TICKS
+        return SCREEN_STABLE_TICKS
+
     def tick(self) -> None:
         if not self.proc:
             return
@@ -1856,7 +2874,7 @@ class App:
             else:
                 self._pending_screen = detected
                 self._pending_ticks = 1
-            if self._pending_ticks >= SCREEN_STABLE_TICKS:
+            if self._pending_ticks >= self._ticks_to_believe(detected):
                 # It held. Commit it and do nothing else this tick: the watcher
                 # is being swapped out from under everything below.
                 self.screen = detected

@@ -119,9 +119,48 @@ class TestWorldLog(unittest.TestCase):
         out = self.f.write("Gsound: playing ambient map sfx: animal1")
         self.assertEqual(out, [])
 
+    def _walked(self, *lines):
+        """Feed lines to a watcher holding a ticker that counts instead of
+        playing, and report how many ticks it produced."""
+        from fallout2_access.app import WorldWatcher
 
-if __name__ == "__main__":
-    unittest.main()
+        class Counter:
+            def __init__(self):
+                self.ticks = 0
+
+            def step(self):
+                self.ticks += 1
+
+        counter = Counter()
+        w = WorldWatcher(self.f.log, ticker=counter)
+        with open(self.f.path, "a", encoding="utf-8") as fh:
+            for line in lines:
+                fh.write(line + "\n")
+        w.pump()
+        return counter.ticks, w
+
+    def test_each_hex_walked_makes_a_sound(self):
+        """The line was always here and always silenced -- correctly, since
+        twelve "moved 1 hex" across a room is why the arrival is announced at
+        the end instead. What that left was several seconds of nothing in the
+        middle of a walk, which is what a stopped mod also sounds like."""
+        ticks, w = self._walked("WORLD:dude 17488|", "WORLD:dude 17489|",
+                                "WORLD:dude 17490|")
+        self.assertEqual(ticks, 3)
+
+    def test_walking_still_says_nothing(self):
+        """A tick is not an announcement. It does not interrupt and does not
+        queue, which is the whole reason it can happen twelve times."""
+        _ticks, w = self._walked("WORLD:dude 17488|")
+        self.assertEqual(w._queue, [])
+
+    def test_your_name_is_not_a_footstep(self):
+        """"WORLD:dudename" shares four letters with the line above it, and a
+        prefix test without the space would tick once per map change and say
+        nothing about why."""
+        ticks, _w = self._walked("WORLD:dudename Tara|")
+        self.assertEqual(ticks, 0)
+
 
 
 class TestStatusLine(unittest.TestCase):
@@ -152,6 +191,47 @@ class TestStatusLine(unittest.TestCase):
     def test_an_unparsable_line_is_not_spoken(self):
         self.assertIsNone(worldlog.status_line("WORLD:status garbage"))
         self.assertIsNone(worldlog.status_line("WORLD:hex 17488 dist 0 : you|"))
+
+
+class TestLevelOnTheStatusLine(unittest.TestCase):
+    """Level and experience, which had no key at all.
+
+    Both are on the character sheet and always have been. The sheet is a screen
+    you open, read and close, which is a long way to go for a one-word answer,
+    so they ride along on the key that already reports how you are doing.
+    """
+
+    def test_the_level_is_read_out(self):
+        said = worldlog.status_line("WORLD:status 48|48|8|10|8|0|2|1450|")
+        self.assertIn("Level 2", said)
+
+    def test_what_is_left_to_go_rather_than_the_total(self):
+        """Level 2 wants 3,000 in total. Somebody with 1,450 wants 1,550 more,
+        and that subtraction is not one to make in your head while a screen
+        reader moves on to the next sentence."""
+        said = worldlog.status_line("WORLD:status 48|48|8|10|8|0|2|1450|")
+        self.assertIn("1550 experience to the next level", said)
+        self.assertNotIn("3000", said)
+
+    def test_it_comes_after_the_three_that_matter_in_a_fight(self):
+        said = worldlog.status_line("WORLD:status 48|48|8|10|8|1|2|1450|")
+        self.assertLess(said.index("Armor"), said.index("Level"))
+
+    def test_the_old_six_field_line_still_works(self):
+        """A game still running the previously compiled script must keep its
+        status key. A regex demanding eight fields would not lose the level, it
+        would match nothing and say nothing at all."""
+        said = worldlog.status_line("WORLD:status 48|48|8|10|8|0|")
+        self.assertIn("Health 48 of 48", said)
+        self.assertNotIn("Level", said)
+
+    def test_a_threshold_already_passed_is_dropped_rather_than_negative(self):
+        """The threshold is arithmetic, not a reading, so a retabled
+        progression or the level cap can put it behind you. The level is still
+        a fact; a negative number of points to go is not."""
+        said = worldlog.status_line("WORLD:status 48|48|8|10|8|0|21|9999999|")
+        self.assertIn("Level 21", said)
+        self.assertNotIn("experience", said)
 
 
 class TestUseItemLine(unittest.TestCase):
@@ -421,3 +501,84 @@ class TestPickLine(unittest.TestCase):
 
     def test_a_line_that_is_not_ours(self):
         self.assertIsNone(self.say("WORLD:hex 1 dist 0 : you|"))
+
+
+class TestWhoYouAreAndWhichWayYouFace(unittest.TestCase):
+    """Your own hex used to read "you" and nothing else.
+
+    Two things were missing from it. Every other critter on the map is reported
+    with the direction it is looking, because sneaking and stealing turn on
+    where a back is -- and yours was the one facing a sighted player reads off
+    the screen at a glance and a blind player could not obtain at all. And the
+    word for you was "you", which is nobody's name.
+
+    The name is NOT sent in the readout. "you" is one of the words that tells
+    the parser this hex holds nothing to point at, so a line reading "Tara"
+    would put the click machinery to work aiming at a character the engine
+    deliberately will not confirm a pointer is over. It is sent separately and
+    put in at the moment the line is spoken.
+    """
+
+    def setUp(self):
+        self.f = LogFixture()
+
+    def test_the_name_arrives_on_its_own_line(self):
+        self.f.write("WORLD:dudename Tara|")
+        self.assertEqual(self.f.log.player_name, "Tara")
+
+    def test_the_name_is_not_announced_when_it_arrives(self):
+        """It is a fact to keep, not an event. Nobody wants their own name read
+        out every time they walk through a door.
+
+        Checked against the list that actually silences it rather than against
+        the poll's output, which is where the first version of this test went
+        wrong -- it polled a second time, got the empty list a consumed log
+        always gives, and passed without testing anything.
+        """
+        from fallout2_access.app import WORLD_QUIET
+
+        self.assertTrue("WORLD:dudename Tara|".startswith(WORLD_QUIET))
+
+    def test_your_hex_says_your_name_and_your_facing(self):
+        self.f.write("WORLD:dudename Tara|")
+        self.f.write("WORLD:hex 17488 dist 0 : you, facing north east|")
+        self.assertEqual(
+            self.f.log.last_hex.announce(self.f.log.player_name),
+            "Tara, facing north east")
+
+    def test_without_a_name_it_still_says_you(self):
+        """True, and better than a name nobody has checked."""
+        self.f.write("WORLD:hex 17488 dist 0 : you, facing west|")
+        self.assertEqual(self.f.log.last_hex.announce(), "you, facing west")
+
+    def test_you_are_still_not_an_object_to_aim_at(self):
+        self.f.write("WORLD:hex 17488 dist 0 : you, facing north east|")
+        self.assertEqual(self.f.log.last_hex.names(), [])
+
+    def test_something_else_on_your_hex_is_still_found(self):
+        self.f.write("WORLD:dudename Tara|")
+        self.f.write("WORLD:hex 17488 dist 0 : you, facing west, Rocks|")
+        self.assertEqual(self.f.log.last_hex.names(), ["Rocks"])
+        self.assertIn("Rocks",
+                      self.f.log.last_hex.announce(self.f.log.player_name))
+
+    def test_a_young_radscorpion_keeps_its_you(self):
+        """The substitution is field by field and only on a whole field. A
+        blanket replace would find the "you" inside this one, on a hex where
+        being told the wrong thing has consequences."""
+        self.f.write("WORLD:dudename Tara|")
+        self.f.write("WORLD:hex 17490 dist 3 : Young Radscorpion, facing west|")
+        self.assertIn("Young Radscorpion",
+                      self.f.log.last_hex.announce(self.f.log.player_name))
+        self.assertNotIn("Tara",
+                         self.f.log.last_hex.announce(self.f.log.player_name))
+
+    def test_a_relaunch_forgets_the_name(self):
+        self.f.write("WORLD:dudename Tara|")
+        self.f.truncate()
+        self.f.log.poll()
+        self.assertIsNone(self.f.log.player_name)
+
+
+if __name__ == "__main__":
+    unittest.main()

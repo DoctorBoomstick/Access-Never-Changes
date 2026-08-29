@@ -182,11 +182,44 @@ asked for.** If it can't get there — the hex is off the edge of the view, say 
 it says so and does nothing. A click that lands on the wrong hex walks you
 somewhere you didn't choose, and you would have no way to see it happen.
 
-When you stop, it tells you how far you went: `Moved 3 hexes.`
+**You hear a short tick for each hex you cross**, and the arrival is announced
+when you stop: `Moved 3 hexes.`
+
+The tick is not an announcement. It does not interrupt, does not queue and does
+not have to be listened to — its rhythm is your pace, which is what footsteps
+are for a sighted player. It exists because the alternative was several seconds
+of silence in the middle of a walk, and silence is also what a mod that has
+stopped working sounds like: a walk across a room was being read as the mod not
+responding, or the game running slowly, when a character was moving at exactly
+the speed Fallout moves.
+
+Speech could not fill that gap. Twelve "moved 1 hex" in a row is why the
+arrival is announced at the end instead, and that decision was right.
+
+`python f2access.py --no-step-sound` turns it off. The tone is generated rather
+than shipped, so there is no file to replace — and no file written anywhere
+either.
 
 Readings sound like `Tree, 12 hexes` or `Radscorpion, 3 hexes`. A hex with
 nothing named on it is either **empty** — you can walk there — or **blocked**,
 meaning you cannot.
+
+Your own hex names you and says which way you are looking:
+
+    Tara, facing north east
+
+Both halves of that were missing. Everybody else on the map has been reported
+with their facing for a while, because sneaking and stealing turn on where a
+back is — and yours is the one a sighted player takes in without looking for
+it, from which way the figure points. The `<` and `>` keys turn you on the spot
+and said nothing at all when they did. And the word for you was "you", which is
+nobody's name; it comes from `obj_name` now, the same question the readout asks
+about every other critter, so it arrives however your game spells it.
+
+Inside the mod your hex still says *you*, and has to: it is one of the words
+that means "nothing here to point at", and your own character is the one thing
+the engine will not confirm a pointer is over. The name goes in at the moment
+the line is spoken.
 
 That distinction matters more than it looks. Fallout's floors and much of its
 walls are drawn as tile art rather than as objects, so asking what objects are
@@ -244,6 +277,17 @@ cursor.
 So a locked door is: find it with the scanner, `/` to put the cursor on it,
 press `2`, then numpad `+`.
 
+**And yourself is a target like any other.** Numpad 5 brings the look cursor
+back to you, so first aid on your own wounds is `5` to arm it, numpad 5 to come
+home, numpad `+`. That used to answer *"that hex is behind a wall"* and the
+wording sent everyone hunting for a wall. There was none. An armed skill puts
+the cursor into a mode the click check did not recognise, so it refused every
+hex that had nothing standing on it, and your own hex is always one of those —
+the engine's question about what is under the pointer deliberately does not
+answer "you". The refusal it was reaching for protects a *walk* from landing on
+something drawn over the ground, and somebody who has just armed Doctor is not
+walking.
+
 **The mod sets the cursor mode for you, from what you told it.** Leaving that to
 you and preserving your choice was tried and cannot be made to work: reading the
 world changes the cursor as a side effect, aiming reads the world several times,
@@ -289,7 +333,7 @@ cannot land on the wrong target.
 | Key | Action |
 |---|---|
 | `1` – `9` | **say that reply** — the game's own keys |
-| Numpad 8 / 2 | previous / next reply |
+| Up / Down | previous / next reply |
 | Numpad 5 | re-read the reply you are on |
 | Numpad + | say the reply you are on |
 | Numpad / | the whole list of replies again |
@@ -310,6 +354,29 @@ make by mistake. The rule to remember:
 
 **In a conversation, the number row chooses a reply. The numpad never does.**
 
+### Why walking the list never worked
+
+Up and down step the replies. Numpad 8 and 2 were meant to, and did not — for
+anybody, from the day they were written, and the reason is worth writing down
+because it is invisible from the outside.
+
+These are the mod's only hotkeys read as **Windows virtual keys**. Every other
+numpad binding is a DirectInput scancode read inside the game, and a scancode is
+a fact about which key you pressed. A virtual key is a fact about what the key
+*means*, and Num Lock changes it: with the lock off, numpad 8 arrives as Up.
+
+That alone would have been survivable. What made it total is that pynput, which
+delivers the keys, hands over two different shapes — an ordinary key as a
+`KeyCode`, which carries its virtual key, and anything it recognises as special
+as a `Key` enum member, which keeps its virtual key one level further down. The
+listener asked for `key.vk`, got nothing, and dropped the press.
+
+So the keys worked with Num Lock on, for whoever wrote them, and vanished for
+everyone else — and binding the arrows as a fix changed nothing at all, because
+an arrow is exactly the shape that was being dropped. One line asks for both
+shapes now, and the test that covers it drives real pynput objects rather than
+stand-ins, since a fake with a `vk` on it would have passed the whole time.
+
 Long replies are never cut off or scrolled: the mod reads the whole line out of
 memory, so the scroll arrows a sighted player needs do not exist for you.
 
@@ -329,12 +396,24 @@ those anywhere.
 
 ## How you are doing
 
-**Press `;` at any time** for the three numbers the interface bar shows a
-sighted player permanently:
+**Press `;` at any time** for the numbers the interface bar shows a sighted
+player permanently, and the two beside them on the level box:
 
     Health 48 of 48. 8 of 10 action points. Armor class 8.
+    Level 2. 1550 experience to the next level.
 
-Health first, then action points, then armour class. It works everywhere � on
+Health first, then action points, then armour class, then the level.
+
+Level and experience were readable all along and had nowhere to be heard: they
+are on the character sheet, which is a screen you open, read and close, and
+"what level am I" is a one-word answer. What you get is **how much further**
+rather than the total the next level costs — the sheet prints the total because
+a sighted player reads it against the figure on the line above, and two large
+similar numbers read out one after the other leave the listener doing the
+subtraction that was the question in the first place.
+
+The threshold is arithmetic rather than something read out of the game, so it
+is dropped rather than reported as a negative once you are past it. It works everywhere � on
 the map, in a fight, with the inventory open � because those are exactly the
 moments you want it, and a key that only worked on the map would be missing all
 of them.
@@ -405,14 +484,19 @@ is what the screen is showing and what you are about to act on.
 | Key | Action |
 |---|---|
 | Up / Down | move the highlight (the game's own keys) |
+| Left / Right | change page (the game's own keys) |
 | Numpad / | repeat the highlighted row |
 | Numpad * | the screen, the page, and how many games are on it |
-| Numpad + | next page |
-| Numpad - | previous page |
 
-Numpad + and - are the mouse-button keys everywhere else. On this screen there
-is nothing worth clicking at, so they are given to the one control that does
-need pointing at: the page arrows, which sfall only offers to the mouse.
+**Navigation here is entirely the game's own keyboard**, and the mod adds
+nothing to it. Numpad + and - used to page the screen by aiming the pointer at
+the page arrows and clicking them, on the belief that sfall offered the pages to
+the mouse alone. It does not — left and right had been turning them all along.
+Both keys are now dead on this screen, deliberately and silently.
+
+Turning the page speaks the new page and the row you land on, because all ten
+rows have just changed underneath you and the one under the highlight is the
+one about to be saved over.
 
 ### Confirming a save
 
@@ -463,6 +547,263 @@ games, a slot number nobody checked is worse than no slot number at all.
 
 Descriptions are read from the row the engine is drawing, not looked up on disk
 by slot number — so what you hear is what that row *is*.
+
+## The Pip-Boy, and resting
+
+Press **`P`** — the game's own key — and the Pip-Boy opens. It announces the
+time and the five places you can go:
+
+    Pip-Boy. 5:27 in the afternoon. Day 26 of month 7, 2241.
+    Alarm clock. Status. Automaps. Video archives. Done, closes the Pip-Boy.
+    Up and down move, numpad plus chooses, numpad minus comes back here.
+
+| Key | Action |
+|---|---|
+| `P` | open it — the game's own key |
+| `Z` | open it **on the alarm clock** — the game's own key |
+| Up / Down | move through the list |
+| Numpad + | choose what you are on |
+| Numpad - | back out of a page to the main list |
+| Numpad / | say the entry again |
+| Numpad ✳ | the time, and where you are |
+| Numpad . | the whole list |
+| Escape | close the Pip-Boy — the game's own key |
+
+**`Z` goes straight to resting**, which is the shortest route there is: the
+panel opens with the thirteen rest options already drawn and no clicking
+involved at all. The mod notices it arrived on a page rather than on the main
+list and reads the page — being read the five destinations there would describe
+a screen you are not looking at, and hide the one thing you pressed Z for.
+
+The list is walked with the arrows because there is nothing to take them from:
+the Pip-Boy is mouse-only in the engine, so unlike the conversation screen no
+script has to swallow a key first.
+
+### Resting
+
+**This is the point of the screen.** Resting is how you heal without a doctor,
+and it was unreachable — a menu of fourteen rows that could only be clicked.
+
+Choose **Alarm clock** and it reads out what the engine is offering:
+
+    Alarm clock.
+    13 ways to rest. Rest for ten minutes, 1 of 13.
+
+The names are the game's own, out of `pipboy.msg`, so a translated game reads
+out translated. There are fourteen options — ten minutes through six hours, the
+four "rest until" times, until healed, and until the party is healed — and the
+last one is dropped when you are travelling alone, which is the only thing that
+varies. That was checked at half past five in the afternoon, when two of the
+four "rest until" times had already passed that day and all four were still
+listed, which rules out the obvious wrong rule: that the list is trimmed by the
+clock. If the row count is ever something the rule cannot account for, the rows
+are numbered instead of named, because a wrong name here rests you six hours
+when you asked for ten minutes.
+
+**What you hear afterwards is what happened, not what was asked for:**
+
+    Rest for ten minutes.
+    Rested 10 minutes. 5:37 in the afternoon. Day 26 of month 7, 2241.
+
+That is the rule the rest of the mod follows, and here it solves a problem that
+looked unsolvable. The game's refusal — *"You cannot rest at this location!"* —
+is painted onto the panel like everything else on it and cannot be read at all.
+But a refused rest is a clock that did not move, and the clock **can** be read
+exactly. So:
+
+    The clock has not moved, so no time passed. Either you cannot rest here,
+    or there was nothing to rest for.
+
+which also covers resting until healed when you are already well.
+
+### The clock
+
+The date and time come from the engine's tick counter, and the arithmetic on it
+is a measurement rather than a reading. Fallout 2 writes both the raw tick count
+and the in-game date into every `SAVE.DAT` header, so three real saves settle it:
+
+| ticks | date the engine wrote | ticks ÷ 864,000 |
+|---|---|---|
+| 302,677 | 25/07/2241 | 0 |
+| 322,141 | 25/07/2241 | 0 |
+| 1,488,625 | 26/07/2241 | 1 |
+
+A day is 864,000 ticks and day zero is 25 July 2241, stated three times by the
+game itself. The first of those saves was taken 27 seconds into a new game and
+302,400 ticks is exactly 08:24:00 — so the game begins at 08:24 and there is no
+free number left to guess at.
+
+**The month is said as a number, and that is deliberate.** Fallout draws month
+names as art — a picture of twelve words — so there is no string in the game to
+quote, and writing "July" here would be this mod inventing an English word for
+something a translated game shows in its own language. It is the same call
+already made about the body parts struck in combat, and the game sets the
+precedent itself: the save screen prints its dates as numbers too. Evening
+starts at six because the alarm clock's own row says *Rest until evening
+(1800)*, and the mod disagreeing with the row directly under it would be worse
+than either wording.
+
+## Your quests, and your holodisks
+
+Choose **Status** and the mod tells you where you have something to do, and what
+you are carrying to read:
+
+    Status.
+    1 place. Numpad plus reads one out. Arroyo, 1 of 1.
+
+Move to a place and press numpad `+` again:
+
+    Arroyo. 3 tasks.
+    1. Rescue Nagor's dog, Smoke, from the wilds.
+    2. Retrieve the GECK for Arroyo.
+    3. Find Vic the Trader.
+
+A task you have finished says so — `Kill the rat god. Done.` — and that is not
+the mod being helpful, it is the mod reading out something the screen already
+shows. The engine keeps two thresholds for every quest, one for when it appears
+and one for when it is complete, and when the second is reached **it draws that
+line in a different colour**. Colour is not available to a screen reader, so it
+arrives as a word instead. The comparison the mod makes is the engine's own, to
+the instruction: `>=` against the same field.
+
+The numbering matches the screen too. The engine formats each line as `"%d. %s"`
+— it numbers them itself — so "task 3" means the same thing to you as it does to
+somebody reading it.
+
+The holodisks you are carrying are listed under the places, and numpad `+` reads
+one from end to end:
+
+    Power Plant Operations. 10 pages of text.
+    Page 1. Memo: A.E.C., Status Brief. From: Tom Murray, Chairman, Atomic
+    Energy Commission...
+
+**The lines are joined back up.** The engine stores a holodisk hard-wrapped to
+the width of the panel, about sixty characters a line. That wrapping is a fact
+about the panel, not about the writing, and a screen reader has no column to
+respect — so the pieces are put back together into paragraphs. Hearing a
+sentence delivered in six fragments is worse than hearing it.
+
+**Nothing is clicked for either of these.** The mod already knows what the page
+would draw, because it worked the list out itself, so there is nothing to point
+at and no second of pointer-driving to wait through. It is the same choice the
+world's action menu makes: act on the thing you picked, by identity, rather than
+by aiming at it.
+
+### Where the words come from, since they are not on the screen
+
+The panel keeps none of its own text. That is not a search that was given up on;
+it is a negative result, checked three ways on a live game with the panel open:
+
+- Every string address in `pipboy.msg` and `quests.msg` — 1,322 of them — was
+  searched for across all writable memory. The only arrays holding any of them
+  are the two message lists themselves. Nothing holds a list of the lines a page
+  is drawing.
+- The text of a line that was visibly on screen occurs **exactly once** in the
+  whole process, in the message list it was loaded into. So the engine does not
+  copy a line before drawing it either.
+- A scan for the shape such a list would have — runs of `{char* text, int
+  flag}` — found none anywhere.
+
+So the list is rebuilt the way the engine builds it. What the engine has, and
+the mod now reads, is the tables it parses when the panel opens:
+
+| from | records | what each holds |
+|---|---|---|
+| `quests.txt` | 157 | place, task, which global variable it lives in, and the values at which it appears and is finished |
+| `holodisk.txt` | 20 | which global variable says you have it, its name, and where its text starts |
+
+The place names come out of `map.msg` and the task text out of `quests.msg`, so
+both arrive in whatever language the game is running in. **Every word of a quest
+is the game's own**; the only English this mod adds to that page is "tasks",
+"Done." and the numbering, and even the numbering is the shape the engine uses.
+
+**And there is no more to be had.** A quest record has five fields and that is
+all the game knows: where it belongs, one sentence, which variable tracks it,
+and the two thresholds. There is no step list, no giver, no reward, no location
+marker, no longer description — the sentence *is* the quest. The whole Status
+page, for a sighted player, is a place name and a numbered column of those
+sentences, some in a different colour. That is now all read out.
+
+**The rule was read out of the engine, not guessed at**, and the difference
+mattered. The obvious rule — a place is listed once one of its quests has
+started — predicted one row where the panel drew two, and an afternoon went into
+trying to explain the extra one. Disassembling the drawing loop settled it in
+minutes: the rule was right all along, and **the Status page creates one row
+button more than it has entries**. The spare is the engine's own. Counting
+buttons instead of entries would have put a phantom task at the bottom of every
+list.
+
+The loop itself, for the record: walk the quest table in order; a quest counts
+once its variable has reached its display threshold; the first quest that counts
+puts its place on the list, and the rest of that place's quests are then skipped.
+The threshold is `>=` and it can be zero — *Retrieve the GECK* needs nothing set
+at all, which is why Arroyo is listed from the first minute of the game.
+
+### Why this is allowed to be spoken
+
+A reconstruction that cannot be compared against anything is a guess with extra
+steps. This one is checked against the engine's **own count of the lines it
+drew**, which it keeps in memory while drawing them — separately for the places
+and for the holodisks. If either disagrees, the rule is wrong for this state and
+the entries are numbered rather than named, the same refusal the alarm clock
+makes when its row count does not fit. It is better to say *"Entry 2 of 3"* than
+to name somebody's quests wrongly.
+
+**The row buttons are deliberately not part of that check.** The engine already
+creates one button past the end of this list, and sfall's
+`UseScrollingQuestsList` — on by default in the Restoration Project's
+`ddraw.ini` — adds controls of its own on top. How many rows there are is a fact
+about your install rather than about your quests, and nothing is clicked on this
+page anyway, so counting them would only make the mod go quiet on somebody
+else's configuration.
+
+### Video archives, and automaps
+
+**Video archives** lists the films you have watched, by name, out of
+`pipboy.msg`. The engine keeps one byte per film, and the page walks films 2 to
+15 and lists the ones set — so this is read rather than reconstructed. Choosing
+one plays it.
+
+**Automaps** is counted rather than named, and that is a decision rather than an
+omission. An automap is the auto-drawn floor plan of a place you have been: a
+top-down schematic of walls and rooms that fills in as you explore, generated
+from tile data, with no text in it anywhere. Naming the *list* would be a small
+job — the names look like they come from the same `map.msg` the quest locations
+use — but what it would take you to is a picture, and a picture is not something
+a screen reader can be handed. So the page says what it holds and goes no
+further:
+
+    1 entry. The Pip-Boy paints this page as a picture, so they can be
+    counted and chosen but not read out.
+
+Said once, on arrival, and never per row — a working list that made no
+explanation would read as a broken one.
+
+**One holodisk cannot be named**: the Vault 13 holodisk is the only one of the
+twenty-one that the engine does not keep in the table parsed from
+`holodisk.txt`, so there is no record of it here to rebuild from. It is left out
+rather than invented.
+
+### How it is driven
+
+Every control on this panel has its event code in the **release** field, and
+every one is above 256 — so unlike the loot window's `TAKE ALL`, no key presses
+any of them and each has to be pointed at. The mod reads each control's
+rectangle out of the engine and puts the pointer there, the same job it does for
+a hex and for an inventory row. Nothing is measured off a screenshot, so another
+resolution moves the panel and changes nothing here.
+
+One wrinkle worth knowing about, because it would be invisible from outside:
+**the engine does not destroy a page's rows when you leave it.** Open Status,
+then the alarm clock, and the panel holds both sets — and opening the same page
+twice adds a second copy of its rows. Counting the leftovers would have said the
+alarm clock offers fifteen ways to rest and named every one of them wrongly. GNW
+puts new buttons at the head of its list, so the live page is the run at the
+head, and the mod takes exactly that run and stops — checking both that the codes
+keep counting and that the rows keep stepping down the same twenty-pixel ladder.
+The second test is what makes it safe: codes alone would merge a live page
+starting at 510 into a stale page whose rows ended at 509, which becomes
+reachable as soon as a player has three quest locations.
 
 ## Combat
 
@@ -522,7 +863,7 @@ through them one at a time is unbearable.
 
 | Key | Level |
 |---|---|
-| `Ctrl+[` / `Ctrl+]` | **category** — critters, items, scenery |
+| `Ctrl+[` / `Ctrl+]` | **category** — critters, items, scenery, exits |
 | `[` / `]` | **type** — Torch, Rocks, Giant Ant |
 | `Shift+[` / `Shift+]` | **which one** of that type |
 | `/` | move the look cursor to the selected one |
@@ -541,6 +882,33 @@ Stepping the list does **not** move your cursor. Listing what is around you and
 going to it are different intentions, and you may just want to look. Press `/`
 when you actually want to go there — then the cursor works as it always does:
 numpad + walks you there, or attacks it if it's alive and a fight is on.
+
+### The way out — the fourth category
+
+    Ctrl+]    Exits. Exit Grid Map Marker, 3, nearest north east 6 hexes. 1 of 1.
+
+Exit grids get a category of their own, because "how do I leave" is a different
+question from "what is around me" and it has two or three answers on any map.
+`/` walks the look cursor onto one and numpad `+` takes you there.
+
+They were invisible to every part of this mod, twice over. An exit grid is a
+MISC object, and the scanner asked the engine for critters, ground items and
+scenery — three of its six lists, none of them that one. And it is drawn with
+the blank placeholder art, so the filter below would have dropped it even if a
+list had held it.
+
+Both of those rules are right about everything except this. What a sighted
+player sees of an exit is not the object at all: it is the shimmering border
+drawn into the *floor*, which is tile art and belongs to no object anyone can
+ask about. The invisible object is the only handle there is on a thing that is
+plainly on screen. So the exemption is exactly one category wide.
+
+The category currently reports everything in the engine's MISC list rather than
+exit grids alone, and names each entry with the game's own name for it, so
+anything else living there arrives under its own name and can be stepped past.
+Narrowing it needs a rule about the engine's proto numbering that has not been
+measured here yet — and the script now logs every MISC object it considers,
+which is the same route the art filter itself came by.
 
 ### What it won't tell you
 
@@ -710,11 +1078,20 @@ as the hex cursor, so there is only one layout to learn:
 
 | Key | Action |
 |---|---|
-| Numpad 8 / 2 | previous / next item in this list |
-| Numpad 4 / 6 | previous / next list |
-| Numpad 5 | re-read the selected item |
-| Numpad 0 | totals — what you are carrying, against what you can carry |
+| Up / Down | previous / next item in this list |
+| Left / Right | previous / next list |
+| Numpad / | re-read the selected item |
 | `A` | **take everything** in the container — the game's own TAKE ALL |
+
+**The numpad no longer does anything here.** It used to, and that was never a
+design so much as an inheritance: the numpad is the hex cursor's keyboard
+because a map has six directions and no north, and a list has two. These were
+the only two screens in the mod that asked you to move your hand for a job the
+arrows do everywhere else.
+
+Re-reading needed no key of its own either. Numpad `/` is the repeat key on
+every screen the mod has, and in this window it already says the selected item,
+which is all numpad 5 ever did.
 
 The three lists are **yours**, **theirs** (the container, the corpse, or the
 person you are trading with) and **worn** — your armour and your two hands.
@@ -859,8 +1236,19 @@ hardcoded. Translations and text-replacing content mods work with no changes.
 - **Addresses are absolute**, confirmed against the retail Steam
   `fallout2.exe`. They survive game restarts (verified), but AoB signatures are
   needed before this works on GOG or plain 1.02d.
-- **Dialogue, the Pipboy and the world map are not covered.** Dialogue is the
-  largest remaining gap and is mouse-only in the engine.
+- **The world map's own list of places is reached through the scanner, not
+  through the panel.** The seven rows down the right of the world map are the
+  engine's list of places you know; `[` and `]` walk exactly that list, and
+  travelling to one presses its row. The rows are never read out in the order
+  the panel shows them, because the scanner sorts them by distance from you
+  instead, which is the more useful order and the one that survives the list
+  growing past seven.
+- **Travelling to an arbitrary square scrolls the view to reach it.** The map
+  shows 450×443 pixels of a 1400×1500 world, so a square that is off screen has
+  to be scrolled into view before it can be clicked. That is done with the
+  engine's own arrow keys, reading the scroll offset back after each press —
+  but a journey to somewhere very distant will move the view several times
+  before it starts.
 - **The inventory and loot windows are read but not operated.** You can hear
   everything in them; moving an item still needs the mouse.
 

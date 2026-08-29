@@ -92,6 +92,13 @@ class Button(NamedTuple):
     bottom: int
     press: int        # event code raised on press
     addr: int
+    # The code raised when the button is RELEASED, which for some screens is
+    # the only one there is. Every button in the Pip-Boy carries -1 in `press`
+    # and its real code here -- so does every button on the interface bar, where
+    # the Pip-Boy's own 'p' lives. A reader that only looked at `press` saw
+    # those windows as having no working buttons at all, which is exactly how
+    # the Pip-Boy managed to look unreachable while GNW was describing it fully.
+    release: int = -1
 
     @property
     def width(self) -> int:
@@ -133,6 +140,19 @@ class Window(NamedTuple):
                 return b
         return None
 
+    def by_code(self, code: int) -> Optional[Button]:
+        """The button this code belongs to, whichever field carries it.
+
+        Screens are not consistent about which of the two they use, and being
+        wrong about it does not read as "wrong field" -- it reads as the screen
+        having no buttons. Ask for the code and let the button say where it
+        keeps it.
+        """
+        for b in self.buttons:
+            if code in (b.press, b.release):
+                return b
+        return None
+
     def keyed(self) -> Dict[int, Button]:
         """Every button a key already presses, by keyboard code."""
         return {b.key: b for b in self.buttons if b.key is not None}
@@ -150,13 +170,14 @@ def _read_buttons(proc, head: int) -> List[Button]:
             break
         bid, flags, l, t, r, b = struct.unpack_from("<6i", blob, B_ID)
         press = struct.unpack_from("<i", blob, B_PRESS)[0]
+        release = struct.unpack_from("<i", blob, B_RELEASE)[0]
         nxt = struct.unpack_from("<I", blob, B_NEXT)[0]
         # A button's rectangle is window-relative and cannot be inside out.
         # This is what stops the walk following a stale pointer into noise.
         if not (0 <= l <= r < MAX_SCREEN and 0 <= t <= b < MAX_SCREEN):
             break
         out.append(Button(id=bid, flags=flags, left=l, top=t, right=r,
-                          bottom=b, press=press, addr=node))
+                          bottom=b, press=press, addr=node, release=release))
         node = nxt
     return out
 
@@ -244,13 +265,19 @@ def live_windows(proc, buttons: bool = False) -> List[Window]:
     return out
 
 
-def live_window_with(proc, width: int, height: int, press: int
-                     ) -> Optional[Window]:
-    """An open window of this size carrying a button with this press code.
+def live_window_with(proc, width: int, height: int, press: Optional[int] = None,
+                     release: Optional[int] = None) -> Optional[Window]:
+    """An open window of this size carrying a button with this event code.
 
     Size alone is not enough to name a screen: at this resolution the character
     sheet, the Pipboy and the save screen are all 640x480 panels. The button is
     what says which one it is.
+
+    `press` and `release` are separate because which field a screen uses is a
+    fact about how its buttons were built, not something to be inferred: the
+    save screen's page arrows answer to `press` and every Pip-Boy control
+    answers to `release`. A caller that asks the wrong one finds nothing, and
+    "nothing" is indistinguishable from "that screen is not up".
     """
     for win in live_windows(proc):
         # Size first, buttons only for the few that match. This runs on every
@@ -264,7 +291,9 @@ def live_window_with(proc, width: int, height: int, press: int
             continue
         head = struct.unpack_from("<I", blob, W_BUTTONS)[0]
         buttons = _read_buttons(proc, head) if head else []
-        if any(b.press == press for b in buttons):
+        if press is not None and any(b.press == press for b in buttons):
+            return win._replace(buttons=buttons)
+        if release is not None and any(b.release == release for b in buttons):
             return win._replace(buttons=buttons)
     return None
 

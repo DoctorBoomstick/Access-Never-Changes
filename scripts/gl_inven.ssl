@@ -604,6 +604,20 @@ procedure on_key begin
    // it here left the engine holding half of every key this script took.
    pressed := (event == 1);
    if (not (get_game_mode bwand INVEN_MODES)) then return;
+   /*
+    * Stand down while the quantity window is up.
+    *
+    * It is drawn over the inventory and the inventory's own mode bit stays
+    * set underneath it, so without this the arrows would walk the list behind
+    * a window the player is typing a number into -- and would be swallowed on
+    * the way, so the window would not get them either. That is the same
+    * "whichever script claims the mode owns the keyboard" rule the four
+    * scripts already share, applied to a window none of them owns.
+    *
+    * It only became reachable when the arrows were bound here. The numpad
+    * digits this handler used to take are not keys that window wants.
+    */
+   if (get_game_mode bwand COUNTERWIN) then return;
 
    /*
     * The item menu owns the keyboard while it is up, and these keys must be
@@ -679,13 +693,41 @@ procedure on_key begin
       return;          // no set_sfall_return: the window must still see it
    end
 
+   /*
+    * The arrows, and the numpad that is no longer here.
+    *
+    * Up and down step the item, left and right step the list. That is the
+    * whole player-facing keyboard of this window now.
+    *
+    * The numpad used to do this and does not any more, and keeping it "because
+    * it costs one line" was the wrong answer: the digits were never a design,
+    * they were an inheritance. The numpad is the hex cursor's keyboard because
+    * a map has six directions and no north, and a list has two -- so these two
+    * windows were the only screens in the mod asking a player to move their
+    * hand for a job the arrows do everywhere else. Leaving both bound would
+    * have left that on the table and called it kindness.
+    *
+    * Re-reading the selected item did not need a key of its own either: numpad
+    * slash is the mod's repeat key on every screen it has, and in this window
+    * it already says the selected item. That is what numpad 5 was for.
+    *
+    * **Numpad 0 is the exception, and it is not a player key.** It makes the
+    * script report the totals, and the mod presses it itself after moving an
+    * item -- it is the only way to ask this script anything, since a keypress
+    * is the one channel there is. Nothing tells a player to press it. A player
+    * who does gets the totals, which is a fair answer to an accidental press.
+    *
+    * The arrows are swallowed like everything else this handler claims. The
+    * manual gives the inventory lists Home, End, Page Up and Page Down and
+    * says nothing about arrows, and those four are passed through untouched
+    * just above -- so what is taken here is a key the window was not using.
+    */
    act := 0;
-   if      (key == DIK_NUMPAD8) then act := 1;
-   else if (key == DIK_NUMPAD2) then act := 2;
-   else if (key == DIK_NUMPAD4) then act := 3;
-   else if (key == DIK_NUMPAD6) then act := 4;
-   else if (key == DIK_NUMPAD5) then act := 5;
-   else if (key == DIK_NUMPAD0) then act := 6;
+   if      (key == DIK_UP)    then act := 1;
+   else if (key == DIK_DOWN)  then act := 2;
+   else if (key == DIK_LEFT)  then act := 3;
+   else if (key == DIK_RIGHT) then act := 4;
+   else if (key == DIK_NUMPAD0) then act := 6;   // the mod asking, not a player
    else return;
 
    // The key is ours. The release is swallowed and does nothing; acting on it
@@ -703,8 +745,9 @@ procedure on_key begin
    else if (act == 2) then call step_item(1);
    else if (act == 3) then call step_side(-1);
    else if (act == 4) then call step_side(1);
-   else if (act == 5) then call describe_side;
    else if (act == 6) then call summarise;
 
-   set_sfall_return(KEY_SWALLOW);   // swallow it: the window has no use for the numpad
+   // Swallowed: the arrows are ours while this window is up, and so is the
+   // numpad 0 the mod presses itself.
+   set_sfall_return(KEY_SWALLOW);
 end

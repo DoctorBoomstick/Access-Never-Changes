@@ -69,9 +69,11 @@ EDITOR_FLAG = 0x00518490    # 0 in the character editor
 MAIN_MENU = "main_menu"
 SELECT = "select"
 CHARGEN = "chargen"
-WORLD = "world"
+WORLD = "world"          # a loaded map, walked in hexes
 SLOTS = "slots"          # the save or load screen
 TIMER = "timer"          # the explosive countdown
+PIPBOY = "pipboy"        # the Pip-Boy 2000
+WORLDMAP = "worldmap"    # travelling between places, in subtiles
 UNKNOWN = "unknown"
 
 # Sub-modes reported by the in-game script's get_game_mode bitmask, from
@@ -312,9 +314,32 @@ def detect(proc: Process, in_game: bool = False,
 
     if in_game:
         if mode is not None:
+            # The Pip-Boy before the character screen. Both are bits in the
+            # mask and neither is ever set with the other, so the order is only
+            # a statement of which question is asked first -- but it matters
+            # that this is asked from the mode at all rather than from the
+            # panel's window. The Pip-Boy is a 640x480 panel like the character
+            # sheet and the save screen, and the engine saying PIPBOY is a
+            # direct statement where a window shape is an inference.
+            if mode & MODE_PIPBOY:
+                return PIPBOY
             # The character screen mid-game is a bit in the mask, and nothing
             # else in a live session is the editor.
-            return CHARGEN if mode & MODE_CHARSCREEN else WORLD
+            if mode & MODE_CHARSCREEN:
+                return CHARGEN
+            # The world map is a screen of its own, which is a departure from
+            # how dialogue and the loot window are handled. Those are panels
+            # over a live map, and giving them their own screen would leave the
+            # scripts' combat and inventory lines queued unspoken behind them.
+            # The world map is not a panel: no map is loaded, so gl_world,
+            # gl_combat and gl_inven have nothing to report while it is up, and
+            # there is no queue to strand. It also genuinely is a different
+            # place -- hexes do not exist here and subtiles do -- so the keys
+            # mean different things and a separate watcher is the honest way to
+            # say so.
+            if mode & MODE_WORLDMAP:
+                return WORLDMAP
+            return WORLD
         # No mode reported yet. Fall back to the window handle, which is better
         # than nothing at the very start of a session.
         window = proc.read_i32(EDITOR_WINDOW)

@@ -95,7 +95,37 @@ def _record_parts(record: bytes) -> Tuple[bool, str]:
         text = body.decode("cp1252")
     except Exception:
         return head, ""
-    return head, text.strip()
+    text = text.strip()
+    # **A record that is not text is not a message.** cp1252 decodes very
+    # nearly any byte, so this used to hand whatever it found straight to the
+    # speaker: heap noise arrived as "D<?>" and "pE<?>" and was read out, over
+    # and over, on top of everything the mod had to say.
+    #
+    # This is a guard, not a cure. The cause is upstream -- the anchor this
+    # window is read from goes stale when the engine moves the ring, and every
+    # read after that is of something else's memory. The right fix is to notice
+    # that and go looking again. Until then, refusing to speak what cannot be a
+    # sentence is strictly better than speaking it, and costs nothing: the
+    # engine's own lines are ordinary printable text.
+    if not _readable(text):
+        return head, ""
+    return head, text
+
+
+# What the engine actually writes here is prose, sometimes with an accented
+# character in a translated game. Control characters are not prose, and a run of
+# them is the signature of reading the wrong place.
+def _readable(text: str) -> bool:
+    if not text:
+        return True
+    if any(ord(c) < 32 for c in text):
+        return False
+    # Two or three stray bytes decode to plausible letters often enough to slip
+    # through a per-character test, so the length is a test too: the engine does
+    # not write one-character messages, and every real line this mod has seen
+    # runs to several words.
+    printable = sum(1 for c in text if 32 <= ord(c) < 127)
+    return printable >= max(3, len(text) * 0.8)
 
 
 def _record_text(record: bytes) -> str:

@@ -99,3 +99,36 @@ class TestNaming(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheExitsCategory(unittest.TestCase):
+    """The way off the map, which nothing could find.
+
+    An exit grid is a MISC object, so it was in none of the three lists the
+    scanner asked for, and it is drawn with the blank placeholder art, so the
+    furniture filter would have dropped it if one had held it. What a sighted
+    player actually sees is the shimmering border drawn into the floor, which
+    is tile art belonging to no object at all -- so the object is the only
+    handle there is on something plainly visible.
+    """
+
+    def test_the_fourth_category_is_named(self):
+        self.assertEqual(category_name(3), "exits")
+
+    def test_it_is_announced_when_you_step_into_it(self):
+        said = Scanner().handle(
+            "SCAN:entry 3|0|2|Exit Grid Map Marker|0|3|6|0|2|")
+        self.assertIn("Exits.", said[0])
+        self.assertIn("Exit Grid Map Marker", said[0])
+        self.assertIn("north east 6 hexes", said[0])
+
+    def test_an_empty_category_says_so_in_its_own_words(self):
+        said = Scanner().handle("SCAN:none 3|")
+        self.assertEqual(said, ["No exits in sight."])
+
+    def test_the_first_three_are_where_they_were(self):
+        """The category is an index on the wire. Inserting rather than
+        appending would have renamed all three of them."""
+        self.assertEqual(category_name(0), "critters")
+        self.assertEqual(category_name(1), "items")
+        self.assertEqual(category_name(2), "scenery")

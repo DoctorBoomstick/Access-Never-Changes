@@ -127,8 +127,8 @@ _SUMMARY = re.compile(
     r"INVEN:summary (\d+)\|(-?\d+)\|(-?\d+)\|(\d+)\|(\d+)\|(-?\d+)\|"
 )
 
-HELP = ("Numpad 8 and 2 step the list, 4 and 6 change list, "
-        "5 re-reads, 0 gives the totals.")
+HELP = ("Up and down step the list, left and right change list, "
+        "numpad slash re-reads the item.")
 
 
 def _plural(n: int, one: str, many: str) -> str:

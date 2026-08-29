@@ -32,7 +32,11 @@ _ENTRY = re.compile(
 _NONE = re.compile(r"SCAN:none (\d+)\|")
 _JUMP = re.compile(r"SCAN:jump (\d+)\|")
 
-CATEGORIES = ["critters", "items", "scenery"]
+# The fourth is the way off the map. It reads the engine's MISC list, which
+# holds the exit grids and nothing else a player has business with -- see
+# SCAN_EXITS in gl_world.ssl for why they are worth a category rather than a
+# line in "scenery". "Exits" is the mod's word, like the other three.
+CATEGORIES = ["critters", "items", "scenery", "exits"]
 
 # What changed, which decides how much needs saying.
 LEVEL_INSTANCE = 0

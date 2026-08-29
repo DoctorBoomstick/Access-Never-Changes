@@ -33,12 +33,21 @@ class _RecordingWorld:
         self.calls.append(("dlg_say",))
 
 
-def _drive(what, talking=True):
+def _subclasses(cls):
+    """Every subclass of `cls`, however deep."""
+    found = []
+    for sub in cls.__subclasses__():
+        found.append(sub)
+        found.extend(_subclasses(sub))
+    return found
+
+
+def _drive(what, talking=True, screen="world"):
     """Run one hotkey through the real dispatcher, and report what it did."""
     app = App.__new__(App)
     app.world = _RecordingWorld(talking)
     app.ann = None
-    app.screen = "world"
+    app.screen = screen
     App._do_action(app, what)
     return app.world.calls
 
@@ -57,11 +66,17 @@ class TestHotkeyWiring(unittest.TestCase):
         """
         from fallout2_access.app import Watcher
 
+        # Every watcher, not just the base class. The base names the five
+        # actions every screen answers to; a screen with keys of its own puts
+        # them on its own subclass, which is where the world map's cursor and
+        # scanner live. Looking only at the base was right until one did.
+        watchers = [Watcher] + _subclasses(Watcher)
+
         for vk, what in f2access.HOTKEYS.items():
             with self.subTest(vk=vk, what=what):
                 if what in ("click", "rclick"):
                     self.assertTrue(callable(getattr(App, "click", None)))
-                elif callable(getattr(Watcher, what, None)):
+                elif any(callable(getattr(w, what, None)) for w in watchers):
                     continue
                 else:
                     self.assertTrue(
@@ -81,6 +96,122 @@ class TestHotkeyWiring(unittest.TestCase):
         for what in ("dlg_prev", "dlg_next", "dlg_say"):
             with self.subTest(what=what):
                 self.assertEqual(_drive(what, talking=False), [])
+
+    def test_a_special_key_still_yields_its_virtual_key(self):
+        """The bug that made the reply keys dead for everyone.
+
+        pynput hands the listener two shapes. An ordinary key arrives as a
+        `KeyCode`, which has a `vk`. Anything pynput recognises as special --
+        every arrow, and the whole numpad once Num Lock is off -- arrives as a
+        `Key` enum member, which does not: its virtual key is one level down in
+        `Key.up.value.vk`. The listener read `key.vk`, got None, and dropped
+        the press before any dialogue code ran.
+
+        Driven with the real pynput objects rather than fakes. A fake with a
+        `vk` attribute would pass this test and prove nothing, and a stand-in
+        for the thing that was misunderstood is no test at all.
+        """
+        try:
+            from pynput import keyboard
+        except ImportError:
+            self.skipTest("pynput not installed")
+
+        self.assertIsNone(getattr(keyboard.Key.up, "vk", None),
+                          "if this ever gains a vk, the bug is gone and so is "
+                          "the reason for key_vk -- but check before deleting")
+        self.assertEqual(f2access.key_vk(keyboard.Key.up), 38)
+        self.assertEqual(f2access.key_vk(keyboard.Key.down), 40)
+        self.assertEqual(f2access.key_vk(keyboard.KeyCode.from_vk(104)), 104)
+
+    def test_every_bound_key_can_be_resolved_from_pynput(self):
+        """Each binding, from the key pynput would actually deliver.
+
+        This is the end-to-end version: for every vk in the table, build the
+        object pynput builds for it and check the listener would find the
+        binding again.
+        """
+        try:
+            from pynput import keyboard
+        except ImportError:
+            self.skipTest("pynput not installed")
+
+        # Every Key enum member, by the virtual key it carries.
+        special = {}
+        for name in dir(keyboard.Key):
+            member = getattr(keyboard.Key, name)
+            vk = getattr(getattr(member, "value", None), "vk", None)
+            if vk is not None:
+                special.setdefault(vk, member)
+
+        for vk, what in f2access.HOTKEYS.items():
+            with self.subTest(vk=vk, what=what):
+                key = special.get(vk) or keyboard.KeyCode.from_vk(vk)
+                self.assertEqual(f2access.HOTKEYS.get(f2access.key_vk(key)),
+                                 what)
+
+    def test_an_unknown_key_is_still_ignored_quietly(self):
+        self.assertIsNone(f2access.key_vk(object()))
+
+    def test_the_reply_keys_survive_num_lock(self):
+        """Each reply key is bound to both virtual keys its numpad key sends.
+
+        The three reply keys are the mod's only hotkeys read as Windows virtual
+        keys rather than as DirectInput scancodes inside the game, and a
+        virtual key is what Num Lock changes: with the lock off, numpad 8, 2
+        and 5 arrive as Up, Down and Clear. All three did nothing, and nothing
+        else in the mod failed with them, because every other numpad binding is
+        an operator key that reports the same virtual key either way.
+
+        The pairs, not just the presence of six bindings: a twin bound to the
+        wrong action is the same silent failure wearing a passing test.
+
+        The two halves of each pair now carry different names -- the world map
+        needs to tell numpad 8 from Up, because there the arrow keys are the
+        engine's own -- so what is checked is that both still arrive at the same
+        action once `_do_action` has mapped them.
+        """
+        from fallout2_access.app import App as _App
+
+        for locked, unlocked, what in ((104, 38, "dlg_prev"),
+                                       (98, 40, "dlg_next"),
+                                       (101, 12, "dlg_say")):
+            with self.subTest(what=what):
+                on = f2access.HOTKEYS.get(locked)
+                off = f2access.HOTKEYS.get(unlocked)
+                self.assertIsNotNone(on, "numpad key {} unbound".format(locked))
+                self.assertIsNotNone(off, "its Num Lock twin {} unbound".format(unlocked))
+                self.assertEqual(_App._NUMPAD_AS_ARROWS.get(on, on), what)
+                self.assertEqual(_App._NUMPAD_AS_ARROWS.get(off, off), what)
+
+    def test_numpad_five_still_reaches_the_hex_cursor_on_a_map(self):
+        """Num Lock off sends Clear, and Clear must still mean numpad 5.
+
+        Both halves of that pair now arrive as "num5", so this checks the pair
+        is intact at the table rather than assuming the rename kept it.
+        """
+        self.assertEqual(f2access.HOTKEYS.get(101), f2access.HOTKEYS.get(12))
+
+    def test_the_numpad_and_the_arrows_part_company_on_the_world_map(self):
+        """There the arrow keys scroll the engine's own view.
+
+        If numpad 8 and Up still shared one action name, pressing Up would
+        scroll the map *and* walk this mod's cursor, and the player would hear
+        about only one of the two. So the physical keys must be distinguishable
+        in the table, and `_do_action` must send the numpad ones somewhere else
+        on that screen alone.
+        """
+        from fallout2_access.app import App as _App, screens
+
+        self.assertNotEqual(f2access.HOTKEYS.get(104), f2access.HOTKEYS.get(38))
+        self.assertNotEqual(f2access.HOTKEYS.get(98), f2access.HOTKEYS.get(40))
+        for numpad in ("num8", "num2", "num5"):
+            with self.subTest(numpad=numpad):
+                self.assertIn(numpad, _App._NUMPAD_ON_WORLDMAP)
+                self.assertNotEqual(_App._NUMPAD_ON_WORLDMAP[numpad],
+                                    _App._NUMPAD_AS_ARROWS[numpad])
+        # And the arrows themselves are never rewritten, on any screen.
+        self.assertNotIn("dlg_prev", _App._NUMPAD_ON_WORLDMAP)
+        self.assertEqual(screens.WORLDMAP, "worldmap")
 
     def test_the_two_mouse_buttons_are_bound(self):
         self.assertEqual(f2access.HOTKEYS.get(107), "click")    # numpad +

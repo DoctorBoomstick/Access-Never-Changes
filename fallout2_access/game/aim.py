@@ -44,6 +44,12 @@ TILES_PER_ROW = 200
 # module's neighbours and is not worth a cycle for one constant.
 CURSOR_MOVEMENT = 0
 
+# Modes 4 to 10 are the Skilldex skills, measured one at a time off the live
+# Skilldex; screens.py names them. What matters here is only that the cursor is
+# holding a skill the player armed, so the range is enough and the names are
+# somebody else's business.
+SKILL_CURSORS = range(4, 11)
+
 _TARGET = re.compile(r"COMBAT:target (\d+)\|(\d+)\|([^|]*)")
 _PREPARE = re.compile(r"WORLD:prepare (-?\d+)\|([^|]*)\|(-?\d+)\|(-?\d+)\|(\d*)")
 
@@ -373,7 +379,24 @@ class Aimer:
                 # command cursor, and clicking picks the item up instead of
                 # walking. That is worth stepping aside for, and it is what the
                 # remaining offsets are for.
-                if mode == CURSOR_MOVEMENT:
+                #
+                # **Unless the player armed a skill, which is not a walk going
+                # wrong.** This test used to be `mode == CURSOR_MOVEMENT` alone,
+                # and an armed skill sets the cursor to 4 through 10, so it
+                # could never pass: every probe fell through to blocked_by, the
+                # search ran out, and the click was refused with "that hex is
+                # behind Wall". First aid on yourself is where that was found --
+                # your own hex holds no object to point at, so the search takes
+                # this branch -- but nothing about it was particular to healing
+                # or to yourself. Arming any skill and choosing any hex with
+                # nothing nameable on it produced the same refusal.
+                #
+                # The refusal above protects a WALK from landing on a sprite.
+                # Somebody who armed Lockpick from the number row was not
+                # walking, and the engine applies the skill to what it picks on
+                # that hex -- which is exactly what a sighted player gets for
+                # clicking there.
+                if mode == CURSOR_MOVEMENT or mode in SKILL_CURSORS:
                     return None, prev
                 self.blocked_by = name
 

@@ -101,6 +101,31 @@ class TestRecordText(unittest.TestCase):
     def test_truncated_record(self):
         self.assertEqual(_record_text(b"\x00" * 4), "")
 
+    # -- records that are not messages at all ------------------------------
+    #
+    # cp1252 decodes very nearly any byte, so "it decoded" was being taken for
+    # "it is text". Seen live: once the anchor this window is read from goes
+    # stale, every poll finds heap noise, and it was spoken -- "D?", "pE?",
+    # over and over, on top of everything else the mod had to say. The cause is
+    # upstream and is not fixed by these; refusing to speak what cannot be a
+    # sentence is.
+
+    def test_an_accented_sentence_still_arrives(self):
+        """A translated game writes these, and they are not noise."""
+        text = "Vous voyez : une porte.".encode("cp1252")
+        self.assertEqual(_record_text(record(text)), text.decode("cp1252"))
+
+    def test_control_characters_are_not_prose(self):
+        self.assertEqual(_record_text(record(b"D\x01\x02\x03")), "")
+
+    def test_a_two_character_scrap_is_not_a_message(self):
+        """The engine does not write one- or two-character lines."""
+        self.assertEqual(_record_text(record(b"pE")), "")
+
+    def test_mostly_high_bytes_are_not_a_message(self):
+        self.assertEqual(
+            _record_text(record(b"\x8a\x9e\x9f\xd0\xd8\xf0\xfe")), "")
+
 
 class RingTestCase(unittest.TestCase):
     """A located reader sitting on a ring that holds only the beacon."""

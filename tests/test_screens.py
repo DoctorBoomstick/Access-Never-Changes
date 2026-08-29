@@ -277,3 +277,59 @@ class TestUseItemCursor(unittest.TestCase):
 
     def test_an_unknown_mode_is_still_reported_as_a_number(self):
         self.assertIn("11", screens.cursor_name(11))
+
+
+class TestLeavingTheCharacterEditor(unittest.TestCase):
+    """DONE and CANCEL close the same window and leave the same three flags.
+
+    So finishing a character read as arriving at the premade screen, and the
+    mod announced it in full -- name, stat block, traits, "press T to take this
+    one" -- at somebody who was on their way into the game, right up until the
+    map arrived and cut the sentence in half.
+
+    Nothing distinguishes the two readings at the moment they are taken. What
+    distinguishes them is what turns up next, so this transition alone is given
+    long enough for a game to appear.
+    """
+
+    def _app(self, screen):
+        from fallout2_access.app import App
+
+        app = App.__new__(App)
+        app.screen = screen
+        return app
+
+    def test_the_editor_to_selection_waits_for_a_game_to_appear(self):
+        from fallout2_access import app as appmod
+
+        app = self._app(screens.CHARGEN)
+        self.assertEqual(app._ticks_to_believe(screens.SELECT),
+                         appmod.SELECT_AFTER_EDITOR_TICKS)
+
+    def test_the_wait_is_long_enough_for_a_map_to_load(self):
+        """Two seconds at the very least. Shorter and this is a race that the
+        slower machine loses, which is the machine that needed it."""
+        from fallout2_access import app as appmod
+
+        self.assertGreaterEqual(
+            appmod.SELECT_AFTER_EDITOR_TICKS / appmod.POLL_HZ, 2.0)
+
+    def test_arriving_from_the_main_menu_is_not_delayed(self):
+        """Pressing N really is the selection screen and nothing else, and it
+        is the path players take far more often."""
+        from fallout2_access import app as appmod
+
+        app = self._app(screens.MAIN_MENU)
+        self.assertEqual(app._ticks_to_believe(screens.SELECT),
+                         appmod.SCREEN_STABLE_TICKS)
+
+    def test_every_other_transition_is_unchanged(self):
+        from fallout2_access import app as appmod
+
+        for was, now in ((screens.CHARGEN, screens.WORLD),
+                         (screens.SELECT, screens.CHARGEN),
+                         (screens.WORLD, screens.SLOTS),
+                         (screens.SLOTS, screens.WORLD)):
+            with self.subTest(was=was, now=now):
+                self.assertEqual(self._app(was)._ticks_to_believe(now),
+                                 appmod.SCREEN_STABLE_TICKS)
