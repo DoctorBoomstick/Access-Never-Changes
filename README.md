@@ -55,7 +55,7 @@
 
 <pre><code>C:\Program Files (x86)\Steam\steamapps\common\Fallout 2</code></pre>
 
-<p>Our ZAX supercomputer will put the mod in its own folder inside the game's, install all script files to their correct positions, patch ddraw.ini with the settings the mod requires, set the matching lines in <code>f2_res.ini</code> and <code>fallout2.cfg</code>, back up every changed file, and add a Fallout 2 shortcut to the Start menu, in Lights Not Included, Access Never Changes, that launches the game with the mod running.</p>
+<p>Our ZAX supercomputer will put the mod in its own folder inside the game's, install all script files to their correct positions, patch ddraw.ini with the settings the mod requires, set the matching lines in <code>f2_res.ini</code> and <code>fallout2.cfg</code>, back up every changed file, and add a Fallout 2 (Access Never Changes) shortcut to the Start menu, in the Lights Not Included folder, that launches the game with the mod running.</p>
 
 <p>Vault-Tec does not confirm or deny that this operation won't also install additional software for your own ‘safety,’ including but not limited to a keylogger calibrated to look out for search terms such as ‘socialism,’ ‘community,’ ‘tea,’ and ‘human rights.’</p>
 
@@ -63,7 +63,7 @@
 
 <h2 id="launching-and-the-main-menu">Launching and the Main Menu</h2>
 
-<p>Always start the game through the Fallout 2 shortcut in the Start menu, under Lights Not Included, Access Never Changes. It starts Fallout 2 and the mod together, and closes the mod when the game closes. Starting Fallout 2 from Steam, or any other way, starts the game without the mod. Moreover, if you have installed RPU with the high-resolution patch, upon first launching the game you will be asked whether the patch ought to be disabled. The answer ought to be yes.</p>
+<p>Always start the game through the Fallout 2 (Access Never Changes) shortcut in the Start menu's Lights Not Included folder. It starts Fallout 2 and the mod together, and closes the mod when the game closes. Starting Fallout 2 from Steam, or any other way, starts the game without the mod. Moreover, if you have installed RPU with the high-resolution patch, upon first launching the game you will be asked whether the patch ought to be disabled. The answer ought to be yes.</p>
 
 <p>If the mod has been installed correctly, you ought to hear, ‘Fallout 2 accessibility connected.’ You will then be presented with a number of opening movies, which you may wish to observe at your leisure, or skip with Space as time permits:</p>
 
@@ -325,7 +325,7 @@
 
 <h2 id="settings">Settings</h2>
 
-<p>The mod's settings live in <code>access.ini</code>, in the <code>Access Never Changes</code> folder inside the game's. The Settings shortcut in the Start menu, under Lights Not Included, Access Never Changes, opens it in Notepad. Every setting is explained in the file itself:</p>
+<p>The mod's settings live in <code>access.ini</code>, in the <code>Access Never Changes</code> folder inside the game's. The Access Never Changes settings shortcut in the Start menu's Lights Not Included folder opens it in Notepad. Every setting is explained in the file itself:</p>
 
 <ul>
 <li>which voice to use: your screen reader, or the Windows voice;</li>

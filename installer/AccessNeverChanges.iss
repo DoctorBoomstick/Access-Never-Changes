@@ -38,9 +38,9 @@ AppSupportURL=https://github.com/DoctorBoomstick/Access-Never-Changes
 ; Replaced by the game folder the player picks; see NextButtonClick.
 DefaultDirName={autopf}\{#AppName}
 DisableDirPage=yes
-DefaultGroupName=Lights Not Included\{#AppName}
-; The brand's folder, with each of its games and mods a folder inside it. Not
-; the folder an older install used.
+; The brand's folder, shared by its games and mods. One level only: the Windows 11 Start menu shows no folder inside a folder, so every shortcut carries its mod's name instead.
+DefaultGroupName=Lights Not Included
+; Not the folder an older install used.
 UsePreviousGroup=no
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
@@ -69,15 +69,13 @@ Source: "{#Frozen}\*"; DestDir: "{app}"; Excludes: "access.ini"; Flags: ignoreve
 Source: "{#Frozen}\access.ini"; DestDir: "{app}"; Flags: onlyifdoesntexist
 
 [Icons]
-; Named for the game it starts. On the desktop the mod's name is added: a
-; plain "Fallout 2" there would replace the shortcut Steam or GOG put there,
-; and uninstalling would then take the player's own shortcut with it.
-Name: "{group}\Fallout 2"; Filename: "{app}\{#ExeName}"; Parameters: "--launch"; WorkingDir: "{app}"; Comment: "Start Fallout 2 with the screen reader mod"
-Name: "{group}\Mod only"; Filename: "{app}\{#ExeName}"; WorkingDir: "{app}"; Comment: "Start the mod for a game you start yourself"
-Name: "{group}\Manual"; Filename: "{app}\manual.html"
-Name: "{group}\Settings"; Filename: "{sys}\notepad.exe"; Parameters: """{app}\access.ini"""
-Name: "{group}\Folder"; Filename: "{app}"
-Name: "{group}\Uninstall"; Filename: "{uninstallexe}"
+; Each name says which mod it belongs to, because the brand's folder holds every mod's shortcuts side by side. "Fallout 2 (Access Never Changes)" rather than a plain "Fallout 2" also keeps it from replacing a shortcut Steam or GOG made, which uninstalling would then take with it.
+Name: "{group}\Fallout 2 (Access Never Changes)"; Filename: "{app}\{#ExeName}"; Parameters: "--launch"; WorkingDir: "{app}"; Comment: "Start Fallout 2 with the screen reader mod"
+Name: "{group}\Access Never Changes, mod only"; Filename: "{app}\{#ExeName}"; WorkingDir: "{app}"; Comment: "Start the mod for a game you start yourself"
+Name: "{group}\Access Never Changes manual"; Filename: "{app}\manual.html"
+Name: "{group}\Access Never Changes settings"; Filename: "{sys}\notepad.exe"; Parameters: """{app}\access.ini"""
+Name: "{group}\Access Never Changes folder"; Filename: "{app}"
+Name: "{group}\Uninstall Access Never Changes"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Fallout 2 (Access Never Changes)"; Filename: "{app}\{#ExeName}"; Parameters: "--launch"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
