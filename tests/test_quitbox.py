@@ -82,5 +82,27 @@ class TestLoadFromTheMainMenu(unittest.TestCase):
                          appmod.SCREEN_STABLE_TICKS)
 
 
+class _Proc:
+    pid = 4242
+    closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class TestWaitingForTheWindow(unittest.TestCase):
+    """Started by the launcher, the mod found the game before its window and
+    stayed silent all session. It now waits for the window to exist."""
+
+    def test_no_window_yet_is_not_connected(self):
+        app = appmod.App.__new__(appmod.App)
+        proc = _Proc()
+        with mock.patch.object(appmod.Process, "attach", lambda names: proc), \
+                mock.patch.object(appmod, "find_game_window", lambda pid: None):
+            self.assertFalse(app.connect())
+        self.assertIsNone(app.proc)
+        self.assertTrue(proc.closed)
+
+
 if __name__ == "__main__":
     unittest.main()

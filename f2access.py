@@ -301,6 +301,11 @@ LOG_PATH = paths.log_path()
 # Generous: the first start after an install can sit on a disk check.
 LAUNCH_GRACE_SECONDS = 90.0
 
+# How long the game may be gone before the mod takes it as closed. sfall
+# restarts the game itself on a first launch where two high-resolution patches
+# meet, and the game that comes back is a new process.
+RESTART_GRACE_SECONDS = 20.0
+
 
 def run_installer(argv) -> int:
     """`install GAME` and `uninstall GAME`, as the installer calls them.
@@ -322,8 +327,38 @@ def run_installer(argv) -> int:
     return install.main(rest)
 
 
+def let_the_game_come_to_the_front() -> None:
+    """Hand the game the right to take the front of the screen.
+
+    **Without it the game cannot read the keyboard at all.** Fallout claims the
+    keyboard through DirectInput as it starts, and that only succeeds for the
+    window in front. Windows only lets a new program in front when whoever
+    started it was allowed there -- and this program has no window of its own,
+    so the game came up behind everything, failed with "Failure initializing
+    input devices", and the mod sat attached to a game that never ran.
+
+    A keypress earns the right (Windows gives it to whoever made the last
+    input), and AllowSetForegroundWindow passes it on. F24 is a key no keyboard
+    has and nothing listens for; the mod's own listener ignores injected keys.
+    Measured: started from a background process, the game came up behind with
+    the error box every time without this, and in front with it.
+    """
+    try:
+        import ctypes
+
+        user32 = ctypes.WinDLL("user32")
+        vk_f24, keyup = 0x87, 0x0002
+        user32.keybd_event(vk_f24, 0, 0, 0)
+        user32.keybd_event(vk_f24, 0, keyup, 0)
+        time.sleep(0.05)
+        user32.AllowSetForegroundWindow(ctypes.c_uint32(0xFFFFFFFF))  # ASFW_ANY
+    except Exception as exc:
+        print("[launch] could not hand over the foreground: {}".format(exc), flush=True)
+
+
 def launch_game(game: str):
     exe = os.path.join(game, "fallout2.exe")
+    let_the_game_come_to_the_front()
     try:
         return subprocess.Popen([exe], cwd=game)
     except OSError as exc:
@@ -341,20 +376,28 @@ class StopWhenGameCloses:
     """
 
     def __init__(self, app, launched=None, grace: float = LAUNCH_GRACE_SECONDS,
-                 clock=time.time) -> None:
+                 clock=time.time, restart: float = RESTART_GRACE_SECONDS) -> None:
         self.app = app
         self.launched = launched
         self.grace = grace
+        self.restart = restart
         self.clock = clock
         self.started = clock()
         self.seen = False
+        self.lost_at = None
 
     def __call__(self) -> bool:
         if self.app._connected():
             self.seen = True
+            self.lost_at = None
             return False
         if self.seen:
-            return True
+            # Gone -- but give it a moment to come back as a new process. On a
+            # first launch sfall settles the high-resolution question by
+            # starting the game again, and quitting here left that game silent.
+            if self.lost_at is None:
+                self.lost_at = self.clock()
+            return self.clock() - self.lost_at > self.restart
         if self.launched is not None and self.launched.poll() is not None:
             return self.clock() - self.started > self.grace
         return False

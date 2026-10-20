@@ -172,7 +172,22 @@ class TestStoppingWithTheGame(unittest.TestCase):
         self.app.up = True
         self.assertFalse(self.until())
         self.app.up = False
+        self.assertFalse(self.until())          # it may be restarting
+        self.now[0] += 21
         self.assertTrue(self.until())
+
+    def test_a_game_that_restarts_is_followed(self):
+        """sfall restarts the game on a first launch; the mod must not leave."""
+        self.app.up = True
+        self.until()
+        self.app.up = False
+        self.now[0] += 5
+        self.assertFalse(self.until())
+        self.app.up = True
+        self.assertFalse(self.until())
+        self.app.up = False
+        self.now[0] += 5
+        self.assertFalse(self.until())
 
     def test_a_launcher_stub_exiting_is_not_the_game_closing(self):
         self.launched.code = 0

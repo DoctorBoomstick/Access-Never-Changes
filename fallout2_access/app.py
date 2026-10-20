@@ -69,6 +69,10 @@ POLL_HZ = 20.0
 SLOW_TICK_SECONDS = 0.5
 RECONNECT_SECONDS = 2.0
 
+# How long a game process may run with no window before the mod connects to it
+# anyway and says why it cannot point. See `connect`.
+WINDOW_WAIT_SECONDS = 60.0
+
 # The two screen flags are not updated atomically. Mid-transition they can read
 # as a screen the game is not on -- switching between the menu and selection
 # briefly looks like the character editor -- which fired a spurious "Character
@@ -3077,6 +3081,27 @@ class App:
         except (ProcessNotFound, OSError):
             self.proc = None
             return False
+        # **Not before the game has a window.** Started by the launcher, the mod
+        # found the process in its first instant, before the game had opened
+        # its window -- so it had no window to call the game's, decided the
+        # game was never in front, and stayed silent for the whole session
+        # while saying it was connected. Wait for the window, then connect. A
+        # window that never comes (some broken full-screen setup) still gets a
+        # connection after WINDOW_WAIT_SECONDS, and the complaint below.
+        if find_game_window(self.proc.pid) is None:
+            pid = self.proc.pid
+            since = getattr(self, "_windowless", None)
+            if since is None or since[0] != pid:
+                since = self._windowless = (pid, time.time())
+            if time.time() - since[1] < WINDOW_WAIT_SECONDS:
+                self.proc.close()
+                self.proc = None
+                return False
+        else:
+            # Waited for and found. Forgotten, so a game that is closing --
+            # still listed, its window already gone -- is waited on afresh
+            # rather than connected to as if its wait had run out.
+            self._windowless = None
         # Find the engine's globals before anything reads one. On the build the
         # mod was measured against this recognises the executable by hash and
         # changes nothing; on any other it locates them by signature, and says
