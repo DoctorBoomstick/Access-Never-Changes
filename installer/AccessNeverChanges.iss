@@ -224,8 +224,8 @@ begin
       ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code)) or (Code <> 0) then
   begin
     if SuppressibleMsgBox('The mod is installed, but Fallout 2 needs attention ' +
-        'before it will work. install.log in the mod''s folder says what.' +
-        #13#10#13#10 + 'Open it now?', mbConfirmation, MB_YESNO, IDNO) = IDYES then
+        'before it will work. install.log in the mod''s folder says what.' + #13#10#13#10 +
+        'Open it now?', mbConfirmation, MB_YESNO, IDNO) = IDYES then
       ShellExec('', ExpandConstant('{sys}\notepad.exe'),
         '"' + ExpandConstant('{app}\install.log') + '"', '', SW_SHOW, ewNoWait, Code);
   end;
