@@ -86,8 +86,9 @@ What the installer does:
   write to, so `access.ini` and `lang\` can be edited without admin;
 - runs `AccessNeverChanges.exe install "<game>"` (that is `install.py`),
   offering `install.log` if anything needs the player's attention;
-- adds Start menu shortcuts: Fallout 2 Access (game and mod together), mod
-  only, the manual, the settings, the folder, and uninstall.
+- adds Start menu shortcuts under Lights Not Included, Access Never Changes:
+  Fallout 2 (game and mod together), Mod only, Manual, Settings, Folder and
+  Uninstall; on the desktop, if asked for, "Fallout 2 (Access Never Changes)".
 
 Uninstalling runs `AccessNeverChanges.exe uninstall`, which removes the scripts
 and sets back only the settings the mod changed, to the values in its backups.

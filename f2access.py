@@ -143,6 +143,7 @@ HOTKEYS = {
 SHIFTED_HOTKEYS = {
     188: "log_prev",  # Shift ,    older in the message log
     190: "log_next",  # Shift .    newer in the message log
+    9: "back_tab",    # Shift Tab  the previous section, in the character editor
 }
 
 

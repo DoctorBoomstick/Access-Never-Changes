@@ -325,11 +325,22 @@ class SelectWatcher(Watcher):
     summary = describe
 
 
+def _wait_for_shift_up(limit: float = 1.0) -> None:
+    """Wait for Shift to be let go, so a Tab sent now is not a Shift and Tab."""
+    import ctypes
+
+    user32 = ctypes.WinDLL("user32")
+    deadline = time.time() + limit
+    while time.time() < deadline and user32.GetAsyncKeyState(0x10) & 0x8000:
+        time.sleep(0.02)
+
+
 class CharGenWatcher(Watcher):
     key = screens.CHARGEN
     TITLE = "Character screen"
     KEYS = (
         Binding("Tab", "the next section", controls.GAME),
+        Binding("Shift and Tab", "the previous section", controls.GAME),
         Binding("Up and Down", "move in the section", controls.GAME),
         Binding("Left and Right, or plus and minus", "lower or raise it",
                 controls.GAME),
@@ -351,10 +362,97 @@ class CharGenWatcher(Watcher):
         self._settling = False
         # The last plus or minus already logged. See `poll`.
         self._push_seen = None
+        # The order Tab walks the sections in, learned the first time Shift
+        # and Tab is pressed on a visit. See `back_section`.
+        self._tab_cycle: Optional[list] = None
 
     def reset(self) -> None:
         self._prev = {}
         self._settling = False
+        self._tab_cycle = None
+
+    # How long one Tab may take to show in the selection, and the most a loop
+    # of sections can hold before something is wrong.
+    TAB_SETTLE = 0.4
+    TAB_LIMIT = 12
+
+    def _place(self, selection=None):
+        """Where the editor is, as Tab sees it: the section, and inside the
+        folder box which folder -- Tab steps through those too."""
+        from .game.chargen import _SECTION_OF
+
+        if selection is None:
+            selection = self.chargen.selection()
+        section = _SECTION_OF.get(selection, (None,))[0]
+        if section == "folder":
+            return (section, self.chargen.folder())
+        return (section, None)
+
+    def back_section(self, ann: Announcer, hwnd) -> None:
+        """Shift and Tab: the previous section, which the editor does not have.
+
+        The editor answers Tab and nothing else, and no script runs on this
+        screen to add a key -- so the previous section is reached forwards: the
+        order Tab walks is learned once per visit by going round the loop, then
+        Tab is pressed as many times as it takes to land one short of where the
+        player was. Only where it lands is said. The order is learned rather
+        than written down because it differs between making a character and
+        the sheet of a live one, and with sfall's race and style rows.
+        """
+        if hwnd is None or self.chargen.dialog():
+            self.quiet_until = 0.0
+            return
+        from .input.send import FocusLost, guarded_tap
+
+        # **The game reads Shift and Tab as a Tab**, so by now it has already
+        # moved one section on. Where the player was is the section before
+        # this one, and where they want to be is the one before that --
+        # measured: counting from the place the key left them landed one
+        # section short, every time.
+        _wait_for_shift_up()
+        time.sleep(0.15)
+
+        def tab_and_read(was):
+            guarded_tap(hwnd, "tab", settle=0.02)
+            deadline = time.time() + self.TAB_SETTLE
+            now = self._place()
+            while now == was and time.time() < deadline:
+                time.sleep(0.03)
+                now = self._place()
+            return now
+
+        try:
+            here = self._place()
+            if not self._tab_cycle or here not in self._tab_cycle:
+                order = [here]
+                for _ in range(self.TAB_LIMIT):
+                    here = tab_and_read(here)
+                    if here == order[0]:
+                        break
+                    order.append(here)
+                else:
+                    return          # never came round: not a loop to trust
+                self._tab_cycle = order
+            cycle = self._tab_cycle
+            if here not in cycle:
+                return
+            target = cycle[(cycle.index(here) - 2) % len(cycle)]
+            for _ in range(len(cycle)):
+                if here == target:
+                    break
+                here = tab_and_read(here)
+        except FocusLost:
+            self.quiet_until = 0.0
+            ann.answer(tr("app.game_is_not_focused", "Game is not focused."))
+            return
+        # Said once, from where it landed, and not again by the next poll. The
+        # folder rows' words come a frame after the row; give them that frame.
+        time.sleep(0.15)
+        self.quiet_until = 0.0
+        self._prev = self.snapshot() or {}
+        item = self.chargen.current()
+        if item:
+            ann.answer(item.announce())
 
     def _sync(self) -> None:
         """Hand the reader the engine's report, if there is one.
@@ -463,6 +561,10 @@ class CharGenWatcher(Watcher):
             return
         prev, self._prev = self._prev, snap
         if not prev:
+            return
+        # Shift and Tab is on its way: the game has taken it as a Tab and
+        # moved, and the step back is about to be made. Say neither.
+        if time.time() < getattr(self, "quiet_until", 0.0):
             return
 
         sheet = self.chargen.sheet
@@ -3617,6 +3719,12 @@ class App:
         and the message went to a console the player cannot see. Every key
         press did nothing at all, without a sound.
         """
+        if what == "back_tab" and self.screen == screens.CHARGEN:
+            # Hush the editor now, from this thread, before the next poll can
+            # announce the step the game takes on its own.
+            watcher = self.current_watcher()
+            if watcher is not None:
+                watcher.quiet_until = time.time() + 2.0
         self._pending.append((what, time.time()))
 
     def _run_item_action(self) -> None:
@@ -3736,6 +3844,12 @@ class App:
             if (self.screen == screens.WORLD and self.world is not None
                     and self.world.talking()):
                 self.say_reply()
+            return
+        if what == "back_tab":
+            if self.screen == screens.CHARGEN:
+                watcher = self.current_watcher()
+                if watcher is not None:
+                    watcher.back_section(self.ann, self.hwnd)
             return
         if what in ("back", "left", "right", "home", "end"):
             # The game's own keys on every screen without a table.
