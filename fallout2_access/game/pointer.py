@@ -41,6 +41,7 @@ import time
 from typing import Optional, Tuple
 
 from ..input.send import guarded_tap, move_mouse_relative, require_focus
+from ..i18n import tr
 
 # The engine's cursor position, x at the address and y four bytes later.
 # Confirmed live against the game's own report: the script asks sfall where the
@@ -143,7 +144,34 @@ MENU_MOUSE_Y = 0x006AC79C
 
 
 class MenuMouse:
-    """Where the pointer is, before a game is loaded."""
+    """Where the pointer is, according to a second pair the engine keeps.
+
+    Written for the pre-game screens, and fast: it answers out of memory in
+    microseconds where `ScriptMouse` has to tap a key and wait for the game to
+    write a line to a log file. Aiming at the barter window's four panes took
+    0.64s through this and 4.39s through the script.
+
+    **And in a loaded game it is not telling the truth.** It tracks -- which is
+    what makes it look serviceable -- but it drifts from the real pointer, and
+    the gap grows towards the bottom of the screen. Measured against the
+    interface bar's item slot:
+
+        target (632,727) -- this says the pointer arrived at (632,727)
+                            the pointer was really at (648,767)
+
+    Forty pixels out, below the button entirely, and reported as a success.
+    That is worse than being slow and worse than failing: a servo watching this
+    converges neatly on the wrong place and says so confidently.
+
+    The drift is small near the middle of the screen -- at the barter panes,
+    around y 430, it agreed with the script to within two pixels -- which is
+    exactly what makes it dangerous. It looks correct wherever it is convenient
+    to test.
+
+    So it is never the last word in a loaded game. `aim_ui` uses it to get
+    close quickly and then asks the script whether that is actually where the
+    pointer is.
+    """
 
     def __init__(self, proc) -> None:
         self.proc = proc
@@ -255,7 +283,7 @@ def aim_to(proc, hwnd: int, x: int, y: int,
     for _ in range(MAX_STEPS):
         here = mouse.read()
         if here is None:
-            return False, None, "cannot read the pointer position"
+            return False, None, tr("aim.no_pointer", "cannot read the pointer position")
         dx, dy = x - here[0], y - here[1]
         if abs(dx) <= tolerance and abs(dy) <= tolerance:
             if moved_at_all:
@@ -293,7 +321,7 @@ def aim_to(proc, hwnd: int, x: int, y: int,
 
         after = _await_change(mouse, here)
         if after is None:
-            return False, here, "lost sight of the pointer"
+            return False, here, tr("aim.lost_pointer", "lost sight of the pointer")
         if after == here:
             # Really did not budge, even after waiting. Against a screen edge it
             # cannot, and the engine clamps hard there. The next step aims
@@ -301,7 +329,7 @@ def aim_to(proc, hwnd: int, x: int, y: int,
             # the pointer is broken.
             stalls += 1
             if stalls > 8:
-                return False, after, "the pointer will not move"
+                return False, after, tr("aim.stuck", "the pointer will not move")
             continue
         stalls = 0
         moved = abs(after[0] - here[0]) + abs(after[1] - here[1])
@@ -313,4 +341,78 @@ def aim_to(proc, hwnd: int, x: int, y: int,
             scale = max(0.5, min(6.0, float(moved) / asked))
 
     here = mouse.read()
-    return False, here, "could not settle on that point"
+    return False, here, tr("aim.unsettled_point", "could not settle on that point")
+
+
+def aim_ui(proc, hwnd: int, x: int, y: int,
+           log_path: Optional[str] = None,
+           tolerance: int = TOLERANCE) -> Tuple[bool, Optional[Tuple[int, int]], str]:
+    """Aim at a point on a panel: quickly, then checked against the truth.
+
+    Every aim in this mod used to run entirely through `ScriptMouse`, which taps
+    a key and waits for the game to write its answer into `debug.log` once per
+    servo step. That is about a second an aim, a drag needs two or three of
+    them, and it is the whole of the pause a player sits through after asking
+    for an item to be moved.
+
+    `MenuMouse` answers in microseconds, so it does the walking. But it cannot
+    be allowed to say when the walk is finished: in a loaded game it drifts from
+    the real pointer, worse the further down the screen you go, and it was
+    measured claiming arrival forty pixels below a button it had missed. A
+    reader that fails is survivable; one that is confidently wrong is the exact
+    failure this project is built to refuse.
+
+    So the fast reader gets it close and **the script is asked once whether that
+    is where the pointer really is**. One trusted reading per aim instead of one
+    per step. If it disagrees, the slow servo finishes the job from wherever the
+    pointer actually ended up, and the only cost of having tried is that the
+    pointer starts nearer.
+
+    With no log path there is no script to ask -- before a game is loaded, which
+    is the case MenuMouse was written for and the one place it is trustworthy --
+    so the fast result stands.
+    """
+    began = time.time()
+    menu = MenuMouse(proc)
+    fast = aim_to(proc, hwnd, x, y, tolerance=tolerance, reader=menu)
+    if not log_path:
+        return fast
+
+    truth = ScriptMouse(hwnd, log_path)
+    # **Correct the fast reader by what the truth says, rather than abandoning
+    # it.** Its drift is a matter of where on the screen the pointer is, so
+    # near the target it is close to a fixed offset: if the game says the
+    # pointer is twelve pixels low, aiming the fast reader twelve pixels higher
+    # lands it. Giving up on the first disagreement handed the whole aim to the
+    # slow servo -- a key and up to 0.6s of waiting per step -- and that is
+    # where nine seconds went moving a stack onto a barter table, low on the
+    # screen where the drift is worst.
+    aim_x, aim_y = x, y
+    for _ in range(CORRECTIONS):
+        if not fast[0]:
+            break
+        where = truth.read()
+        if where is None:
+            break
+        if abs(where[0] - x) <= tolerance and abs(where[1] - y) <= tolerance:
+            _note_slow(began, "corrected" if (aim_x, aim_y) != (x, y) else "fast")
+            return True, where, ""
+        aim_x += x - where[0]
+        aim_y += y - where[1]
+        fast = aim_to(proc, hwnd, aim_x, aim_y, tolerance=tolerance, reader=menu)
+    # The quick pass could not settle, or would not agree with the game even
+    # corrected. Finish through the reader that is right.
+    result = aim_to(proc, hwnd, x, y, tolerance=tolerance, reader=truth)
+    _note_slow(began, "slow servo")
+    return result
+
+
+# How many times the fast reader is corrected by the game's answer before the
+# slow servo takes over.
+CORRECTIONS = 3
+
+
+def _note_slow(began: float, how: str) -> None:
+    took = time.time() - began
+    if took >= 1.0:
+        print("[pointer] aim took {:.1f}s ({})".format(took, how), flush=True)

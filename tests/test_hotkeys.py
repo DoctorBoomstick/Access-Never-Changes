@@ -13,7 +13,9 @@ robustness is a very effective way to produce it.
 import unittest
 
 import f2access
-from fallout2_access.app import App
+from fallout2_access import controls
+from fallout2_access.app import App, QuantityWatcher
+from fallout2_access.game import screens
 
 
 class _RecordingWorld:
@@ -42,14 +44,104 @@ def _subclasses(cls):
     return found
 
 
+class _RecordingBarter:
+    """Stands in for the barter module, so pressing OFFER is observable.
+
+    The real one aims a pointer at a button on a live game. What this test
+    needs to know is only that the key reaches it at all -- which is the thing
+    that went missing once and cost a debugging session, and which no amount of
+    reading the dispatcher proves.
+    """
+
+    def __init__(self, calls):
+        self.calls = calls
+
+    def offering(self, _proc):
+        return True
+
+    def offer(self, _proc, _hwnd, log_path=None):
+        self.calls.append(("offer",))
+        return True, ""
+
+
+class _RecordingCounter(QuantityWatcher):
+    """A QuantityWatcher, keys and all, that records instead of typing."""
+
+    def __init__(self, calls):
+        self.calls = calls
+
+    def step(self, _ann, delta):
+        self.calls.append(("count", delta * self.big))
+
+    def fewest(self, _ann):
+        self.calls.append(("fewest",))
+
+    def take_all(self, _ann):
+        self.calls.append(("take all",))
+
+    def cancel(self, _ann):
+        self.calls.append(("cancel",))
+
+    def digit(self, _ann, d):
+        self.calls.append(("digit", d))
+
+    def repeat(self, _ann):
+        self.calls.append(("repeat",))
+
+
+class _Silent:
+    """An Announcer that says nothing anybody has to listen to."""
+
+    def answer(self, _text):
+        pass
+
+    def say(self, _text, **_kw):
+        pass
+
+
 def _drive(what, talking=True, screen="world"):
     """Run one hotkey through the real dispatcher, and report what it did."""
+    from fallout2_access import app as app_module
+
     app = App.__new__(App)
     app.world = _RecordingWorld(talking)
-    app.ann = None
+    app.ann = _Silent()
     app.screen = screen
-    App._do_action(app, what)
+    app.watchers = {"quantity": _RecordingCounter(app.world.calls)}
+    # Enough of an attached game for the guarded branches to run.
+    app.proc = object()
+    app.hwnd = 1
+    real = app_module.barter
+    app_module.barter = _RecordingBarter(app.world.calls)
+    try:
+        App._do_action(app, what)
+    finally:
+        app_module.barter = real
     return app.world.calls
+
+
+class TestTypingAnAmount(unittest.TestCase):
+    """Sixty caps used to be sixty presses of up."""
+
+    def test_digits_go_to_the_how_many_window(self):
+        self.assertEqual(_drive("digit6", screen=screens.QUANTITY),
+                         [("digit", 6)])
+
+    def test_digits_are_left_to_the_game_everywhere_else(self):
+        """Reply numbers in a conversation, skills on the map."""
+        self.assertEqual(_drive("digit6", screen="world"), [])
+
+    def test_control_steps_by_ten(self):
+        from fallout2_access import app as app_module
+
+        app = App.__new__(App)
+        app.world = _RecordingWorld(True)
+        app.ann = _Silent()
+        app.screen = screens.QUANTITY
+        app.watchers = {"quantity": _RecordingCounter(app.world.calls)}
+        app.proc, app.hwnd, app.ctrl_held = object(), 1, True
+        App._do_action(app, "dlg_prev")
+        self.assertEqual(app.world.calls, [("count", 10)])
 
 
 class TestHotkeyWiring(unittest.TestCase):
@@ -76,8 +168,17 @@ class TestHotkeyWiring(unittest.TestCase):
             with self.subTest(vk=vk, what=what):
                 if what in ("click", "rclick"):
                     self.assertTrue(callable(getattr(App, "click", None)))
+                elif what.startswith("digit"):
+                    # The number row means something in one window only.
+                    self.assertTrue(_drive(what, screen=screens.QUANTITY))
                 elif any(callable(getattr(w, what, None)) for w in watchers):
                     continue
+                elif any(controls.find(w, what) for w in watchers):
+                    # Bound in some screen's table, which tests/test_controls
+                    # checks against the method it names.
+                    continue
+                elif what == "help":
+                    self.assertTrue(callable(getattr(App, "help", None)))
                 else:
                     self.assertTrue(
                         _drive(what),
@@ -85,6 +186,47 @@ class TestHotkeyWiring(unittest.TestCase):
                         "Watcher implements it and _do_action ignores it"
                         .format(what, vk),
                     )
+
+    def test_the_move_items_window_gets_the_keys_before_the_conversation(self):
+        """The bug that made bartering impossible.
+
+        The barter screen is a conversation's child, so a stack dragged onto a
+        table puts the "How many?" window up with DIALOG still set. Up and down
+        arrive under the dialogue names -- that is what they are everywhere
+        else -- and the dialogue branch answered for them first: either walking
+        a reply list nobody could see or, when the mod judged the conversation
+        not to be the thing on screen, returning without a sound. The mod
+        announced the window, named the keys, and then swallowed every one of
+        them.
+
+        Checked with `talking` BOTH ways, because only one of the two failed
+        loudly and the quiet one is the one that shipped.
+        """
+        for talking in (True, False):
+            for what, expected in (("dlg_prev", ("count", 1)),
+                                   ("dlg_next", ("count", -1)),
+                                   ("num8", ("count", 1)),
+                                   ("num2", ("count", -1)),
+                                   ("end", ("take all",)),
+                                   ("home", ("fewest",)),
+                                   ("click", None),
+                                   ("rclick", None),
+                                   ("dlg_say", ("repeat",))):
+                with self.subTest(what=what, talking=talking):
+                    self.assertEqual(
+                        _drive(what, talking=talking, screen="quantity"),
+                        [expected] if expected else [])
+
+    def test_nothing_else_reaches_past_that_window(self):
+        """It is a modal loop of the engine's own with the barter behind it.
+
+        `o` is the OFFER button, and offering a trade through a half-answered
+        question about how many stimpaks to put on the table is not a thing to
+        leave possible.
+        """
+        for what in ("barter_offer", "wm_town", "wm_scan_next"):
+            with self.subTest(what=what):
+                self.assertEqual(_drive(what, screen="quantity"), [])
 
     def test_the_reply_keys_belong_to_the_map_when_not_talking(self):
         """Numpad 8, 2 and 5 are the hex cursor's everywhere but a conversation.
@@ -212,6 +354,36 @@ class TestHotkeyWiring(unittest.TestCase):
         # And the arrows themselves are never rewritten, on any screen.
         self.assertNotIn("dlg_prev", _App._NUMPAD_ON_WORLDMAP)
         self.assertEqual(screens.WORLDMAP, "worldmap")
+
+    def test_the_world_maps_keys_are_silent_everywhere_else(self):
+        """Four of them are keys a player types.
+
+        `[`, `]`, `/` and `T` belong to the world map's cursor and scanner. At a
+        name field they are letters and punctuation, and the generic dispatch
+        would have answered "No screen recognised" out loud on an unrecognised
+        screen. Off the world map they must reach nothing and say nothing.
+        """
+        import f2access as f2
+
+        world_map_keys = [what for what in f2.HOTKEYS.values()
+                          if what.startswith("wm_")]
+        self.assertTrue(world_map_keys, "no world map keys bound at all")
+        for what in world_map_keys:
+            for screen in ("chargen", "world", "unknown", "slots"):
+                with self.subTest(what=what, screen=screen):
+                    app = App.__new__(App)
+                    app.world = _RecordingWorld(False)
+                    app.screen = screen
+                    app.watchers = {}
+                    spoken = []
+
+                    class _Ann:
+                        def answer(self, text):
+                            spoken.append(text)
+
+                    app.ann = _Ann()
+                    App._do_action(app, what)
+                    self.assertEqual(spoken, [])
 
     def test_the_two_mouse_buttons_are_bound(self):
         self.assertEqual(f2access.HOTKEYS.get(107), "click")    # numpad +
@@ -379,9 +551,30 @@ class TestKeyReleaseIsSwallowedToo(unittest.TestCase):
         would step the list twice."""
         src = self.script()
         for action in ("call pick_step(-1)", "call menu_step(-1)",
-                       "call calibrate", "call report_status"):
+                       "call calibrate"):
             self.assertIn("if (pressed) then " + action, src,
                           "{} still runs on the release".format(action))
+
+    def test_the_semicolon_pair_is_held_back_on_the_release(self):
+        """Semicolon and shift-semicolon share one guard.
+
+        They are the two readouts that have to answer with a panel open -- your
+        health and what is in your hand are both things a sighted player reads
+        off the bar without looking away -- so they are handled before the mode
+        test rather than in the dispatch below, which does its own release
+        check. That means the guard here is theirs alone, and a shift branch
+        added outside it would report twice per press.
+        """
+        src = self.script()
+        anchor = "if (key == DIK_SEMICOLON) then begin"
+        self.assertIn(anchor, src)
+        body = src[src.index(anchor):]
+        body = body[:body.index("set_sfall_return")]
+        self.assertIn("call report_status", body)
+        self.assertIn("call report_weapon", body)
+        for call in ("call report_status", "call report_weapon"):
+            self.assertLess(body.index("if (pressed) then"), body.index(call),
+                            "{} is reachable on the release".format(call))
 
 
 class TestSwallowIsNotZero(unittest.TestCase):
@@ -433,3 +626,20 @@ class TestSwallowIsNotZero(unittest.TestCase):
         half an event."""
         for name, src in self.scripts().items():
             self.assertNotIn("if (event != 1) then return;", src, name)
+
+
+class TestOwnKeys(unittest.TestCase):
+    """The mod must not hear the keys it types itself."""
+
+    class _Data:
+        def __init__(self, flags):
+            self.flags = flags
+
+    def test_a_key_the_player_pressed_is_heard(self):
+        self.assertTrue(f2access.from_player(0x100, self._Data(0)))
+
+    def test_a_key_the_mod_sent_is_not(self):
+        """Every digit typed into the "how many" window came back as another
+        press, and the echoes buried the player's own."""
+        self.assertFalse(f2access.from_player(
+            0x100, self._Data(f2access.LLKHF_INJECTED)))

@@ -47,9 +47,16 @@ class NVDASpeaker(Speaker):
     name = "NVDA"
 
     def __init__(self) -> None:
+        from .. import paths
+
         last: Optional[Exception] = None
-        for dll in ("nvdaControllerClient64.dll", "nvdaControllerClient32.dll"):
-            path = os.path.join(_ROOT, dll)
+        # The repo root, or beside the installed exe -- which is not _ROOT once
+        # frozen, where this file sits in _internal.
+        roots = list(dict.fromkeys((_ROOT, paths.app_dir())))
+        candidates = [os.path.join(root, dll) for dll in
+                      ("nvdaControllerClient64.dll", "nvdaControllerClient32.dll")
+                      for root in roots]
+        for path in candidates:
             if not os.path.exists(path):
                 continue
             try:

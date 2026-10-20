@@ -4,6 +4,7 @@
     python install.py                      find the game automatically
     python install.py "D:\\Games\\Fallout2"  or say where it is
     python install.py --check              report what is wrong, change nothing
+    python install.py --uninstall          take the mod back out
 
 Copies the compiled scripts into the game's script folder and makes sure the
 handful of settings the mod depends on are set.
@@ -55,6 +56,30 @@ REQUIRED = {
         "ExtraSaveSlots": "1",
         "AutoQuickSave": "1",
         "AutoQuickSavePage": "1",
+        # Reload, on R. sfall's own description of the setting is "a key to
+        # press to reload your currently equipped weapon or use the active
+        # item", and it ships disabled.
+        #
+        # **The engine's reload, not one the mod builds.** Fallout puts reload
+        # in the same rotation as the firing modes on the weapon slot, so
+        # reaching it without sight means cycling a mode nobody can read to a
+        # position nobody can see, then LEFT clicking the slot -- which in any
+        # other position of that rotation attacks. Every part of that is a
+        # thing to get wrong. This key skips the whole of it, costs the action
+        # points the engine says it costs, and needs no pointer at all.
+        #
+        # 19 is the DX scancode for R, which the manual's key list leaves free.
+        "ReloadWeaponKey": "19",
+        # **Lets the scripts call the engine's own action functions.** The
+        # action menu's Use, Look, Talk and use-an-item-on are carried out by
+        # calling exactly what the engine's menu calls, so nothing has to be
+        # pointed at -- which is the only way to reach something drawn behind
+        # a wall. sfall refuses call_offset without this, silently; the
+        # scripts check it and fall back to pointing when it is off.
+        #
+        # 1, not 2: 2 also turns off sfall's check on which addresses may be
+        # touched, and nothing here needs that.
+        "AllowUnsafeScripting": "1",
         # **Which high resolution patch is in charge.**
         #
         # 1 uses sfall's built-in one; 0 hands the job to an external
@@ -75,10 +100,33 @@ REQUIRED = {
         # Compare the two titles to tell at a glance which is running. sfall's
         # own says so: "FALLOUT II @sfall 4.4.8 : 1024x768 [DX9]".
         "HiResMode": "1",
+        # **Windowed, and this is the setting that decides it -- not the one in
+        # f2_res.ini.**
+        #
+        # sfall's own comment two lines above this option says so: "If using
+        # the hi-res patch by Mash, this option will always be read from the
+        # main ddraw.ini file". With HiResMode=1 above, `Mode` wins and
+        # f2_res.ini's WINDOWED is simply not consulted. The installer set only
+        # WINDOWED for a long time, and on any install shipping Mode=4 that was
+        # a setting written, reported as written, and ignored.
+        #
+        # 4 is DX9 fullscreen and it breaks the pointer completely. DirectX
+        # puts up a window of its own -- class D3DProxyWindow, covering the
+        # screen -- and parks Fallout's real window off at -25600. Everything
+        # the mod does with the mouse is then computed against a window that is
+        # not on the screen, and the failure is silent: no call errors, aims
+        # simply grind through their step count and give up. It presents as the
+        # mod being slow, and that is exactly how it was reported.
+        #
+        # 5 is DX9 windowed. 6 (fullscreen windowed) is untested here and is
+        # deliberately not chosen: it is a different window arrangement and the
+        # thing that broke was a window arrangement.
+        "Mode": "5",
     },
     "f2_res.ini": {
-        # Exclusive-fullscreen DirectX starves the low-level keyboard hook the
-        # mod's hotkeys rely on. Windowed is not a preference here.
+        # Kept, and no longer relied on. This is the external hi-res patch's
+        # own switch; it is correct to set it, and it decides nothing while
+        # HiResMode=1 hands the choice to ddraw.ini's Mode above.
         "WINDOWED": "1",
     },
     "fallout2.cfg": {
@@ -207,8 +255,11 @@ def patch_ini(lines: List[str], wanted: Dict[str, str]) -> Tuple[List[str], List
     return out, changes
 
 
+BACKUP_SUFFIX = ".before-access-never-changes"
+
+
 def backup(path: str) -> str:
-    dest = path + ".before-access-never-changes"
+    dest = path + BACKUP_SUFFIX
     if not os.path.exists(dest):
         shutil.copy2(path, dest)
     return dest
@@ -307,11 +358,86 @@ def install(game: str, check_only: bool, replace_config: bool) -> int:
         print("{} problem(s) need your attention.".format(problems))
         return 1
 
-    print("Ready. Start Fallout 2, then run:  python f2access.py")
+    if getattr(sys, "frozen", False):
+        print("Ready.")
+    else:
+        print("Ready. Start Fallout 2, then run:  python f2access.py")
     return 0
 
 
-def main() -> int:
+def setting_values(lines: List[str], keys) -> Dict[str, str]:
+    """The value each of `keys` has in an ini file, first occurrence wins.
+
+    The same rule `patch_ini` writes by, so what is read back here is exactly
+    what was there before it wrote.
+    """
+    found: Dict[str, str] = {}
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith(";") and "=" in stripped:
+            key, value = (part.strip() for part in stripped.split("=", 1))
+            if key in keys and key not in found:
+                found[key] = value
+    return found
+
+
+def uninstall(game: str) -> int:
+    """Take the scripts out and put back the settings install() changed.
+
+    **The settings, not the files.** The backups are whole copies of each file
+    from before the first install, and copying them back would also undo
+    everything the player changed in the months since -- a difficulty, a
+    combat speed, another mod's lines. So only the keys this mod sets are
+    restored, to the values the backup holds, and the backup is then removed
+    so that a later install starts from the file as it is.
+    """
+    problems = 0
+    print("Fallout 2: {}".format(game))
+    target = os.path.join(game, "data", "scripts")
+    for name in SCRIPTS:
+        path = os.path.join(target, name)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                print("  script {}: removed".format(name))
+            except OSError as exc:
+                print("  !! script {}: {}".format(name, exc))
+                problems += 1
+
+    for filename, wanted in REQUIRED.items():
+        path = os.path.join(game, filename)
+        saved = path + BACKUP_SUFFIX
+        if not os.path.exists(saved):
+            print("  {}: no backup, left as it is".format(filename))
+            continue
+        if not os.path.exists(path):
+            print("  {}: missing, left alone".format(filename))
+            continue
+        before = setting_values(read_ini(saved), wanted)
+        lines = read_ini(path)
+        patched, changes = patch_ini(lines, before)
+        try:
+            if patched != lines:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write("\n".join(patched) + "\n")
+            os.remove(saved)
+        except OSError as exc:
+            print("  !! {}: {}".format(filename, exc))
+            problems += 1
+            continue
+        for change in changes:
+            print("  {}: {}".format(filename, change))
+        print("  {}: restored".format(filename))
+
+    print()
+    if problems:
+        print("{} problem(s) need your attention.".format(problems))
+        return 1
+    print("Removed.")
+    return 0
+
+
+def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("game", nargs="?", help="path to the Fallout 2 folder")
@@ -322,7 +448,9 @@ def main() -> int:
                          "copies instead of patching individual settings")
     ap.add_argument("--remember", action="store_true",
                     help="save this folder as the one to use from now on")
-    args = ap.parse_args()
+    ap.add_argument("--uninstall", action="store_true",
+                    help="remove the scripts and restore the settings")
+    args = ap.parse_args(argv)
 
     if args.remember:
         if not args.game:
@@ -340,6 +468,8 @@ def main() -> int:
         print("Could not find Fallout 2. Pass the folder as an argument:")
         print('    python install.py "C:\\Path\\To\\Fallout 2"')
         return 1
+    if args.uninstall:
+        return uninstall(os.path.abspath(game))
     return install(os.path.abspath(game), args.check, args.replace_config)
 
 

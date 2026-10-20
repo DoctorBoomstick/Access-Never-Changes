@@ -332,7 +332,8 @@ def find_windows(proc, want_id: Optional[int] = None) -> List[Window]:
 
 
 def find_window_at(proc, left: int, top: int, width: int, height: int,
-                   first_region: Optional[int] = None) -> Optional[Window]:
+                   first_region: Optional[int] = None,
+                   need=()) -> Optional[Window]:
     """The window with exactly this rectangle, and the most buttons.
 
     Preferred over searching by id, because the in-game script can ask sfall for
@@ -352,6 +353,9 @@ def find_window_at(proc, left: int, top: int, width: int, height: int,
     unpacks: measured at ten to twelve seconds, during which the mod went
     completely silent, which is precisely the failure this project treats as
     worse than a wrong answer. It ran on every window open and every click.
+
+    `need` is press codes the caller is about to use. A match lacking any of
+    them is a dead window whatever its button count, and is never returned.
     """
     rect = struct.pack("<4i", left, top, left + width - 1, top + height - 1)
     best: Optional[Window] = None
@@ -369,8 +373,9 @@ def find_window_at(proc, left: int, top: int, width: int, height: int,
                 start = at - W_LEFT      # the rect sits at +0x08 in the struct
                 if start >= 0 and start + W_SIZE <= len(data):
                     win = _window_from(proc, data, region.base, start)
-                    if win is not None and (best is None
-                                            or len(win.buttons) > len(best.buttons)):
+                    if (win is not None and _has(win, need)
+                            and (best is None
+                                 or len(win.buttons) > len(best.buttons))):
                         best = win
                 at = data.find(rect, at + 1)
         # If the hint paid off, stop. Reading the remaining quarter of a
@@ -379,6 +384,10 @@ def find_window_at(proc, left: int, top: int, width: int, height: int,
         if index == 0 and first_region is not None and best is not None and best.buttons:
             return best
     return best
+
+
+def _has(win: Window, need) -> bool:
+    return all(win.by_press(code) is not None for code in need)
 
 
 class WindowFinder:
@@ -421,16 +430,43 @@ class WindowFinder:
             self._region = win.addr & ~0xFFFFF
         return win
 
-    def at(self, left: int, top: int, width: int, height: int) -> Optional[Window]:
+    def at(self, left: int, top: int, width: int, height: int,
+           need=()) -> Optional[Window]:
+        """The window with this rectangle, holding every press code in `need`.
+
+        **The rectangle and a button list are not proof of life.** A freed
+        window keeps both, and the barter window opens at the same rectangle
+        every time -- so after a reload the remembered address held the last
+        session's dead window: right rectangle, a few stale buttons, and none
+        of the scroll arrows. Every move then failed with "cannot find the
+        scroll control". `need` is the buttons the caller is about to press;
+        a remembered window missing one is stale, and the search runs again.
+        """
         key = (left, top, width, height)
 
-        remembered = self._addr.get(key)
-        if remembered is not None:
-            win = self._read(remembered)
-            if win and (win.left, win.top, win.width, win.height) == key and win.buttons:
+        # The engine's own list of open windows first. It is a handful of
+        # reads, and a window on it is alive by definition -- which a struct
+        # found in the heap never is.
+        try:
+            live = live_window_addresses(self.proc)
+        except Exception:
+            live = []
+        for addr in live:
+            win = self._read(addr)
+            if (win and (win.left, win.top, win.width, win.height) == key
+                    and win.buttons and _has(win, need)):
+                self._addr[key] = addr
                 return win
 
-        win = find_window_at(self.proc, *key, first_region=self._region)
+        remembered = self._addr.get(key)
+        if remembered is not None and (not live or remembered in live):
+            win = self._read(remembered)
+            if (win and (win.left, win.top, win.width, win.height) == key
+                    and win.buttons and _has(win, need)):
+                return win
+
+        win = find_window_at(self.proc, *key, first_region=self._region,
+                             need=need)
         if win is not None:
             self._addr[key] = win.addr
             self._region = win.addr & ~0xFFFFF

@@ -35,6 +35,7 @@ from typing import List, Optional, Tuple
 from ..input.send import guarded_click, guarded_tap, require_focus
 from ..memory.process import Process
 from . import pointer, uiwindow, worldmap
+from ..i18n import tr
 
 # The world map window, and the button that identifies it. Size alone will not
 # do -- the character sheet, the Pip-Boy and the save screen are all 640x480 --
@@ -96,14 +97,15 @@ def travel_to_area(proc: Process, hwnd: int, area: worldmap.Area,
     """
     win = panel(proc)
     if win is None:
-        return False, "The world map is not open."
+        return False, tr("worldmap.closed", "The world map is not open.")
 
     rows = worldmap.town_rows(proc)
     if area.index not in rows:
         return False, ""          # not in the list; the caller falls back
 
     if worldmap.current_area(proc) == area.index:
-        return False, "You are already at {}.".format(area.name)
+        return False, tr("travel.already_there", "You are already at {place}.",
+                         place=area.name)
 
     wanted = rows.index(area.index)
     buttons = _rows(win)
@@ -122,21 +124,24 @@ def travel_to_area(proc: Process, hwnd: int, area: worldmap.Area,
         if arrow is None:
             return False, ""
         if not _press(proc, hwnd, win, arrow, log_path):
-            return False, "Could not reach {} in the list.".format(area.name)
+            return False, tr("travel.list_unreachable", "Could not reach {place} in the list.",
+                             place=area.name)
     else:
-        return False, "Could not reach {} in the list.".format(area.name)
+        return False, tr("travel.list_unreachable", "Could not reach {place} in the list.",
+                         place=area.name)
 
     top = worldmap.town_scroll_row(proc)
     index = wanted - top
     if not 0 <= index < len(buttons):
         return False, ""
     if not _press(proc, hwnd, win, buttons[index], log_path):
-        return False, "Could not press {} in the list.".format(area.name)
+        return False, tr("travel.list_unpressed", "Could not press {place} in the list.",
+                         place=area.name)
 
     if _destination_is(proc, (area.x, area.y),
                        time.time() + CONFIRM_SECONDS):
-        return True, "Travelling to {}.".format(area.name)
-    return False, "The game did not take that. Still here."
+        return True, tr("travel.going", "Travelling to {place}.", place=area.name)
+    return False, tr("travel.refused", "The game did not take that. Still here.")
 
 
 def travel_to_point(proc: Process, hwnd: int, wx: int, wy: int,
@@ -144,21 +149,21 @@ def travel_to_point(proc: Process, hwnd: int, wx: int, wy: int,
     """Travel to a world position by clicking the map."""
     win = panel(proc)
     if win is None:
-        return False, "The world map is not open."
+        return False, tr("worldmap.closed", "The world map is not open.")
     if worldmap.travelling(proc):
-        return False, "Already travelling."
+        return False, tr("travel.already", "Already travelling.")
 
     if not _bring_into_view(proc, hwnd, wx, wy):
-        return False, "Could not scroll that square into view."
+        return False, tr("travel.no_scroll", "Could not scroll that square into view.")
 
     where = worldmap.to_screen(proc, wx, wy, win.left, win.top)
     if where is None:
-        return False, "That square is not on screen."
+        return False, tr("travel.off_screen", "That square is not on screen.")
 
-    ok, landed, why = pointer.aim_to(proc, hwnd, where[0], where[1],
+    ok, landed, why = pointer.aim_ui(proc, hwnd, where[0], where[1],
                                      log_path=log_path)
     if not ok:
-        return False, why or "Could not put the pointer there."
+        return False, why or tr("travel.no_pointer", "Could not put the pointer there.")
     guarded_click(hwnd, "left")
 
     # What the engine recorded, checked against where the pointer really ended
@@ -180,16 +185,17 @@ def travel_to_point(proc: Process, hwnd: int, wx: int, wy: int,
             break
         time.sleep(CONFIRM_POLL)
     if got is None:
-        return False, "The game did not take that. Still here."
+        return False, tr("travel.refused", "The game did not take that. Still here.")
     if expected is not None and got != expected:
         # The engine took a destination, but not the one this click made. Say
         # so rather than reporting the journey that was asked for.
-        return False, "The game read that click somewhere else. Not travelling."
+        return False, tr("travel.elsewhere",
+                         "The game read that click somewhere else. Not travelling.")
     # Which square the engine actually accepted, which is the honest answer even
     # when it is one over from the one aimed at.
     landed_square = (got[0] // worldmap.SUBTILE, got[1] // worldmap.SUBTILE)
     if landed_square != (wx // worldmap.SUBTILE, wy // worldmap.SUBTILE):
-        return True, "Travelling, one square off the one you picked."
+        return True, tr("travel.off_by_one", "Travelling, one square off the one you picked.")
     return True, ""
 
 
@@ -235,7 +241,7 @@ def _press(proc: Process, hwnd: int, win: uiwindow.Window,
            button: uiwindow.Button, log_path: Optional[str]) -> bool:
     """Click a button of the world map panel, by its own rectangle."""
     x, y = button.centre(win)
-    ok, _landed, _why = pointer.aim_to(proc, hwnd, x, y, log_path=log_path)
+    ok, _landed, _why = pointer.aim_ui(proc, hwnd, x, y, log_path=log_path)
     if not ok:
         return False
     guarded_click(hwnd, "left")
@@ -243,28 +249,104 @@ def _press(proc: Process, hwnd: int, win: uiwindow.Window,
     return True
 
 
-def enter_town_view(proc: Process, hwnd: int) -> Tuple[bool, str]:
-    """Open the town view of the place the player is standing on.
-
-    `T` is the engine's own key for this, so nothing is aimed at. It only works
-    where the engine allows it, which its dispatch at 0x004C04DC spells out:
-    not while travelling, standing on an area, that area visited rather than
-    merely known, and the area having a town picture at all. Checking those here
-    means the mod can say which one failed instead of pressing a key that does
-    nothing.
-    """
-    if worldmap.travelling(proc):
-        return False, "Not while you are travelling."
+def standing_on(proc: Process) -> Optional[worldmap.Area]:
+    """The place the player's marker is on, or None in open country."""
     index = worldmap.current_area(proc)
     if index is None:
-        return False, "You are not at a place."
+        return None
     table = worldmap.areas(proc)
-    if not 0 <= index < len(table):
-        return False, "You are not at a place."
-    area = table[index]
-    if area.state != worldmap.VISITED:
-        return False, "You have not been inside {} yet.".format(area.name)
-    if not area.ways_in:
-        return False, "{} has no map to show.".format(area.name)
-    guarded_tap(hwnd, "t", settle=0.2)
-    return True, ""
+    return table[index] if 0 <= index < len(table) else None
+
+
+def enter_here(proc: Process, hwnd: int,
+               log_path: Optional[str] = None) -> Tuple[bool, str]:
+    """Go into the place the player is standing on, whichever way the engine
+    offers.
+
+    There are two ways in and the engine chooses between them on the spot, in
+    one dispatch at 0x004C0206. **This cost a real playthrough five minutes of
+    silence, and the fault was the mod's.** A place you have travelled to but
+    never entered is KNOWN, not VISITED, and the town view is only for VISITED
+    places -- so `T` at Klamath is ignored by the engine, correctly, and the
+    first version of this refused with "you have not been inside Klamath yet",
+    which is true, useless, and reads as a dead end. It is not one: the way in
+    is the other branch.
+
+    **Visited, with a picture** -- the town view, opened with the engine's own
+    `T` so nothing has to be aimed at.
+
+    **Anything else** -- a click on the player's own marker, which the engine
+    routes to the first entrance marked known and walks you straight in. That
+    is how anywhere is entered the first time.
+    """
+    if worldmap.travelling(proc):
+        return False, tr("travel.busy", "Not while you are travelling.")
+    area = standing_on(proc)
+    if area is None:
+        return False, tr("travel.nowhere", "You are not at a place.")
+
+    if area.shows_town_map:
+        guarded_tap(hwnd, "t", settle=0.2)
+        return True, ""
+
+    if not area.enters_directly:
+        return False, tr("travel.no_way_in", "There is no way into {place} from here.",
+                         place=area.name)
+
+    win = panel(proc)
+    if win is None:
+        return False, tr("worldmap.closed", "The world map is not open.")
+
+    # The marker has to be on screen to be clicked, and Home is the engine's own
+    # key for putting it there. Cheaper and more exact than scrolling by hand,
+    # and it is what a sighted player would do.
+    here = worldmap.player(proc)
+    if here is None:
+        return False, tr("travel.unknown_position", "Cannot read where you are.")
+    if worldmap.to_screen(proc, here[0], here[1], win.left, win.top) is None:
+        guarded_tap(hwnd, "home", settle=0.15)
+    where = worldmap.to_screen(proc, here[0], here[1], win.left, win.top)
+    if where is None:
+        return False, tr("travel.no_marker", "Cannot find your marker on screen.")
+
+    ok, _landed, why = pointer.aim_ui(proc, hwnd, where[0], where[1],
+                                      log_path=log_path)
+    if not ok:
+        return False, why or tr("travel.marker_unreachable",
+                                "Could not put the pointer on your marker.")
+    guarded_click(hwnd, "left")
+    way = area.first_way_in
+    if way is not None and way.name:
+        return True, tr("travel.entering_by", "Entering {place}, {way}.",
+                        place=area.name, way=way.name)
+    return True, tr("travel.entering", "Entering {place}.", place=area.name)
+
+
+def town_key_explanation(proc: Process) -> Optional[str]:
+    """Why `T` did nothing, or None when it is about to do something.
+
+    `T` belongs to the engine and the mod does not press it -- binding it would
+    press it twice. But a key that is silently ignored is indistinguishable from
+    a mod that has stopped working, and silence is this project's worst failure
+    mode. So the key is watched rather than taken: when the engine is going to
+    act, this says nothing and the town view reads itself out; when it is not,
+    this says which of the engine's conditions failed and what to press instead.
+    """
+    if worldmap.travelling(proc):
+        return tr("travel.busy", "Not while you are travelling.")
+    area = standing_on(proc)
+    if area is None:
+        return tr("travel.town_nowhere", "T shows a town map, and you are not at a place.")
+    if area.shows_town_map:
+        return None
+    if area.enters_directly:
+        way = area.first_way_in
+        if way is not None and way.name:
+            return tr("travel.town_unvisited_by",
+                      "You have not been inside {place} yet, so there is no "
+                      "town map. Enter goes in, {way}.",
+                      place=area.name, way=way.name)
+        return tr("travel.town_unvisited",
+                  "You have not been inside {place} yet, so there is no town "
+                  "map. Enter goes in.", place=area.name)
+    return tr("travel.no_town_map", "{place} has no town map.", place=area.name)

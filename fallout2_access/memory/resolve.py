@@ -45,6 +45,7 @@ import os
 import struct
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
+from ..i18n import tr
 from . import scan
 from .process import Process
 
@@ -76,9 +77,13 @@ class Resolution(NamedTuple):
         if not self.failures:
             return None
         n = len(self.failures)
-        return ("{} address{} could not be found in this version of the game. "
-                "Some screens may not be read."
-                .format(n, "" if n == 1 else "es"))
+        if n == 1:
+            return tr("offsets.missing_one",
+                      "1 address could not be found in this version of the "
+                      "game. Some screens may not be read.")
+        return tr("offsets.missing",
+                  "{count} addresses could not be found in this version of "
+                  "the game. Some screens may not be read.", count=n)
 
 
 def load(path: str = SIGNATURES) -> Optional[dict]:

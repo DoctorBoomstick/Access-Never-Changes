@@ -397,8 +397,11 @@ def memory_with_worldmap(player=(174, 123), areas=(), subtiles=None,
         mem.poke(base, area.get("internal", area["name"]).encode("cp1252")[:39] + b"\0")
         mem.poke(base + worldmap.A_INDEX, struct.pack(
             "<4i", i, area["x"], area["y"], area.get("size", 1)))
+        # State and the town picture's art id, which the engine tests together
+        # before it will show a town map.
         mem.poke(base + worldmap.A_STATE,
-                 struct.pack("<i", area.get("state", worldmap.UNKNOWN)))
+                 struct.pack("<2i", area.get("state", worldmap.UNKNOWN),
+                             area.get("label_fid", 0x0600009C)))
         entrances = area.get("entrances", ())
         mem.poke(base + worldmap.A_ENTRANCE_COUNT,
                  struct.pack("<i", len(entrances)))

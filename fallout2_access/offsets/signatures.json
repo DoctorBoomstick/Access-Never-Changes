@@ -96,8 +96,30 @@
       ],
       "pattern": "51 00 88 25 ?? ?? ?? ?? 88 25 14 8D"
     },
-    "CHARGEN_SELECTED": {
+    "CHARGEN_CARD": {
       "address": 5704172,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.chargen",
+          "CARD_ADDR"
+        ]
+      ],
+      "pattern": "57 00 89 0D ?? ?? ?? ?? 89 15 E0 07"
+    },
+    "CHARGEN_FOLDER": {
+      "address": 5703636,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.chargen",
+          "FOLDER_ADDR"
+        ]
+      ],
+      "pattern": "57 00 89 15 ?? ?? ?? ?? E9 90 00 00"
+    },
+    "CHARGEN_SELECTED": {
+      "address": 5703632,
       "operand_offset": 4,
       "owners": [
         [
@@ -105,7 +127,7 @@
           "SEL_ADDR"
         ]
       ],
-      "pattern": "57 00 89 0D ?? ?? ?? ?? 89 15 E0 07"
+      "pattern": "00 00 8B 2D ?? ?? ?? ?? 89 84 24 04"
     },
     "CHAR_NAME": {
       "address": 5691228,
@@ -413,6 +435,17 @@
       ],
       "pattern": "3F 48 00 B8 ?? ?? ?? ?? E8 54 29 00"
     },
+    "MSG_PERK": {
+      "address": 6701780,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.perkpick",
+          "MSG_PERK"
+        ]
+      ],
+      "pattern": "04 00 00 B8 ?? ?? ?? ?? E8 66 E3 FE"
+    },
     "MSG_PIPBOY": {
       "address": 6701896,
       "operand_offset": 4,
@@ -490,6 +523,39 @@
         ]
       ],
       "pattern": "00 00 00 B8 ?? ?? ?? ?? E8 90 80 FC"
+    },
+    "PERK_LINE": {
+      "address": 5703644,
+      "operand_offset": 6,
+      "owners": [
+        [
+          "..game.perkpick",
+          "LINE_ADDR"
+        ]
+      ],
+      "pattern": "A8 07 57 00 03 05 ?? ?? ?? ?? 8B 14 C5 AE FC 56"
+    },
+    "PERK_OPTIONS": {
+      "address": 5700784,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.perkpick",
+          "OPTIONS"
+        ]
+      ],
+      "pattern": "02 00 00 B8 ?? ?? ?? ?? E8 0F 34 0B"
+    },
+    "PERK_TOP": {
+      "address": 5703592,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.perkpick",
+          "TOP_ADDR"
+        ]
+      ],
+      "pattern": "0C 00 00 A1 ?? ?? ?? ?? 03 05 DC 07"
     },
     "PREMADE_COUNTER": {
       "address": 5366496,

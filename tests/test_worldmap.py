@@ -309,6 +309,69 @@ class TestScanner(unittest.TestCase):
         self.assertIn("No places", cursor.scan_jump(mem))
 
 
+class TestGettingIn(unittest.TestCase):
+    """The two ways into a place, and the one that looked like a dead end.
+
+    A place you have travelled to but never entered is KNOWN, not VISITED. The
+    engine's T only opens a town map for VISITED places, so at Klamath it is
+    silently ignored -- and the first version of this mod answered "you have not
+    been inside Klamath yet", which is true and reads as there being no way in.
+    There is: clicking your own marker walks you through the first known
+    entrance, and that is how anywhere is entered the first time.
+    """
+
+    def setUp(self):
+        from fallout2_access.game import worldtravel
+        self.travel = worldtravel
+
+    def _at(self, index):
+        return _world(current_area=index)
+
+    def test_a_visited_place_shows_its_town_map(self):
+        arroyo = worldmap.areas(self._at(0))[0]
+        self.assertTrue(arroyo.shows_town_map)
+        self.assertFalse(arroyo.enters_directly)
+
+    def test_a_place_you_have_only_heard_of_is_entered_directly(self):
+        klamath = worldmap.areas(self._at(1))[1]
+        self.assertFalse(klamath.shows_town_map)
+        self.assertTrue(klamath.enters_directly)
+        self.assertEqual(klamath.first_way_in.name, "Downtown")
+
+    def test_a_place_with_no_picture_never_shows_a_town_map(self):
+        """The engine tests the art id too, and -1 means there is none."""
+        mem = fakes.memory_with_worldmap(
+            areas=({"name": "Nowhere", "x": 100, "y": 100,
+                    "state": worldmap.VISITED, "label_fid": -1,
+                    "entrances": [{"name": "In", "map": 4}]},))
+        self.assertFalse(worldmap.areas(mem)[0].shows_town_map)
+
+    def test_t_is_explained_where_the_engine_ignores_it(self):
+        """Silence is indistinguishable from a broken mod."""
+        said = self.travel.town_key_explanation(self._at(1))
+        self.assertIsNotNone(said)
+        self.assertIn("Klamath", said)
+        self.assertIn("Enter goes in", said)
+        self.assertIn("Downtown", said)
+
+    def test_t_is_not_explained_where_it_is_about_to_work(self):
+        """Otherwise the mod talks over the thing it just opened."""
+        self.assertIsNone(self.travel.town_key_explanation(self._at(0)))
+
+    def test_t_in_open_country_says_what_it_is_for(self):
+        said = self.travel.town_key_explanation(_world(current_area=-1))
+        self.assertIn("not at a place", said)
+
+    def test_t_while_travelling_says_so(self):
+        said = self.travel.town_key_explanation(
+            _world(current_area=1, travelling=1))
+        self.assertIn("travelling", said)
+
+    def test_standing_on_reads_the_place_under_the_marker(self):
+        self.assertEqual(self.travel.standing_on(self._at(1)).name, "Klamath")
+        self.assertIsNone(self.travel.standing_on(_world(current_area=-1)))
+
+
 class _Ann:
     """Just enough Announcer to record what would have been said."""
 

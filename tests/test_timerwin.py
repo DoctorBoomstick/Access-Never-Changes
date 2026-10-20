@@ -74,41 +74,39 @@ class TestWords(unittest.TestCase):
         self.assertEqual(seconds(timerwin.MAX_STEPS), 180)
 
 
-class TestRewind(unittest.TestCase):
-    def test_it_presses_down_more_than_the_range_is_long(self):
-        """That is what makes the minimum certain from any starting value."""
+class TestStart(unittest.TestCase):
+    def test_it_opens_on_a_minute_without_a_click(self):
+        """The engine's own starting value, 0x004768C3. Nothing is pressed."""
         t = Driven(PANEL)
-        self.assertTrue(t.rewind())
-        self.assertEqual(t.sent, [(timerwin.STEP_DOWN, timerwin.REWIND_PRESSES)])
-        self.assertGreater(timerwin.REWIND_PRESSES, timerwin.MAX_STEPS)
+        t.start()
+        self.assertEqual(t.steps, 6)
+        self.assertEqual(seconds(t.steps), 60)
+        self.assertEqual(t.sent, [])
 
-    def test_it_lands_on_the_minimum(self):
-        t = Driven(PANEL)
-        t.rewind()
-        self.assertEqual(t.steps, timerwin.MIN_STEPS)
-
-    def test_a_failed_rewind_leaves_the_value_unknown(self):
-        """Not zero, not the minimum: unknown. A countdown nobody verified is
-        the one number here that must never be announced confidently."""
+    def test_a_failed_step_leaves_the_value_unknown(self):
+        """Not the old value, not a guess: unknown. A countdown nobody
+        verified is the one number here that must never be announced
+        confidently."""
         t = Driven(PANEL, works=False)
-        self.assertFalse(t.rewind())
+        t.start()
+        self.assertIsNone(t.step(1))
         self.assertIsNone(t.steps)
 
 
 class TestStep(unittest.TestCase):
     def setUp(self):
         self.t = Driven(PANEL)
-        self.t.rewind()
+        self.t.start()
         self.t.sent = []
 
     def test_stepping_up_sends_that_many_presses(self):
-        self.assertEqual(self.t.step(3), 4)
+        self.assertEqual(self.t.step(3), 9)
         self.assertEqual(self.t.sent, [(timerwin.STEP_UP, 3)])
 
     def test_stepping_back_down(self):
         self.t.step(5)
         self.t.sent = []
-        self.assertEqual(self.t.step(-2), 4)
+        self.assertEqual(self.t.step(-2), 9)
         self.assertEqual(self.t.sent, [(timerwin.STEP_DOWN, 2)])
 
     def test_it_clamps_to_the_games_range(self):
@@ -118,7 +116,7 @@ class TestStep(unittest.TestCase):
     def test_at_an_end_it_sends_nothing(self):
         """The engine clamps too, so extra presses are harmless -- but sending
         them would make the count and the window disagree if it did not."""
-        self.t.step(-5)
+        self.t.step(-100)
         self.t.sent = []
         self.assertEqual(self.t.step(-1), timerwin.MIN_STEPS)
         self.assertEqual(self.t.sent, [])

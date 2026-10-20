@@ -18,6 +18,7 @@ import ctypes
 import ctypes.wintypes as wt
 import time
 from typing import List, Optional, Sequence, Tuple
+from ..i18n import tr
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -34,6 +35,16 @@ DIK = {
     "down": (0x50, True),
     "left": (0x4B, True),
     "right": (0x4D, True),
+    # The four the manual gives the inventory lists, and the engine really does
+    # answer them -- tested against the live game rather than taken on the
+    # manual's word, because the same manual is silent about the arrows the
+    # scripts took. Home puts a list at the top and End at the bottom, in one
+    # keystroke and with nothing pointed at; Page Up and Page Down move it by
+    # exactly one pane. See `itemmove.scroll_to` for what that is worth.
+    "home": (0x47, True),
+    "end": (0x4F, True),
+    "pageup": (0x49, True),
+    "pagedown": (0x51, True),
     "enter": (0x1C, False),
     "escape": (0x01, False),
     "tab": (0x0F, False),
@@ -44,6 +55,14 @@ DIK = {
     # option i is pressed by the key '1' + i, which the engine states in its
     # own button table -- so saying a reply is pressing one of these rather
     # than pointing at anything.
+    #
+    # Zero and backspace are here for the "Move Items" window, which reads
+    # digits typed at it and takes one off on a backspace -- see quantity.py.
+    # Zero had no entry at all, which is worth a line of its own: the mod had
+    # exactly one route to the digit and it was `numpad0`, whose meaning
+    # depends on Num Lock and which that window reads as a zero.
+    "0": (0x0B, False),
+    "backspace": (0x0E, False),
     "1": (0x02, False),
     "2": (0x03, False),
     "3": (0x04, False),
@@ -119,6 +138,14 @@ DIK = {
     # this mod can do, because it would have to hold the button down across an
     # aim it cannot verify half way through.
     "lctrl": (0x1D, False),
+    # Left Shift, held for the same reason and never on its own. ddraw.ini
+    # binds ItemFastMoveKey=42 to it, which moves a whole stack instead of
+    # opening the "Move Items" window to ask how many. Ctrl says "do not drag";
+    # Shift says "do not ask". Measured: Ctrl alone opened the quantity picker
+    # and moved nothing, so the pair is what a move actually needs.
+    "lshift": (0x2A, False),
+    "rshift": (0x36, False),
+    "rctrl": (0x1D, True),
 }
 
 
@@ -208,21 +235,112 @@ def tap_many(key: str, count: int, **kwargs) -> None:
 WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 
 
-def find_game_window(pid: int) -> Optional[int]:
-    """The main visible top-level window belonging to `pid`."""
+# Fallout 2's own window class. GNW is the engine's windowing library and this
+# is the class it registers, so it is the one window that is actually the game.
+GAME_WINDOW_CLASS = "GNW95 Class"
+
+# The window DirectX puts up in front of it. Not the game: keystrokes sent here
+# reach nothing and the pointer means nothing, but it is visible, titled, and
+# owned by the same process, so a search that takes the first match will take
+# this one about half the time.
+PROXY_WINDOW_CLASS = "D3DProxyWindow"
+
+
+def window_class(hwnd: int) -> str:
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, buf, 256)
+    return buf.value
+
+
+def game_windows(pid: int) -> List[int]:
+    """Every visible, titled top-level window belonging to `pid`."""
     found: List[int] = []
 
     def callback(hwnd, _lparam):
         wnd_pid = wt.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wnd_pid))
         if wnd_pid.value == pid and user32.IsWindowVisible(hwnd):
-            length = user32.GetWindowTextLengthW(hwnd)
-            if length > 0:
+            if user32.GetWindowTextLengthW(hwnd) > 0:
                 found.append(hwnd)
         return True
 
     user32.EnumWindows(WNDENUMPROC(callback), 0)
-    return found[0] if found else None
+    return found
+
+
+def find_game_window(pid: int) -> Optional[int]:
+    """The game's own window, chosen by class rather than by luck.
+
+    **This cost a whole evening's play, and it failed by being intermittent.**
+    Running the game full screen, DirectX adds a second visible titled window of
+    its own -- `D3DProxyWindow`, covering the screen -- so the process owns two
+    windows that both pass a "visible and titled" test. This used to return
+    whichever `EnumWindows` yielded first, which is Z-order, which is whichever
+    happened to be on top at that instant.
+
+    When it picked the proxy, every keystroke the mod sent went nowhere and
+    every aim ground through its full step count against a pointer that could
+    not move. Nothing errored. It reads exactly like the mod being slow, and
+    that is how it was reported.
+
+    So the game is identified by the class GNW registers for it, and the proxy
+    is refused outright rather than merely deprioritised: on a build where the
+    game's own window is somehow missing, having no window at all is a failure
+    the mod reports, while having the proxy is a failure it cannot detect.
+    """
+    windows = game_windows(pid)
+    for hwnd in windows:
+        if window_class(hwnd) == GAME_WINDOW_CLASS:
+            return hwnd
+    # No GNW window. Take anything that is not the proxy -- other builds and
+    # other wrappers exist, and this should not be a whitelist of one.
+    for hwnd in windows:
+        if window_class(hwnd) != PROXY_WINDOW_CLASS:
+            return hwnd
+    return None
+
+
+# How far off screen a window has to be before it is certainly parked rather
+# than merely partly off the edge. The proxy parks the real window at -25600.
+_PARKED = -10000
+
+
+def fullscreen_complaint(hwnd: Optional[int], pid: int) -> Optional[str]:
+    """Say why the pointer will not work, or None when it will.
+
+    Full screen is not a supported way to run this mod and never has been --
+    the docs have said so since the first week -- but nothing checked,
+    and the way it fails is silent. DirectX parks the game's real window off
+    screen behind its own, so the pointer has no meaningful position: every
+    click the mod aims is computed against a window sitting at -25600.
+
+    Worth saying out loud rather than printing. A player who cannot see the
+    screen has no way to notice that the game went full screen, and every
+    symptom of it -- items that will not move, a barter window that does
+    nothing -- looks like the mod being broken.
+    """
+    if hwnd is None:
+        return tr("window.not_found",
+                  "Cannot find the game's window. If the game is running full "
+                  "screen, set Mode to 5 under Graphics in ddraw.ini and "
+                  "restart it.")
+    fix = tr("window.fix",
+             "Set Mode to 5 under Graphics in ddraw dot ini and restart the "
+             "game. Not WINDOWED in f2_res.ini -- with the built-in high "
+             "resolution patch that setting is ignored.")
+    rect = window_rect(hwnd)
+    if rect[0] < _PARKED or rect[1] < _PARKED:
+        return tr("window.fullscreen",
+                  "The game is running full screen, and the mod cannot aim the "
+                  "pointer that way. {fix} Reading and speaking still work; "
+                  "clicking does not.", fix=fix)
+    for other in game_windows(pid):
+        if window_class(other) == PROXY_WINDOW_CLASS:
+            return tr("window.directx",
+                      "The game is running full screen through DirectX, and "
+                      "the mod cannot aim the pointer that way. {fix} Reading "
+                      "and speaking still work; clicking does not.", fix=fix)
+    return None
 
 
 def window_title(hwnd: int) -> str:
@@ -394,22 +512,36 @@ def park_pointer(hwnd: int) -> None:
 MODIFIER_LEAD = 0.18
 
 
-def mouse_click_with(modifier: str, button: str = "left", **kwargs) -> None:
-    """Click while holding a key down.
+def mouse_click_with(modifier, button: str = "left", **kwargs) -> None:
+    """Click while holding one or more keys down.
 
-    Used for the inventory's move-without-dragging modifier. The key is held
-    across the whole click and released in a `finally`, because a Ctrl left
-    stuck down would silently change what every later keystroke means -- sfall
-    binds Ctrl plus the numpad to the game speed controls, which is exactly the
-    numpad this mod's hex cursor lives on.
+    Used for the inventory's move-without-dragging modifiers, and it needs
+    both of them at once. sfall has two settings here and they solve different
+    halves of the same problem: `ItemMoveSkipDragKey` (left Ctrl) turns a click
+    into a move so nothing has to be dragged, and `ItemFastMoveKey` (left
+    Shift) moves the whole stack rather than opening the "Move Items" window to
+    ask how many.
+
+    Ctrl alone is not enough, which was measured rather than assumed: a
+    Ctrl+click on an item in the barter window opened the quantity picker --
+    a 259x162 panel with up, down, Done and Cancel -- and the item did not
+    move. sfall's own note says the two "can be mapped to the same key for a
+    combined effect", which is the same statement read the other way round.
+
+    Every key is released in a `finally`, because a Ctrl left stuck down would
+    silently change what every later keystroke means -- sfall binds Ctrl plus
+    the numpad to the game speed controls, which is exactly the numpad this
+    mod's hex cursor lives on.
     """
-    if modifier not in DIK:
-        raise ValueError("unknown modifier {!r}".format(modifier))
-    scancode, extended = DIK[modifier]
-    down = _key_event(scancode, extended, False)
-    up = _key_event(scancode, extended, True)
-    user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT))
-    # Give the engine time to notice the key is down BEFORE the button goes
+    names = [modifier] if isinstance(modifier, str) else list(modifier)
+    for name in names:
+        if name not in DIK:
+            raise ValueError("unknown modifier {!r}".format(name))
+    events = [DIK[name] for name in names]
+    for scancode, extended in events:
+        user32.SendInput(1, ctypes.byref(_key_event(scancode, extended, False)),
+                         ctypes.sizeof(INPUT))
+    # Give the engine time to notice the keys are down BEFORE the button goes
     # down. Fallout's input loop is slow -- the whole `settle` argument on tap()
     # exists because of it -- and a modifier pressed thirty milliseconds ahead
     # of the click was not registered at all: the click fell through as an
@@ -418,7 +550,9 @@ def mouse_click_with(modifier: str, button: str = "left", **kwargs) -> None:
     try:
         mouse_click(button, **kwargs)
     finally:
-        user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT))
+        for scancode, extended in reversed(events):
+            user32.SendInput(1, ctypes.byref(_key_event(scancode, extended, True)),
+                             ctypes.sizeof(INPUT))
         time.sleep(0.03)
 
 

@@ -27,12 +27,21 @@ import os
 
 from .game import screens
 from .game.aim import Aimer
-from .game.chargen import CharGen
+from .game.chargen import CharGen, MSG_EDITOR, POINTER_SECTIONS
+from .game import perkpick
+from . import words
+
+# editor.msg's own title for the perk window: "PICK A PERK".
+MSG_PICK_A_PERK = 152
 from .game.combat import CombatWatcher
+from . import controls
+from .controls import Binding
+from .i18n import tr, tr_text
+from .game import calledshot, pausemenu, prefs
 from .game.displaywin import DisplayWindow
-from .game import (actions, charsheet, dialogue, itemactions, itemmove,
-                   pipboy, slotscreen, timerwin, uiwindow)
-from .game import inventory
+from .game import (actions, barter, charsheet, dialogue, itemactions, itemmove,
+                   pipboy, quantity, slotscreen, timerwin, uiwindow)
+from .game import floattext, history, inventory
 from .game.inventory import InventoryWatcher
 from .game.premade import PremadeScreen
 from .game.saves import SaveWatcher
@@ -44,6 +53,7 @@ from .game.worldlog import HexReading, WorldLog
 from .input.send import (
     FocusLost,
     find_game_window,
+    fullscreen_complaint,
     guarded_click,
     guarded_tap,
     is_foreground,
@@ -54,6 +64,9 @@ from .memory.process import FALLOUT_EXE_NAMES, Process, ProcessNotFound
 from .speech.backends import Speaker, get_speaker
 
 POLL_HZ = 20.0
+# A tick this slow is logged with where its time went. Queued keys are thrown
+# away after a second, so half that is already worth knowing about.
+SLOW_TICK_SECONDS = 0.5
 RECONNECT_SECONDS = 2.0
 
 # The two screen flags are not updated atomically. Mid-transition they can read
@@ -86,6 +99,15 @@ SCREEN_STABLE_TICKS = 4
 # a cheap trade -- and it costs nothing on the path players take far more often.
 SELECT_AFTER_EDITOR_TICKS = 60
 
+# Main menu straight to the character editor, which the game never does: New
+# Game always passes through character selection first. But opening Load from
+# the main menu briefly reads as the editor -- the editor's window handle goes
+# live before the load screen's window has its buttons -- and four polls was
+# not always long enough for the load screen to claim the reading, so "Load"
+# was sometimes announced as "Character creation" (owner, 0.2.36). Two seconds
+# outlasts the load screen's arrival and still lets a real editor through.
+EDITOR_FROM_MENU_TICKS = 40
+
 # The same idea, for a conversation. The engine writes the NPC's line and
 # rebuilds the list of replies on different frames, so a reading taken between
 # the two pairs this line with the previous one's answers. That is not a
@@ -99,15 +121,44 @@ DIALOGUE_STABLE_TICKS = 2
 # instantly -- see the note in gl_world.ssl's calibrate.
 CURSOR_SETTLE = 0.35
 
-MAIN_MENU_HELP = (
-    "Main menu. Press N for new game, L to load a game, I for the intro, "
-    "O for options, C for credits, E to exit."
-)
-SELECT_HELP = (
-    "Left and right arrows cycle characters. Press T to take this one, "
-    "M to modify it, C to create your own, or B to go back."
-)
-HELP_NOTHING = "Nothing selected."
+def main_menu_help() -> str:
+    return tr("mainmenu.help", "Main menu. Press N for new game, L to load a "
+              "game, I for the intro, O for options, C for credits, E to exit.")
+
+
+def select_help() -> str:
+    return tr("select.help", "Left and right arrows cycle characters. Press T "
+              "to take this one, M to modify it, C to create your own, or B to "
+              "go back.")
+
+
+def nothing_selected() -> str:
+    return tr("inventory.nothing_selected", "Nothing selected.")
+
+# How soon after Control and X a question box is taken to be the one it opened.
+QUIT_KEY_SECONDS = 3.0
+
+# How long a second press of O has to confirm an offer the mod asked about.
+OFFER_CONFIRM_SECONDS = 6.0
+
+
+def _unsafe_scripting(game_dir) -> bool:
+    """Is AllowUnsafeScripting on in the game's ddraw.ini?
+
+    Read here as well as from the script's WORLD:unsafe line, which is only
+    printed when a game loads -- start the mod after that and the line has
+    already gone by.
+    """
+    import os
+    import re as _re
+
+    try:
+        with open(os.path.join(game_dir, "ddraw.ini"), encoding="latin-1") as fh:
+            text = fh.read()
+    except (OSError, TypeError):
+        return False
+    m = _re.search(r"^\s*AllowUnsafeScripting\s*=\s*(\d+)", text, _re.M)
+    return bool(m and int(m.group(1)) > 0)
 
 
 class Announcer:
@@ -135,6 +186,11 @@ class Announcer:
         if not text or (text == self._last and not force):
             return
         self._last = text
+        # Everything spoken goes in the log too. Without it, "that was never
+        # read" could not be told apart from "that was read and cut off" or
+        # "that was read and missed" -- which is how the character sheet's
+        # points went undiagnosed with every other line it needed in hand.
+        print("[say{}] {}".format("!" if interrupt else "", text), flush=True)
         self.speaker.speak(text, interrupt=interrupt)
 
     def answer(self, text: str) -> None:
@@ -146,9 +202,24 @@ class Announcer:
 
 
 class Watcher:
-    """One screen. Subclasses announce entry and changes."""
+    """One screen. Subclasses announce entry and changes.
+
+    `KEYS` is the screen's keyboard, in the grammar of controls.py: it is what
+    the keys do, what F1 says, and what tests/test_controls.py checks.
+    """
 
     key = "?"
+    # Said by F1 before the keys: what this screen is called.
+    TITLE = ""
+    KEYS: tuple = ()
+
+    def help_keys(self) -> tuple:
+        """The keys F1 reads. A screen whose keys depend on what is open on it
+        answers for the moment; most just have the one list."""
+        return self.KEYS
+
+    def help_title(self) -> str:
+        return tr_text("screen", self.TITLE) if self.TITLE else ""
 
     def reset(self) -> None:
         pass
@@ -171,12 +242,19 @@ class Watcher:
 
 class MainMenuWatcher(Watcher):
     key = screens.MAIN_MENU
+    TITLE = "Main menu"
+    KEYS = (
+        Binding("N", "new game", controls.GAME),
+        Binding("L", "load a game", controls.GAME),
+        Binding("O", "options", controls.GAME),
+        Binding("E or Escape", "exit", controls.GAME),
+    )
 
     def enter(self, ann: Announcer) -> None:
-        ann.answer(MAIN_MENU_HELP)
+        ann.answer(main_menu_help())
 
     def repeat(self, ann: Announcer) -> None:
-        ann.answer(MAIN_MENU_HELP)
+        ann.answer(main_menu_help())
 
     summary = repeat
     describe = repeat
@@ -186,6 +264,14 @@ class SelectWatcher(Watcher):
     """Premade character selection."""
 
     key = screens.SELECT
+    TITLE = "Character selection"
+    KEYS = (
+        Binding("Left and Right", "the three ready-made characters", controls.GAME),
+        Binding("T", "take this one", controls.GAME),
+        Binding("M", "change this one", controls.GAME),
+        Binding("C", "make your own", controls.GAME),
+        Binding("B or Escape", "back", controls.GAME),
+    )
 
     def __init__(self, premade: PremadeScreen) -> None:
         self.premade = premade
@@ -200,15 +286,15 @@ class SelectWatcher(Watcher):
     def enter(self, ann: Announcer) -> None:
         info = self.premade.read()
         if not info:
-            ann.answer("Character selection.")
+            ann.answer(tr("select.title", "Character selection."))
             return
         # Leave _prev unset: the premade data can still be settling a frame
         # after the screen appears, and seeding it here made the first poll
         # see a "change" and repeat the whole announcement.
         self._prev = None
-        ann.answer("Character selection. {} {}".format(info.full(self.premade.stat_names()), SELECT_HELP
-            ),
-        )
+        ann.answer("{} {} {}".format(tr("select.title", "Character selection."),
+                                     info.full(self.premade.stat_names()),
+                                     select_help()))
 
     def poll(self, ann: Announcer) -> None:
         info = self.premade.read()
@@ -237,6 +323,15 @@ class SelectWatcher(Watcher):
 
 class CharGenWatcher(Watcher):
     key = screens.CHARGEN
+    TITLE = "Character screen"
+    KEYS = (
+        Binding("Tab", "the next section", controls.GAME),
+        Binding("Up and Down", "move in the section", controls.GAME),
+        Binding("Left and Right, or plus and minus", "lower or raise it",
+                controls.GAME),
+        Binding("D or Enter", "done", controls.GAME),
+        Binding("C or Escape", "cancel", controls.GAME),
+    )
 
     def __init__(self, chargen: CharGen, log=None) -> None:
         self.chargen = chargen
@@ -247,9 +342,15 @@ class CharGenWatcher(Watcher):
         # 6, instead of the 8 sitting in the base stat table.
         self.log = log
         self._prev: Dict[str, object] = {}
+        # A row moved onto whose words come from the engine's label pointers,
+        # waiting for them to settle before it is read. See `poll`.
+        self._settling = False
+        # The last plus or minus already logged. See `poll`.
+        self._push_seen = None
 
     def reset(self) -> None:
         self._prev = {}
+        self._settling = False
 
     def _sync(self) -> None:
         """Hand the reader the engine's report, if there is one.
@@ -287,6 +388,9 @@ class CharGenWatcher(Watcher):
             "dialog": self.chargen.dialog(),
             "age": self.chargen.age(),
             "sex": self.chargen.sex(),
+            # sfall's race and style. Left and Right on those rows are sfall's
+            # keys, and they change nothing the engine watches.
+            "appearance": self.chargen.appearance_choice(),
             # What the current row actually says.
             #
             # The selection index is not always the thing that moves. The Kills
@@ -295,7 +399,40 @@ class CharGenWatcher(Watcher):
             # nothing -- three rows of a list reported as one, and the others
             # silent even of a number.
             "label": self._row_text(),
+            # Which folder the box shows. Tab inside the box switches folders
+            # and leaves the row where it is, so this is movement too.
+            "folder": self.chargen.folder(),
+            "card": self.chargen.card(),
+            # Spending skill points changes these and nothing else.
+            "skills": tuple(self.chargen.skills()),
+            "unspent": self._unspent(),
+            # The windows open, to notice the engine's refusal box arriving.
+            "windows": self._windows(),
+            # The perk being looked at, while the Pick a Perk window is up.
+            "perk": self._perk(),
         }
+
+    def _perk(self):
+        proc = getattr(self.chargen, "proc", None)
+        if proc is None:
+            return None
+        try:
+            return perkpick.current(proc)
+        except Exception:
+            return None
+
+    def _windows(self) -> tuple:
+        proc = getattr(self.chargen, "proc", None)
+        if proc is None:
+            return ()
+        try:
+            return tuple(uiwindow.live_window_addresses(proc))
+        except Exception:
+            return ()
+
+    def _unspent(self) -> Optional[int]:
+        sheet = self.chargen.sheet
+        return sheet.unspent if sheet is not None and sheet.ready else None
 
     def _row_text(self) -> Optional[str]:
         item = self.chargen.current()
@@ -303,13 +440,16 @@ class CharGenWatcher(Watcher):
 
     def enter(self, ann: Announcer) -> None:
         self._sync()
+        self.chargen.reset()
+        self._settling = False
         self._prev = self.snapshot() or {}
         # The same panel serves two purposes and they are not the same screen.
         # Announcing "character creation" over a character who has been played
         # for an hour is simply wrong, and it is the first thing said on the way
         # in, so it is the first thing that sounds broken.
-        title = ("Character sheet." if self.chargen.sheet is not None
-                 and self.chargen.sheet.ready else "Character creation.")
+        title = (tr("chargen.sheet_title", "Character sheet.")
+                 if self.chargen.sheet is not None and self.chargen.sheet.ready
+                 else tr("chargen.title", "Character creation."))
         item = self.chargen.current()
         ann.answer("{} {}".format(title, item.announce()) if item else title)
 
@@ -320,6 +460,23 @@ class CharGenWatcher(Watcher):
         prev, self._prev = self._prev, snap
         if not prev:
             return
+
+        sheet = self.chargen.sheet
+        push = getattr(sheet, "adjust", None) if sheet is not None else None
+        if push is not None and push != self._push_seen:
+            # One line per plus or minus, logged before anything below can
+            # return early: what the sheet saw change after it. Spending points
+            # went silent and nothing recorded why.
+            self._push_seen = push
+            opened = set(snap.get("windows") or ()) - set(prev.get("windows") or ())
+            print("[chargen] push {} on row {}: windows opened {}, skills "
+                  "changed {}, unspent {} -> {}, dialog {}, perk {}, "
+                  "current {}".format(
+                      push[0], push[1], len(opened),
+                      prev.get("skills") != snap.get("skills"),
+                      prev.get("unspent"), snap.get("unspent"),
+                      snap.get("dialog"), snap.get("perk"),
+                      self.chargen.current()), flush=True)
 
         # One of the three dialogs opening. Said before anything else, because
         # while one is up it is the entire screen as far as the player is
@@ -345,23 +502,33 @@ class CharGenWatcher(Watcher):
             return
 
         if prev.get("sex") != snap.get("sex"):
-            ann.answer("{}.".format(self.chargen.sex_name() or "sex changed"))
+            ann.answer("{}.".format(self.chargen.sex_name()
+                                    or tr("chargen.sex_changed", "sex changed")))
             return
+
+        # A new race or style. Said only from its own rows: changing sex
+        # swaps the pack too, and that was answered just above.
+        if prev.get("appearance") != snap.get("appearance"):
+            item = self.chargen.current()
+            if item is not None and item.section == "appearance":
+                ann.answer(item.announce())
+                return
 
         # Tagging or picking a trait: say what it now is, and what's left.
         if prev.get("tags") != snap.get("tags"):
             used = len(snap.get("tags") or ())
             item = self.chargen.current()
-            ann.answer("{}. {} of 3 tags used.".format(item.announce() if item else "", used
-                ),
-            )
+            ann.answer("{}. {}.".format(item.announce() if item else "",
+                                        tr("chargen.tags_used", "{used} of {most} tags used",
+                                           used=used, most=3)))
             return
         if prev.get("traits") != snap.get("traits"):
             used = len(snap.get("traits") or ())
             item = self.chargen.current()
-            ann.answer("{}. {} of 2 traits chosen.".format(item.announce() if item else "", used
-                ),
-            )
+            ann.answer("{}. {}".format(item.announce() if item else "",
+                                       tr("chargen.traits_chosen",
+                                          "{used} of {most} traits chosen.",
+                                          used=used, most=2)))
             return
 
         # A value changed under the cursor.
@@ -370,48 +537,94 @@ class CharGenWatcher(Watcher):
             points = snap.get("points")
             text = item.announce() if item else ""
             if points is not None:
-                text += ", {} points left".format(points)
+                text += ", " + tr("chargen.special_left", "{points} points left",
+                                  points=points)
             ann.answer(text)
             return
 
-        if prev.get("selection") != snap.get("selection"):
+        # **The Pick a Perk window.** It opens over the sheet the first time
+        # the sheet is opened after a level that grants one, and while it is up
+        # it is the whole screen: the arrows walk its list, Enter takes the
+        # perk and Escape leaves it for later. Those are its own keys.
+        perk, was = snap.get("perk"), prev.get("perk")
+        if perk != was:
+            if perk is not None and was is None:
+                title = (self.chargen._msg(MSG_EDITOR).get(MSG_PICK_A_PERK)
+                         or tr("perks.title", "Pick a perk")).capitalize()
+                ann.answer(tr("perks.opened", "{title}. {count} to choose from. "
+                              "{first} Enter takes it, Escape leaves it for later.",
+                              title=title, count=perk.total, first=perk.announce()))
+            elif perk is not None:
+                ann.answer(perk.announce())
+            return
+        if perk is not None:
+            return
+
+        # The engine refusing a plus or a minus. It opens a box and waits for
+        # Escape, and the box was silent -- so the push was heard as nothing
+        # happening, and the screen as stuck. A window that was not there a
+        # moment ago, straight after a push, is that box.
+        sheet = self.chargen.sheet
+        push = getattr(sheet, "adjust", None) if sheet is not None else None
+        opened = set(snap.get("windows") or ()) - set(prev.get("windows") or ())
+        if push is not None and opened and time.time() - push[2] < 2.0:
+            sheet.adjust = None
+            said = self.chargen.adjust_refused(push[0])
+            if said:
+                ann.answer("{} {}".format(said, tr("chargen.escape_closes",
+                                                   "Escape to close.")))
+                return
+
+        # Skill points spent or taken back. Said with what is left, because
+        # "how many more can I put in" is the question being asked while doing
+        # it -- the same reason SPECIAL says its points left.
+        if (prev.get("skills") != snap.get("skills")
+                or prev.get("unspent") != snap.get("unspent")):
             item = self.chargen.current()
+            if item is not None and item.section in ("skill", "points"):
+                text = item.announce()
+                unspent = snap.get("unspent")
+                if item.section == "skill" and unspent is not None:
+                    text += ", " + tr("chargen.skill_points_left",
+                                      "{points} skill points left", points=unspent)
+                ann.answer(text)
+                return
+
+        moved = (prev.get("selection") != snap.get("selection")
+                 or prev.get("folder") != snap.get("folder"))
+        if moved:
+            item = self.chargen.current()
+            if item is not None and item.section in POINTER_SECTIONS:
+                # **Not yet.** The words for these rows live in pointers the
+                # engine sets when it redraws the box, a frame after the row
+                # moves. Read now, a folder row says whatever the PREVIOUS row
+                # was called -- the measured walk caught "Kills" on a perks row
+                # and "SKILL POINTS" on Agility. So wait for them to settle.
+                self._settling = True
+                return
+            self._settling = False
             if item:
                 ann.answer(item.announce())
             else:
-                # An item outside the measured index map. The in-game sheet has
-                # sections the creation editor does not -- the Perks, Karma and
-                # Kills tabs -- and their indices have never been measured.
-                #
-                # Say the number rather than nothing. A confident wrong label
-                # would be worse than silence, but silence is what makes a
-                # screen feel broken: tabbing onto a section and hearing nothing
-                # is indistinguishable from the key not arriving. The index is a
-                # fact, it is honest about not knowing what the section is, and
-                # it is exactly what someone reading it aloud to me needs to
-                # say. It goes to the console too.
+                # A row outside the map. Say the number rather than nothing: a
+                # confident wrong label would be worse than silence, but silence
+                # is what makes a screen feel broken. It goes to the console
+                # too, so the next measuring session knows where to look.
                 index = snap.get("selection")
-                print("[chargen] no entry for editor index {}".format(index),
+                print("[chargen] no entry for editor row {}".format(index),
                       flush=True)
-                ann.answer("Item {}, not covered yet.".format(index))
+                ann.answer(tr("chargen.unknown_row", "Item {number}, not covered yet.",
+                              number=index))
             return
 
-        # A row that changed without the index changing.
-        #
-        # **Only for the Perks, Karma and Kills box.** Those three lists scroll
-        # a line at a time and leave the selection index where it was, so
-        # nothing else notices them. Everywhere else the index IS the movement,
-        # and watching the text as well announced things twice and out of
-        # order: the label pointers update a frame after the selection does, so
-        # tabbing to a new section spoke the row on the poll the index changed
-        # and spoke it again on the next, sometimes with the previous section's
-        # text still in the pointer. Tabbing read as "stats, name age sex,
-        # stats again, age sex name".
-        item = self.chargen.current()
-        if (item is not None and item.section == "record"
-                and prev.get("label") != snap.get("label")
-                and snap.get("label")):
-            ann.answer(str(snap.get("label")))
+        # Settled: the label and the card have held still for a whole poll.
+        if self._settling:
+            if (prev.get("label") == snap.get("label")
+                    and prev.get("card") == snap.get("card")):
+                self._settling = False
+                item = self.chargen.current()
+                if item:
+                    ann.answer(item.announce())
 
     def _dialog_opened(self, which: str) -> str:
         """Name the dialog and read its current value.
@@ -424,12 +637,14 @@ class CharGenWatcher(Watcher):
         """
         if which == "name":
             name = self.chargen.name()
-            return "Name. {}".format(
-                name if name and name != "None" else "Empty.")
+            return tr("chargen.name_dialog", "Name. {name}",
+                      name=name if name and name != "None"
+                      else tr("chargen.empty", "Empty."))
         if which == "age":
-            return "Age {}.".format(self.chargen.age())
+            return tr("chargen.age_dialog", "Age {age}.", age=self.chargen.age())
         if which == "sex":
-            return "Sex. {}.".format(self.chargen.sex_name() or "not known")
+            return tr("chargen.sex_dialog", "Sex. {sex}.",
+                      sex=self.chargen.sex_name() or tr("chargen.not_known", "not known"))
         return which.capitalize() + "."
 
     @staticmethod
@@ -450,28 +665,40 @@ class CharGenWatcher(Watcher):
         """
         before, after = before or "", after or ""
         if not after:
-            return "Name cleared."
+            return tr("chargen.name_cleared", "Name cleared.")
         if after.startswith(before):
             # Includes the very first letter, where `before` is empty and the
             # whole of `after` is what was just typed.
             return after[len(before):]
         if before.startswith(after):
             return "{}, {}".format(before[len(after):], after)
-        return "Name {}".format(after)
+        return tr("chargen.summary_name", "Name {name}", name=after)
 
     def repeat(self, ann: Announcer) -> None:
         self._sync()
+        perk = self._perk()
+        if perk is not None:
+            ann.answer(perk.announce())
+            return
         item = self.chargen.current()
         if item:
             ann.answer(item.announce())
 
     def describe(self, ann: Announcer) -> None:
         self._sync()
+        perk = self._perk()
+        if perk is not None:
+            # What the perk does: the card beside the list, in perk.msg's words.
+            text = perkpick.description(self.chargen.proc, perk.perk)
+            ann.answer("{}. {}".format(perk.name, text or tr("words.no_description",
+                                                             "No description.")))
+            return
         item = self.chargen.current()
         if item and item.description:
             ann.answer("{}. {}".format(item.label, item.description))
         elif item:
-            ann.answer("{}. No description.".format(item.label))
+            ann.answer(tr("inventory.no_description", "{name}. No description.",
+                          name=item.label))
 
     def summary(self, ann: Announcer) -> None:
         self._sync()
@@ -482,7 +709,7 @@ class CharGenWatcher(Watcher):
 # it was said on every entry to the world AND on every summary, which made it
 # the most-heard sentence in the mod, and a player who has read the readme is
 # being told what they already know every time they load a game. The keys are
-# documented in README.md and docs/CONTROLS.md, where they can be consulted once
+# documented in the manual (docs/manual.html), where they can be consulted once
 # rather than recited forever.
 #
 # Note what went with it, since it was the argument for keeping it: this string
@@ -532,6 +759,69 @@ class WorldWatcher(Watcher):
     """In-game map exploration, driven by gl_world.ssl through debug.log."""
 
     key = screens.WORLD
+    TITLE = "Map"
+    # The message log, set by App. Floating text goes into it from here.
+    history = None
+    # The map's keys are almost all read by gl_world.ssl itself, so these are
+    # listed for F1 rather than dispatched -- except the two mouse buttons,
+    # which only exist here.
+    KEYS = (
+        Binding("Numpad 7, 9, 4, 6, 1 and 3", "move the look cursor; 5 comes back to you",
+                controls.GAME),
+        Binding("Numpad plus", "left click on the look cursor's hex", "mouse",
+                ("click",)),
+        Binding("Numpad minus", "right click there", "mouse", ("rclick",)),
+        Binding("Numpad dot", "what can I do to this", controls.GAME),
+        Binding("Square brackets", "the scanner: next and previous kind of "
+                "thing, with Shift which one, with Control the category",
+                controls.GAME),
+        Binding("Slash", "go to the thing the scanner is on", controls.GAME),
+        Binding("Shift and slash", "the way to the look cursor", controls.GAME),
+        Binding("Control and slash", "walk all the way there; again to stop",
+                controls.GAME),
+        Binding("Semicolon", "how you are doing; with Shift, what you hold",
+                controls.GAME),
+        Binding("N and B", "attack mode and hands", controls.GAME),
+        Binding("U", "use what is in your hand", controls.GAME),
+        Binding("Shift and 1", "how much light is on the look cursor's hex",
+                controls.GAME),
+        Binding("F6 and F7", "quick save and quick load", controls.GAME),
+    )
+    TALK_KEYS = (
+        Binding("Up and Down", "the replies", "previous", ("dlg_prev",),
+                "dlg_step", (-1,)),
+        Binding("Up and Down", "the replies", "next", ("dlg_next",),
+                "dlg_step", (1,)),
+        # Dispatched by App._do_action, which has the window to type into.
+        Binding("Enter", "say the reply you are on", "choose", ("enter",)),
+        Binding("Numpad 5", "that reply again", "repeat", ("dlg_say",),
+                "dlg_say"),
+        Binding("The number row", "say a reply by its number", controls.GAME),
+    )
+    ITEM_KEYS = (
+        Binding("Up and Down", "the items", controls.GAME),
+        Binding("Left and Right", "the lists", controls.GAME),
+        Binding("Enter", "move the item: once to pick it up, once where it "
+                "goes", controls.GAME),
+        Binding("Numpad dot", "what can I do with this item", controls.GAME),
+        Binding("A", "take everything, in a container", controls.GAME),
+        Binding("O", "offer, when trading", controls.GAME),
+        Binding("Escape", "close it", controls.GAME),
+    )
+
+    def help_keys(self) -> tuple:
+        if self.talking():
+            return self.TALK_KEYS
+        if self.inventory.open:
+            return self.ITEM_KEYS
+        return self.KEYS
+
+    def help_title(self) -> str:
+        if self.talking():
+            return tr("screen.conversation", "Conversation")
+        if self.inventory.open:
+            return tr("screen.item_window", "Item window")
+        return super().help_title()
 
     def __init__(self, log: WorldLog, saves: Optional[SaveWatcher] = None,
                  proc=None, ticker=None) -> None:
@@ -554,8 +844,11 @@ class WorldWatcher(Watcher):
         self.hwnd: Optional[int] = None
         # An item-menu choice waiting to be carried out.
         self.pending_item_action: Optional[str] = None
-        # A world action-menu choice waiting to be carried out: look, talk.
-        self.pending_menu_action: Optional[str] = None
+        # Enter in an item window: gl_inven.ssl takes the key and says so, and
+        # the App moves the item off the parsing path.
+        self.pending_move = False
+        # Set from WORLD:unsafe: the scripts can call the engine's own actions.
+        self.engine_actions = False
         # What the pointer was actually put on when the menu was built.
         # The script names the object it opened the menu for, and the two
         # must agree -- the action array is never cleared, only overwritten,
@@ -570,6 +863,14 @@ class WorldWatcher(Watcher):
         # the same reason the character editor never needed a script either.
         # The scripts exist for what only the engine knows.
         self.dialogue = dialogue.Dialogue(proc) if proc is not None else None
+        # Lines said over characters' heads. The script names who; this reads
+        # what, out of the bitmap the engine drew it into. Built now rather
+        # than on the first line, because it loads the game's font and text
+        # from disk on a thread and the first line should not wait for that.
+        self.floats = None
+        game_dir = getattr(proc, "directory", None) if proc is not None else None
+        if game_dir:
+            self.floats = floattext.FloatReader(proc, game_dir)
         self._dlg_said: Optional[tuple] = None   # last reading announced
         self._dlg_seen: Optional[tuple] = None   # last reading observed
         self._dlg_ticks = 0
@@ -583,6 +884,24 @@ class WorldWatcher(Watcher):
         self._mode: Optional[int] = None
         # skill.msg, resolved lazily -- see _skill_names.
         self._skills: dict = {}
+
+    def _float_said(self, line: str) -> Optional[str]:
+        """What to say for a WORLD:float line: who said it, and what.
+
+        Your own lines are said bare. Hearing your own name before something
+        you said is noise; hearing Torr's before something Torr said is the
+        whole point.
+        """
+        parsed = floattext.float_line(line)
+        if parsed is None or self.floats is None:
+            return None
+        ptr, created, yours, who = parsed
+        text = self.floats.read(ptr, created)
+        if not text:
+            return None
+        if yours or not who:
+            return text
+        return "{}: {}".format(who, text)
 
     def _skill_names(self):
         """skill.msg, read out of the running game and cached.
@@ -607,7 +926,29 @@ class WorldWatcher(Watcher):
 
     def reset(self) -> None:
         self._queue = []
-        self.inventory.reset()
+        # **Not the item window, when the item window has not gone anywhere.**
+        #
+        # This runs whenever the mod comes back to the map from a screen of its
+        # own, and the "Move Items" window made that a screen of its own for the
+        # first time. It is a panel drawn OVER the inventory, loot or barter
+        # window: the item window's mode bit never clears, so gl_inven.ssl never
+        # sees a change and will never announce the window again. Throwing the
+        # reading away here was therefore permanent for the rest of the trade.
+        #
+        # What it cost is worth writing down, because none of it looks like an
+        # inventory bug from the outside. `open` false makes `talking()` true,
+        # so up and down started walking the conversation's reply list -- the
+        # replies waiting for the player AFTER the barter -- while left and
+        # right still stepped the item lists, because those are the in-game
+        # script's own keys and never come through here at all. And `rect` and
+        # `side` being None make `move_item` answer "Nothing selected." to
+        # every press, so the trade could not be finished either.
+        #
+        # The game mode is the thing to ask: it is the engine stating which
+        # window is up, where `open` is only the mod's memory of having been
+        # told once.
+        if not screens.is_item_window(self.log.game_mode):
+            self.inventory.reset()
         self._dlg_said = None
         self._dlg_seen = None
         self._dlg_ticks = 0
@@ -636,6 +977,8 @@ class WorldWatcher(Watcher):
             elif line.startswith("INVEN:rect"):
                 self._queue.extend((t, True) for t in self.inventory.handle(line))
                 self._dump_buttons()
+            elif line.startswith("INVEN:enter"):
+                self.pending_move = True
             elif line.startswith("INVEN:menu"):
                 said = inventory.menu_line(line)
                 if said:
@@ -663,10 +1006,43 @@ class WorldWatcher(Watcher):
                 # Combat speaks even when the mod thinks another screen is up.
                 # Being attacked is not something to withhold because a screen
                 # detector is unsure.
-                self._queue.extend((t, False) for t in self.combat.handle(line))
+                # The attack bar's selection is the exception: it is the answer
+                # to N or B, and pressing N three times should say the third.
+                urgent = line.startswith("COMBAT:bar")
+                self._queue.extend((t, urgent) for t in self.combat.handle(line))
+            elif line.startswith("WORLD:float"):
+                # Not urgent: nobody pressed a key for it, and a character
+                # talking should not cut off whatever is being said.
+                said = self._float_said(line)
+                if said:
+                    if self.history is not None:
+                        self.history.add(said)
+                    self._queue.append((said, False))
             elif line.startswith("WORLD:status"):
                 # Urgent: the player pressed a key and this is the answer.
                 said = worldlog.status_line(line)
+                if said:
+                    self._queue.append((said, True))
+            elif line.startswith("WORLD:ammo"):
+                # Not urgent: nobody pressed anything the mod knows about, and
+                # a reload arriving mid-sentence should not cut the sentence.
+                said = worldlog.ammo_line(line)
+                if said:
+                    self._queue.append((said, False))
+            elif line.startswith("WORLD:route"):
+                # Urgent: each is the answer to a key, or the end of a walk
+                # the player is waiting on.
+                said = worldlog.route_line(line)
+                if said:
+                    self._queue.append((said, True))
+            elif line.startswith("WORLD:light"):
+                # Urgent: shift and 1 was pressed and this is the answer.
+                said = worldlog.light_line(line)
+                if said:
+                    self._queue.append((said, True))
+            elif line.startswith("WORLD:weapon"):
+                # Urgent: shift-semicolon was pressed and this is the answer.
+                said = worldlog.weapon_line(line)
                 if said:
                     self._queue.append((said, True))
             elif line.startswith("WORLD:useitem"):
@@ -685,11 +1061,11 @@ class WorldWatcher(Watcher):
                     # pressing the same control.
                     if name:
                         self.pending_item_action = "useactive"
-            elif line.startswith("WORLD:menudo"):
-                # A menu entry the script cannot carry out, because it needs
-                # the pointer. Written down and picked up by the loop, off this
-                # parsing path -- driving the engine's menu takes seconds.
-                self.pending_menu_action = line
+            elif line.startswith("WORLD:unsafe"):
+                # Whether the scripts may call the engine's action functions,
+                # which is what lets the action menu reach things no pointer
+                # can. Printed once per load.
+                self.engine_actions = line.startswith("WORLD:unsafe 1")
             elif line.startswith("SKILLDEX:sneak"):
                 said = charsheet.sneak_line(line)
                 if said:
@@ -700,6 +1076,10 @@ class WorldWatcher(Watcher):
                     self._queue.append((said, True))
             elif line.startswith("WORLD:pick"):
                 said = worldlog.pick_line(line)
+                if said:
+                    self._queue.append((said, True))
+            elif line.startswith("WORLD:attack"):
+                said = worldlog.attack_line(line)
                 if said:
                     self._queue.append((said, True))
             elif line.startswith("WORLD:menu"):
@@ -722,7 +1102,13 @@ class WorldWatcher(Watcher):
                     # which says less than the second and arrives first.
                     # _pump_dialogue names the screen and reads it, which is the
                     # whole announcement rather than a trailer for it.
-                    if not screens.is_dialogue(self.log.game_mode):
+                    # Nor for the pause menu and preferences, which are
+                    # screens of their own now and say what they are on
+                    # arrival -- this said "escape menu" over the top of that,
+                    # or a beat later on the way back to the map.
+                    if not (screens.is_dialogue(self.log.game_mode)
+                            or self.log.game_mode & (screens.MODE_ESCMENU
+                                                     | screens.MODE_OPTIONS)):
                         self._queue.append(
                             (screens.mode_name(self.log.game_mode), False))
                     # Arriving at the save or load screen, the slot list IS the
@@ -735,7 +1121,7 @@ class WorldWatcher(Watcher):
                 # Changed map. Worth saying out loud on its own: an exit grid
                 # moves you somewhere entirely different, and the only other
                 # cue is the music changing.
-                self._queue.append(("New area.", False))
+                self._queue.append((tr("app.new_area", "New area."), False))
             elif line.startswith("WORLD:dude "):
                 # One hex, and a tick rather than a sentence.
                 #
@@ -760,14 +1146,10 @@ class WorldWatcher(Watcher):
                 parts = line.rstrip("|").split()
                 dist = parts[3] if len(parts) > 3 else "?"
                 self._queue.append(
-                    ("Moved {} hex{}.".format(dist, "" if dist == "1" else "es"),
+                    (tr("app.moved", "Moved {distance}.",
+                        distance=words.hexes(int(dist)) if dist.isdigit() else dist),
                      False)
                 )
-            elif line.startswith("WORLD:cursorok"):
-                # Numpad 0 pressed when the cursor was already in that mode.
-                # Confirm briefly rather than repeating the full explanation,
-                # which is what it sounds like when you press it twice.
-                self._queue.append(("Already the movement cursor.", True))
             elif line.startswith("WORLD:cursormode"):
                 # Always announce. This is the state that decides whether a
                 # click walks or fires off a skill, and it can change without
@@ -825,7 +1207,7 @@ class WorldWatcher(Watcher):
                 b.press, b.left, b.top, b.width, b.height, key), flush=True)
 
     def enter(self, ann: Announcer) -> None:
-        ann.answer("Exploring.")
+        ann.answer(tr("app.exploring", "Exploring."))
 
     def poll(self, ann: Announcer) -> None:
         while self._queue:
@@ -849,9 +1231,19 @@ class WorldWatcher(Watcher):
         what the player is looking at -- gl_inven.ssl owns it and is already
         describing both lists. Two voices narrating different halves of the
         same screen is worse than either on its own.
+
+        **Asked of the game mode as well as of the mod's own note.** `open` is a
+        latch: it is set when the script says a window opened and cleared when
+        the script says it closed, so anything that clears it while the window
+        is still there hands the conversation a screen it is not on. That
+        happened -- see `reset` -- and the symptom was up and down walking the
+        reply list in the middle of a trade. The engine's mode says which window
+        is up as a fact, so it is what decides, and the latch only narrows it
+        further.
         """
         return (self.dialogue is not None
                 and screens.is_dialogue(self.log.game_mode)
+                and not screens.is_item_window(self.log.game_mode)
                 and not self.inventory.open)
 
     def _pump_dialogue(self, ann: Announcer) -> None:
@@ -924,7 +1316,7 @@ class WorldWatcher(Watcher):
         """
         reading = self.read_dialogue()
         if reading is None or not reading.options:
-            ann.answer("No replies offered.")
+            ann.answer(tr("app.no_replies_offered", "No replies offered."))
             return
         self.dlg_index = max(0, min(self.dlg_index + delta,
                                     len(reading.options) - 1))
@@ -934,7 +1326,7 @@ class WorldWatcher(Watcher):
         """Re-read the reply the list cursor is on."""
         reading = self.read_dialogue()
         if reading is None:
-            ann.answer("Cannot read the replies.")
+            ann.answer(tr("app.cannot_read_the_replies", "Cannot read the replies."))
             return
         ann.answer(dialogue.say_option(self.dlg_index, reading.options))
 
@@ -946,19 +1338,19 @@ class WorldWatcher(Watcher):
         # loot window is open means the item under the list cursor, not the hex
         # the player last looked at before they opened it.
         if self.inventory.open:
-            ann.answer(self.inventory.repeat() or HELP_NOTHING)
+            ann.answer(self.inventory.repeat() or nothing_selected())
             return
         # In a conversation the question this key asks is "what can I say?".
         # The hex the player was last looking at is not what is on screen.
         if self.talking():
             reading = self.read_dialogue()
             ann.answer(dialogue.say_options(reading.options) if reading
-                       else "Cannot read the replies.")
+                       else tr("app.cannot_read_the_replies", "Cannot read the replies."))
             return
         if self.log.last_hex:
             ann.answer(self.log.last_hex.announce(self.log.player_name))
         else:
-            ann.answer("No hex read yet. Press numpad 5.")
+            ann.answer(tr("app.no_hex_read_yet_press_numpad_5", "No hex read yet. Press numpad 5."))
 
     def describe(self, ann: Announcer) -> None:
         """What the engine will let you do to the selected object.
@@ -990,7 +1382,7 @@ class WorldWatcher(Watcher):
             # script to have read the key, so this is the only thing that can
             # answer at all.
             if self.hwnd is None:
-                ann.answer(self.inventory.repeat() or HELP_NOTHING)
+                ann.answer(self.inventory.repeat() or nothing_selected())
             return
         # And here it asks the third question this key has been given: what did
         # they just say? A long reply is a paragraph, and one a player wants to
@@ -998,12 +1390,12 @@ class WorldWatcher(Watcher):
         if self.talking():
             reading = self.read_dialogue()
             if reading is None:
-                ann.answer("Cannot read what they said.")
+                ann.answer(tr("app.cannot_read_what_they_said", "Cannot read what they said."))
             else:
-                ann.answer(reading.reply or "They have said nothing.")
+                ann.answer(reading.reply or tr("app.they_have_said_nothing", "They have said nothing."))
             return
         if self.hwnd is None:
-            ann.answer("Not attached to the game.")
+            ann.answer(tr("app.not_attached_to_the_game", "Not attached to the game."))
             return
         if not screens.is_map_mode(self.log.game_mode):
             ann.answer("{}.".format(
@@ -1037,14 +1429,20 @@ class WorldWatcher(Watcher):
         # "Where am I" is answered by whatever currently owns the screen. Each
         # of these is a different question wearing the same key.
         if self.inventory.open:
-            ann.answer("{}. {}".format(
+            said = "{}. {}".format(
                 self.inventory.container or screens.mode_name(self.log.game_mode),
-                self.inventory.repeat() or HELP_NOTHING))
+                self.inventory.repeat() or nothing_selected())
+            # In a trade the two totals are the other thing on screen that a
+            # sighted player keeps an eye on without asking.
+            totals = self.inventory.totals()
+            if totals:
+                said = "{} {}".format(said, totals)
+            ann.answer(said)
             return
         if self.talking():
             reading = self.read_dialogue()
             ann.answer(dialogue.say_reading(reading, opening=True, hint=True)
-                       if reading else "Cannot read the conversation.")
+                       if reading else tr("app.cannot_read_the_conversation", "Cannot read the conversation."))
             return
         # In a fight, "where am I" means AP and whose turn it is. The hex-cursor
         # key reminder is not what you need while something is biting you.
@@ -1071,6 +1469,13 @@ class SlotScreenWatcher(Watcher):
     """
 
     key = screens.SLOTS
+    TITLE = "Save and load"
+    KEYS = (
+        Binding("Up and Down", "the slots", controls.GAME),
+        Binding("Left and Right", "the pages", controls.GAME),
+        Binding("Enter", "save or load the slot", controls.GAME),
+        Binding("Escape", "back", controls.GAME),
+    )
 
     def __init__(self, screen, saves: SaveWatcher, pager) -> None:
         self.screen = screen
@@ -1078,14 +1483,22 @@ class SlotScreenWatcher(Watcher):
         self.pager = pager
         self._selection: Optional[int] = None
         self._page: Optional[int] = None
-        # Is the confirmation box up? Tracked so it is announced once on
-        # arrival rather than twenty times a second.
-        self._confirm = False
+        # Which confirmation box is up, as (address, size, buttons), or None.
+        # Tracked so each box is announced once on arrival rather than twenty
+        # times a second -- and by identity rather than as a yes or no,
+        # because saving over a game is two boxes back to back, and a flag
+        # that was already set when the second replaced the first said
+        # nothing about it.
+        self._confirm = None
+        # An overwrite was asked about on this slot, so the box after it is
+        # the one that takes the save's description.
+        self._overwrite_asked = False
 
     def reset(self) -> None:
         self._selection = None
         self._page = None
-        self._confirm = False
+        self._confirm = None
+        self._overwrite_asked = False
 
     def _saved(self):
         return {s.number: s for s in self.saves.scan()}
@@ -1110,14 +1523,15 @@ class SlotScreenWatcher(Watcher):
         unreadable message is exactly the thing not to invent words for.
         """
         if len(box.buttons) < 2:
-            return ("The game is showing a message that cannot be read. "
-                    "Press Enter to dismiss it.")
+            return (tr("app.the_game_is_showing_a_message_that_cannot_be_read_press_ente", "The game is showing a message that cannot be read. "
+                    "Press Enter to dismiss it."))
 
         index = self.screen.selection()
         page = self.screen.page()
-        where = "this slot"
+        where = tr("saves.this_slot", "this slot")
         if index is not None and page is not None:
-            where = "slot {}".format(self.screen.slot_number(page, index))
+            where = tr("saves.slot", "slot {slot}",
+                       slot=self.screen.slot_number(page, index))
 
         occupied = self.screen.occupied()
         taken = bool(index is not None and index < len(occupied)
@@ -1129,15 +1543,27 @@ class SlotScreenWatcher(Watcher):
                 described = ", {}".format(description)
 
         if self.screen.loading:
-            question = "Load {}{}?".format(where, described)
+            question = tr("saves.load_question", "Load {slot}{description}?",
+                          slot=where, description=described)
+        elif self._overwrite_asked:
+            # **The second Enter.** Saving over a game is two boxes: the
+            # overwrite question, then the description, which the engine
+            # fills with the old one and takes the next Enter to accept. It
+            # came straight in on top of the first box and nothing said so,
+            # so the save seemed to need a mystery extra keypress.
+            self._overwrite_asked = False
+            return tr("saves.description", "Description for the save. Type a "
+                      "new one, or press Enter to keep it. Escape cancels.")
         elif taken:
             # The game's own words for the one case it has words for.
+            self._overwrite_asked = True
             question = self.screen.message(slotscreen.MSG_OVERWRITE) or \
-                "Save game already exists, overwrite?"
+                tr("app.save_game_already_exists_overwrite", "Save game already exists, overwrite?")
             question = "{} {}{}.".format(question, where.capitalize(), described)
         else:
-            question = "Save to {}?".format(where)
-        return "{} Enter to confirm, Escape to cancel.".format(question)
+            question = tr("saves.save_question", "Save to {slot}?", slot=where)
+        return "{} {}".format(question, tr("saves.confirm",
+                                           "Enter to confirm, Escape to cancel."))
 
     def _row(self, index: int) -> str:
         occupied = self.screen.occupied()
@@ -1146,8 +1572,9 @@ class SlotScreenWatcher(Watcher):
         if page is None:
             # The row is real and readable; which slot on disk it is, is not.
             # Say the honest half rather than a number that might be ninety out.
-            return "Row {}, {}.".format(index + 1,
-                                        "a saved game" if taken else "empty")
+            if taken:
+                return tr("saves.row_taken", "Row {row}, a saved game.", row=index + 1)
+            return tr("saves.row_empty", "Row {row}, empty.", row=index + 1)
         _character, description = self.screen.header(index)
         return slotscreen.describe(self.screen.slot_number(page, index),
                                    taken, description or "")
@@ -1182,10 +1609,10 @@ class SlotScreenWatcher(Watcher):
         landed = self.pager.goto(self.screen, wanted[0])
         if landed != wanted[0]:
             return ""
-        return "Went to the saved games."
+        return tr("app.went_to_the_saved_games", "Went to the saved games.")
 
     def _title(self) -> str:
-        return "Load game" if self.screen.loading else "Save game"
+        return tr("app.load_game", "Load game") if self.screen.loading else tr("app.save_game", "Save game")
 
     def _panel(self):
         return self.screen.panel
@@ -1195,13 +1622,13 @@ class SlotScreenWatcher(Watcher):
         if page is None:
             # Read, not counted -- so failing to read it is a real answer and
             # not an excuse to fall back on a tally that might be anywhere.
-            return "Page not known."
-        return "Page {}.".format(page + 1)
+            return tr("app.page_not_known", "Page not known.")
+        return tr("saves.page", "Page {page}.", page=page + 1)
 
     def _current(self) -> str:
         index = self.screen.selection()
         if index is None:
-            return "Cannot read the selection."
+            return tr("app.cannot_read_the_selection", "Cannot read the selection.")
         return self._row(index)
 
     def poll(self, ann: Announcer) -> None:
@@ -1211,12 +1638,13 @@ class SlotScreenWatcher(Watcher):
         # actively misleading.
         box = self.screen.confirm()
         if box is not None:
-            if not self._confirm:
-                self._confirm = True
+            seen = (box.addr, box.width, box.height, len(box.buttons))
+            if seen != self._confirm:
+                self._confirm = seen
                 ann.answer(self._confirm_line(box))
             return
         if self._confirm:
-            self._confirm = False
+            self._confirm = None
             # Nothing is said on the way out. Confirming produces a save, which
             # the savegame watcher announces from the folder; cancelling puts
             # the highlight back, which the row poll below announces anyway.
@@ -1261,12 +1689,17 @@ class SlotScreenWatcher(Watcher):
         pages = slotscreen.pages_holding(self._saved())
         where = ""
         if pages:
-            where = "Saved games on {} {}.".format(
-                "page" if len(pages) == 1 else "pages",
-                ", ".join(str(p + 1) for p in pages))
+            listed = ", ".join(str(p + 1) for p in pages)
+            if len(pages) == 1:
+                where = tr("saves.on_page", "Saved games on page {pages}.", pages=listed)
+            else:
+                where = tr("saves.on_pages", "Saved games on pages {pages}.", pages=listed)
+        if taken == 1:
+            here = tr("saves.one_here", "1 game on this page.")
+        else:
+            here = tr("saves.here", "{count} games on this page.", count=taken)
         ann.answer(" ".join(x for x in (
-            "{}.".format(self._title()),
-            "{} {} on this page.".format(taken, "game" if taken == 1 else "games"),
+            "{}.".format(self._title()), here,
             self._page_line(), where, self._current()) if x))
 
     # There is no `page` here any more. Stepping the pages by driving their
@@ -1292,6 +1725,20 @@ class TimerWatcher(Watcher):
     """
 
     key = screens.TIMER
+    TITLE = "Explosive timer"
+    KEYS = (
+        Binding("Up and Right", "longer", "more", ("dlg_prev", "num8", "right"),
+                "adjust", (1,)),
+        Binding("Down and Left", "shorter", "less", ("dlg_next", "num2", "left"),
+                "adjust", (-1,)),
+        Binding("Home", "the shortest", "least", ("home",), "adjust",
+                (-timerwin.MAX_STEPS,)),
+        Binding("End", "the longest", "most", ("end",), "adjust",
+                (timerwin.MAX_STEPS,)),
+        Binding("Enter", "arm it", "choose"),
+        Binding("Escape", "cancel", "back"),
+        Binding("Numpad 5", "say it again", "repeat", ("dlg_say",), "repeat"),
+    )
 
     def __init__(self, timer) -> None:
         self.timer = timer
@@ -1300,21 +1747,15 @@ class TimerWatcher(Watcher):
         self.timer.steps = None
 
     def enter(self, ann: Announcer) -> None:
-        # Say what the screen is before the slow part. Winding the countdown
-        # down to its floor is twenty clicks, and silence after a screen change
-        # reads as the mod having died.
-        ann.answer("Explosive timer. Setting it to the shortest.")
-        if not self.timer.rewind():
-            ann.answer("Explosive timer. Cannot reach its controls, so the "
-                       "countdown is unknown. Escape cancels.")
-            return
-        ann.say("{}. Numpad plus and minus change it, Enter arms it, "
-                "Escape cancels.".format(self._time()),
-                interrupt=False, force=True)
+        # It opens on the engine's own starting value, so there is nothing to
+        # do first -- see timerwin.START_STEPS.
+        self.timer.start()
+        ann.answer(tr("timer.opened", "Explosive timer. {time}. Up and down change "
+                      "it, Enter arms it, Escape cancels.", time=self._time()))
 
     def _time(self) -> str:
         if self.timer.steps is None:
-            return "Countdown unknown"
+            return tr("app.countdown_unknown", "Countdown unknown")
         return timerwin.say_time(self.timer.steps).capitalize()
 
     def repeat(self, ann: Announcer) -> None:
@@ -1327,18 +1768,37 @@ class TimerWatcher(Watcher):
         before = self.timer.steps
         now = self.timer.step(delta)
         if now is None:
-            ann.answer("Could not change the countdown, so it is now unknown. "
-                       "Escape cancels.")
+            ann.answer(tr("app.could_not_change_the_countdown_so_it_is_now_unknown_escape_c", "Could not change the countdown, so it is now unknown. "
+                       "Escape cancels."))
             return
         if now == before:
-            ann.answer("{}. That is as {} as it goes.".format(
-                self._time(), "short" if delta < 0 else "long"))
+            if delta < 0:
+                ann.answer(tr("timer.shortest", "{time}. That is as short as it goes.",
+                              time=self._time()))
+            else:
+                ann.answer(tr("timer.longest", "{time}. That is as long as it goes.",
+                              time=self._time()))
             return
         ann.answer(self._time() + ".")
 
 
 def _say_count(n: int, thing: str) -> str:
-    return "{} {}{}".format(n, thing, "" if n == 1 else "s")
+    """"1 page", "3 tasks" -- for the few things the Pip-Boy counts."""
+    one = n == 1
+    if thing == "page":
+        return tr("count.one_page", "1 page") if one else tr(
+            "count.pages", "{count} pages", count=n)
+    if thing == "task":
+        return tr("count.one_task", "1 task") if one else tr(
+            "count.tasks", "{count} tasks", count=n)
+    if thing == "place":
+        return tr("count.one_place", "1 place") if one else tr(
+            "count.places", "{count} places", count=n)
+    if thing == "holodisk":
+        return tr("count.one_holodisk", "1 holodisk") if one else tr(
+            "count.holodisks", "{count} holodisks", count=n)
+    return tr("count.one_film", "1 film") if one else tr(
+        "count.films", "{count} films", count=n)
 
 
 def _say_span(minutes: int) -> str:
@@ -1350,9 +1810,11 @@ def _say_span(minutes: int) -> str:
     hours, rest = divmod(minutes, 60)
     parts = []
     if hours:
-        parts.append("{} hour{}".format(hours, "" if hours == 1 else "s"))
+        parts.append(tr("count.one_hour", "1 hour") if hours == 1
+                     else tr("count.hours", "{count} hours", count=hours))
     if rest or not hours:
-        parts.append("{} minute{}".format(rest, "" if rest == 1 else "s"))
+        parts.append(tr("timer.one_minute", "1 minute") if rest == 1
+                     else tr("timer.minutes", "{minutes} minutes", minutes=rest))
     return " ".join(parts)
 
 
@@ -1378,6 +1840,19 @@ class PipboyWatcher(Watcher):
     """
 
     key = screens.PIPBOY
+    TITLE = "Pip-Boy"
+    KEYS = (
+        Binding("Up and Down", "move", "previous", ("dlg_prev", "num8"),
+                "step", (-1,)),
+        Binding("Up and Down", "move", "next", ("dlg_next", "num2"),
+                "step", (1,)),
+        Binding("Enter", "choose", "choose", ("enter",), "choose"),
+        Binding("Backspace", "back to the Pip-Boy's main list", "back",
+                ("back",), "back"),
+        Binding("Escape", "close the Pip-Boy", "back"),
+        Binding("Numpad 5", "say it again", "repeat", ("num5", "dlg_say"),
+                "repeat"),
+    )
 
     # How long to let the panel rebuild after a page is opened, before reading
     # its rows. A page swap is a click and a redraw, and reading in the same
@@ -1435,7 +1910,7 @@ class PipboyWatcher(Watcher):
         # and clicked. Numbering them says the one thing that is certainly
         # true, and it is a great deal more than the silence this screen used
         # to answer with.
-        return [("Entry {}".format(i + 1), b, b.release)
+        return [(tr("pipboy.entry", "Entry {number}", number=i + 1), b, b.release)
                 for i, b in enumerate(rows)]
 
     def _listed(self, rows) -> Optional[list]:
@@ -1493,41 +1968,44 @@ class PipboyWatcher(Watcher):
     def _current(self, win=None) -> str:
         win = win or self._window()
         if win is None:
-            return "The Pip-Boy is not open."
+            return tr("app.the_pip_boy_is_not_open", "The Pip-Boy is not open.")
         entries = self._entries(win)
         if not entries:
-            return "Nothing on this page."
+            return tr("app.nothing_on_this_page", "Nothing on this page.")
         i = self._clamp(entries)
-        return "{}, {} of {}.".format(entries[i][0], i + 1, len(entries))
+        return "{}, {}.".format(entries[i][0], words.of(i + 1, len(entries)))
 
     def _names(self, win) -> list:
         return [entry[0] for entry in self._entries(win)]
 
     def _time(self) -> str:
         reading = self.pip.clock()
-        return reading.say() if reading else "The time cannot be read."
+        return reading.say() if reading else tr("app.the_time_cannot_be_read", "The time cannot be read.")
 
     def _read_out(self, ann: Announcer, name: str, payload) -> None:
         """Say what a Status entry holds: a place's tasks, or a disk's text."""
         if isinstance(payload, pipboy.Holodisk):
             paragraphs = self.pip.disk_text(payload)
             if not paragraphs:
-                ann.answer("{}. Nothing on it that can be read.".format(name))
+                ann.answer(tr("pipboy.disk_unreadable", "{name}. Nothing on it that "
+                              "can be read.", name=name))
                 return
-            ann.answer("{}. {} of text.".format(
-                name, _say_count(len(paragraphs), "page")))
+            ann.answer(tr("pipboy.disk", "{name}. {pages} of text.", name=name,
+                          pages=_say_count(len(paragraphs), "page")))
             for n, text in enumerate(paragraphs):
                 # Queued rather than announced. A holodisk runs to several
                 # paragraphs and each one interrupting the last would leave
                 # only the final sentence alive -- the failure that made combat
                 # read as two numbers and nothing in between.
-                ann.say("Page {}. {}".format(n + 1, text),
+                ann.say(tr("pipboy.disk_page", "Page {page}. {text}", page=n + 1,
+                           text=text),
                         interrupt=False, force=True)
             return
 
         lines = self.pip.quest_lines(payload)
         if not lines:
-            ann.answer("{}. Nothing to do there.".format(name))
+            ann.answer(tr("pipboy.no_quests", "{place}. Nothing to do there.",
+                          place=name))
             return
         ann.answer("{}. {}.".format(name, _say_count(len(lines), "task")))
         for n, text in enumerate(lines):
@@ -1551,10 +2029,11 @@ class PipboyWatcher(Watcher):
             return self._time()
         minutes = self._minutes_between(before, after)
         if minutes <= 0:
-            return ("The clock has not moved, so no time passed. Either you "
-                    "cannot rest here, or there was nothing to rest for. "
-                    "It is still {}".format(self._time()))
-        return "Rested {}. {}".format(_say_span(minutes), after.say())
+            return tr("pipboy.no_rest", "The clock has not moved, so no time "
+                      "passed. Either you cannot rest here, or there was nothing "
+                      "to rest for. It is still {time}", time=self._time())
+        return tr("pipboy.rested", "Rested {span}. {time}",
+                  span=_say_span(minutes), time=after.say())
 
     @staticmethod
     def _minutes_between(before, after) -> int:
@@ -1566,9 +2045,9 @@ class PipboyWatcher(Watcher):
         """What to say about the page that just opened."""
         rows = pipboy.rows(win)
         if not rows:
-            return "Nothing on this page."
+            return tr("app.nothing_on_this_page", "Nothing on this page.")
         if self.pip.rest_names(rows) is not None:
-            return "{} ways to rest.".format(len(rows))
+            return tr("pipboy.ways_to_rest", "{count} ways to rest.", count=len(rows))
         listed = self._listed(rows)
         if listed is not None:
             if self.page == pipboy.STATUS:
@@ -1578,15 +2057,15 @@ class PipboyWatcher(Watcher):
                 parts = [_say_count(places, "place")]
                 if disks:
                     parts.append(_say_count(disks, "holodisk"))
-                return "{}. Numpad plus reads one out.".format(
-                    " and ".join(parts))
+                return tr("pipboy.read_one", "{things}. Enter reads one out.",
+                          things=(" " + tr("words.and", "and") + " ").join(parts))
             return "{}.".format(_say_count(len(listed), "film"))
         # Said once, on arrival, and never per row. The player needs to know
         # that the blank names are the mod's limit rather than an empty page --
         # otherwise a working list reads as a broken one.
-        return ("{} entries. The Pip-Boy paints this page as a picture, so "
-                "they can be counted and chosen but not read out."
-                .format(len(rows)))
+        return tr("pipboy.pictures", "{count} entries. The Pip-Boy paints this "
+                  "page as a picture, so they can be counted and chosen but not "
+                  "read out.", count=len(rows))
 
     # -- announcing --------------------------------------------------------
 
@@ -1594,7 +2073,47 @@ class PipboyWatcher(Watcher):
         self.page = None
         self.index = 0
         self._announced = False
+        # A box up on arrival can only be Z's: the alarm clock it opens on,
+        # refusing.
+        self._boxed = False
+        self._resting_asked = True
         self.poll(ann)
+
+    def _box_words(self) -> str:
+        said = (self.pip.message(pipboy.MSG_CANNOT_REST)
+                if getattr(self, "_resting_asked", False) else None)
+        return "{} {}".format(
+            said or tr("app.a_message_is_up_on_the_pip_boy", "A message is up on the Pip-Boy."),
+            tr("pipboy.enter_closes", "Enter closes it."))
+
+    def _box_check(self, ann: Announcer) -> bool:
+        """Say a message box arriving or going. True while one is up."""
+        boxed = pipboy.box_over(self.pip.proc)
+        if boxed and not getattr(self, "_boxed", False):
+            self._boxed = True
+            ann.answer(self._box_words())
+        elif not boxed and getattr(self, "_boxed", False):
+            self._boxed = False
+            self._resting_asked = False
+            # Nothing under it changed: the page that was refused never drew.
+            self.page = None
+            self.index = 0
+            ann.answer(tr("pipboy.main_list", "Pip-Boy main list. {current}",
+                          current=self._current()))
+        return boxed
+
+    def _close_box(self, ann: Announcer) -> None:
+        """Enter on a box: close it the way the box takes. The script keeps
+        Enter from the Pip-Boy, which closes on it, so Escape is sent -- the
+        box answers both, and with nothing to say yes or no to they are the
+        same."""
+        from .input.send import guarded_tap
+        if self.pip.hwnd is None:
+            return
+        try:
+            guarded_tap(self.pip.hwnd, "escape", settle=0.2)
+        except (FocusLost, OSError):
+            ann.answer(tr("app.game_is_not_focused", "Game is not focused."))
 
     def poll(self, ann: Announcer) -> None:
         """Announce the panel, once, as soon as it is really there.
@@ -1606,6 +2125,10 @@ class PipboyWatcher(Watcher):
         times a second would be watching for an event that cannot happen
         without us causing it.
         """
+        if self._window() is not None and self._box_check(ann):
+            # The box is the whole screen while it is up: it is modal.
+            self._announced = True
+            return
         if self._announced:
             return
         win = self._window()
@@ -1623,16 +2146,17 @@ class PipboyWatcher(Watcher):
             self.page = (pipboy.ALARM_CLOCK
                          if pipboy.is_alarm_page(pipboy.rows(win))
                          else self.OTHER_PAGE)
-            ann.answer("Pip-Boy. {} {} {} Numpad minus goes to the Pip-Boy's "
-                       "main list.".format(self._time(), self._page_line(win),
-                                           self._current(win)))
+            ann.answer(tr("pipboy.page_opened", "Pip-Boy. {time} {page} {current} "
+                          "Backspace goes to the Pip-Boy's main list.",
+                          time=self._time(), page=self._page_line(win),
+                          current=self._current(win)))
             return
 
         names = self._names(win)
-        ann.answer("Pip-Boy. {} {} Up and down move, numpad plus chooses, "
-                   "numpad minus comes back here.".format(
-                       self._time(),
-                       ". ".join(names) + "." if names else ""))
+        ann.answer(tr("pipboy.opened", "Pip-Boy. {time} {entries} Up and down "
+                      "move, Enter chooses, Backspace comes back here.",
+                      time=self._time(),
+                      entries=". ".join(names) + "." if names else ""))
 
     def repeat(self, ann: Announcer) -> None:
         ann.answer(self._current())
@@ -1641,31 +2165,35 @@ class PipboyWatcher(Watcher):
         """The whole list, which is what a sighted player takes in at once."""
         win = self._window()
         if win is None:
-            ann.answer("The Pip-Boy is not open.")
+            ann.answer(tr("app.the_pip_boy_is_not_open", "The Pip-Boy is not open."))
             return
         entries = self._entries(win)
         if not entries:
-            ann.answer("Nothing on this page.")
+            ann.answer(tr("app.nothing_on_this_page", "Nothing on this page."))
             return
         i = self._clamp(entries)
-        ann.answer("{} of {}. {}".format(
-            i + 1, len(entries),
+        ann.answer("{}. {}".format(
+            words.of(i + 1, len(entries)),
             " ".join("{}, {}.".format(n + 1, entry[0])
                      for n, entry in enumerate(entries))))
 
     def summary(self, ann: Announcer) -> None:
-        ann.answer("Pip-Boy. {} {}".format(self._time(), self._current()))
+        ann.answer(tr("pipboy.summary", "Pip-Boy. {time} {current}",
+                      time=self._time(), current=self._current()))
 
     # -- keys --------------------------------------------------------------
 
     def step(self, ann: Announcer, delta: int) -> None:
         win = self._window()
         if win is None:
-            ann.answer("The Pip-Boy is not open.")
+            ann.answer(tr("app.the_pip_boy_is_not_open", "The Pip-Boy is not open."))
+            return
+        if getattr(self, "_boxed", False):
+            ann.answer(self._box_words())
             return
         entries = self._entries(win)
         if not entries:
-            ann.answer("Nothing on this page.")
+            ann.answer(tr("app.nothing_on_this_page", "Nothing on this page."))
             return
         before = self._clamp(entries)
         self.index = max(0, min(before + delta, len(entries) - 1))
@@ -1673,7 +2201,7 @@ class PipboyWatcher(Watcher):
             # Clamped rather than wrapped, and said so. A list that silently
             # wraps is a list you can walk off the end of without noticing.
             ann.answer("{} {}".format(
-                "Top." if delta < 0 else "Bottom.", self._current(win)))
+                tr("app.top", "Top.") if delta < 0 else tr("app.bottom", "Bottom."), self._current(win)))
             return
         ann.answer(self._current(win))
 
@@ -1684,22 +2212,29 @@ class PipboyWatcher(Watcher):
         drawn on every page, so leaving a page's rows means nothing has to be
         sent to the game at all.
         """
+        if getattr(self, "_boxed", False):
+            self._close_box(ann)
+            return
         if self.page is None:
-            ann.answer("Already at the Pip-Boy's main list. {}"
-                       .format(self._current()))
+            ann.answer(tr("pipboy.already_main", "Already at the Pip-Boy's main "
+                          "list. {current}", current=self._current()))
             return
         self.page = None
         self.index = 0
-        ann.answer("Pip-Boy main list. {}".format(self._current()))
+        ann.answer(tr("pipboy.main_list", "Pip-Boy main list. {current}",
+                      current=self._current()))
 
     def choose(self, ann: Announcer) -> None:
         win = self._window()
         if win is None:
-            ann.answer("The Pip-Boy is not open.")
+            ann.answer(tr("app.the_pip_boy_is_not_open", "The Pip-Boy is not open."))
+            return
+        if getattr(self, "_boxed", False) or pipboy.box_over(self.pip.proc):
+            self._close_box(ann)
             return
         entries = self._entries(win)
         if not entries:
-            ann.answer("Nothing to choose here.")
+            ann.answer(tr("app.nothing_to_choose_here", "Nothing to choose here."))
             return
         i = self._clamp(entries)
         name, button, code = entries[i]
@@ -1722,15 +2257,21 @@ class PipboyWatcher(Watcher):
         # project's most persistent misreading -- it is what a mod that has
         # stopped working sounds like.
         ann.answer("{}.".format(name))
+        self._resting_asked = (code == pipboy.ALARM_CLOCK) or resting
         ok, why = self.pip.press(win, button)
         if not ok:
-            ann.answer("Could not choose {}: {}.".format(name, why))
+            ann.answer(tr("pipboy.not_chosen", "Could not choose {name}: {why}.",
+                          name=name, why=why))
             return
-
         if opening_page and code == pipboy.CLOSE:
             return          # the panel is going away; the screen change speaks
+        # The game said no with a box. Say what it said and stop: the page
+        # did not change, so describing it would describe the wrong one.
+        time.sleep(self.SETTLE)
+        if self._box_check(ann):
+            return
+
         if not opening_page:
-            time.sleep(self.SETTLE)
             if not pipboy.showing(self.pip.proc):
                 return
             if resting:
@@ -1741,16 +2282,289 @@ class PipboyWatcher(Watcher):
                 ann.say(self._current(), interrupt=False, force=True)
             return
 
-        # A destination was opened. Let it draw, then read what it offers.
+        # A destination was opened. It has had its time to draw, above.
         self.page = code
         self.index = 0
-        time.sleep(self.SETTLE)
         again = self._window()
         if again is None:
             self.page = None
             return
         ann.say(self._page_line(again) + " " + self._current(again),
                 interrupt=False, force=True)
+
+
+class QuantityWatcher(Watcher):
+    """The "Move Items" window: how many of a stack.
+
+    It appears whenever a stack of more than one is dragged, which in a shop is
+    constantly -- every pile of caps, every handful of stimpaks. Before this it
+    was invisible, and worse than invisible: it is the same 259x162 panel as the
+    explosive countdown, with the same step buttons, so the mod announced
+    "Explosive timer. Setting it to the shortest." over a player who was moving
+    bottle caps, and then wound the count down twenty times.
+
+    Done and Cancel are keyboard codes -- 13 and 27 -- so Enter and Escape are
+    the game's own keys here and the mod does not take them away. The count
+    itself is typed rather than clicked, which is the engine's own second route
+    into this window: see quantity.py.
+    """
+
+    key = screens.QUANTITY
+    TITLE = "How-many window"
+    KEYS = (
+        Binding("Up and Right", "one more, ten with Control", "more",
+                ("dlg_prev", "num8", "right"), "step", (1,)),
+        Binding("Down and Left", "one fewer, ten with Control", "less",
+                ("dlg_next", "num2", "left"), "step", (-1,)),
+        Binding("Home", "just one", "least", ("home",), "fewest"),
+        Binding("End", "all of them", "most", ("end",), "take_all"),
+    ) + tuple(
+        Binding("The number row", "type the amount", "type",
+                ("digit{}".format(d),), "digit", (d,)) for d in range(10)
+    ) + (
+        Binding("Enter", "take it", "choose"),
+        Binding("Escape", "cancel", "back"),
+        Binding("Numpad 5", "say it again", "repeat", ("dlg_say",), "repeat"),
+    )
+    # Ten at a time while Control is held; set by App before each key.
+    big = 1
+
+    def __init__(self, counter, inventory=None) -> None:
+        self.counter = counter
+        self.inventory = inventory
+        self._announced = False
+
+    def reset(self) -> None:
+        # How many there are of the thing being moved. Without it the window
+        # can only count up from one and never say what it is counting towards.
+        #
+        # The item being DRAGGED, which is not the one under the list cursor:
+        # a move is two presses and the cursor ends on the destination.
+        # Sizing the window from the cursor put a maximum of 24 on a stack of
+        # 203 caps because 24 rounds sat where they were going. The selected
+        # count is only the fallback, for a window this mod did not open.
+        most = None
+        if self.inventory is not None:
+            most = self.inventory.moving()
+            if most is None:
+                most = getattr(self.inventory, "selected_count", None)
+        self.counter.reset(most if most and most > 1 else None)
+        self._announced = False
+
+    def enter(self, ann: Announcer) -> None:
+        self.reset()
+        self._announced = True
+        ann.answer(
+            tr("quantity.opened", "How many? {count} Type a number, or up and down "
+               "change it, Control for tens. End for all of them. Enter takes it, "
+               "Escape cancels.", count=self.counter.say()))
+
+    def step(self, ann: Announcer, delta: int) -> None:
+        said = self.counter.step(delta * self.big)
+        ann.answer(said if said else tr("app.that_did_not_work", "That did not work."))
+
+    def fewest(self, ann: Announcer) -> None:
+        if not self.counter._type(1):
+            ann.answer(tr("app.that_did_not_work", "That did not work."))
+            return
+        self.counter.count = 1
+        self.counter.typed = ""
+        ann.answer(self.counter.say())
+
+    def digit(self, ann: Announcer, d: int) -> None:
+        said = self.counter.digit(d)
+        ann.answer(said if said else tr("app.that_did_not_work", "That did not work."))
+
+    def take_all(self, ann: Announcer) -> None:
+        said = self.counter.all()
+        ann.answer(said if said else tr("app.that_did_not_work", "That did not work."))
+
+    def cancel(self, ann: Announcer) -> None:
+        """Numpad minus, which is the right mouse button everywhere else.
+
+        It has to mean something here. Left to fall through it was a real right
+        click sent at wherever the pointer had been left -- over a modal window,
+        onto the barter screen underneath -- which is the one thing this screen
+        must never do. Cancelling is what the mod's other panels put on this
+        key, and it is what the window's own Cancel button does.
+        """
+        ann.answer(tr("app.cancelled", "Cancelled.") if self.counter.cancel()
+                   else tr("app.nothing_to_cancel", "Nothing to cancel."))
+
+    def repeat(self, ann: Announcer) -> None:
+        ann.answer(tr("app.how_many", "How many?") + " " + self.counter.say())
+
+    def describe(self, ann: Announcer) -> None:
+        self.repeat(ann)
+
+    def summary(self, ann: Announcer) -> None:
+        self.repeat(ann)
+
+
+class CalledShotWatcher(Watcher):
+    """The called-shot window: which body part an aimed attack goes for.
+
+    A modal loop of the engine's own, so every key the mod has falls in here
+    while it is up -- the same rule as the "how many" window. Escape is the
+    window's own and already cancels.
+    """
+
+    key = screens.CALLED_SHOT
+    TITLE = "Aimed shot"
+    KEYS = (
+        Binding("Up and Down", "choose a body part", "previous",
+                ("dlg_prev", "num8"), "step", (-1,)),
+        Binding("Up and Down", "choose a body part", "next",
+                ("dlg_next", "num2"), "step", (1,)),
+        Binding("Enter", "fire", "choose", ("enter",), "choose"),
+        Binding("Escape", "cancel", "back"),
+        Binding("Numpad 5", "say it again", "repeat", ("num5", "dlg_say"),
+                "repeat"),
+    )
+
+    def __init__(self, shot) -> None:
+        self.shot = shot
+
+    def reset(self) -> None:
+        self.shot.reset()
+
+    def enter(self, ann: Announcer) -> None:
+        self.shot.reset()
+        target = getattr(self.shot.combat, "aim_target", None)
+        keys = tr("calledshot.keys", "Up and down choose, Enter fires, Escape cancels.")
+        if target:
+            ann.answer(tr("calledshot.at", "Aimed shot at {target}. {part} {keys}",
+                          target=target, part=self.shot.say(), keys=keys))
+        else:
+            ann.answer(tr("calledshot.opened", "Aimed shot. {part} {keys}",
+                          part=self.shot.say(), keys=keys))
+
+    def step(self, ann: Announcer, delta: int) -> None:
+        ann.answer(self.shot.step(delta))
+
+    def choose(self, ann: Announcer) -> None:
+        label = self.shot.label()
+        if not self.shot.choose():
+            ann.answer(tr("app.could_not_reach_that_part_of_the_window_escape_cancels", "Could not reach that part of the window. Escape "
+                       "cancels."))
+            return
+        # What the attack did arrives as a hit or a miss a moment later.
+        ann.answer(label.split(",")[0] + ".")
+
+    def cancel(self, ann: Announcer) -> None:
+        ann.answer(tr("app.cancelled", "Cancelled.") if self.shot.cancel() else tr("app.nothing_to_cancel", "Nothing to cancel."))
+
+    def repeat(self, ann: Announcer) -> None:
+        ann.answer(self.shot.say())
+
+    describe = repeat
+    summary = repeat
+
+
+class PauseWatcher(Watcher):
+    """The pause menu. The game's own letters work it; the mod says them.
+
+    And says the one question it can ask: Exit puts up "are you sure?" as a
+    box with no words anywhere the mod can read, so it is noticed as a window
+    that was not there when the menu opened.
+    """
+
+    key = screens.PAUSE
+    TITLE = "Pause menu"
+    KEYS = (
+        Binding("S", "save", controls.GAME),
+        Binding("L", "load", controls.GAME),
+        Binding("P", "preferences", controls.GAME),
+        Binding("E", "exit to the main menu; it asks first", controls.GAME),
+        Binding("Escape", "back to the game", controls.GAME),
+    )
+
+    def __init__(self, proc) -> None:
+        self.proc = proc
+        self._before = set()
+        self._asking = False
+
+    def reset(self) -> None:
+        self._before = pausemenu.live_ids(self.proc)
+        self._asking = False
+
+    def enter(self, ann: Announcer) -> None:
+        self.reset()
+        ann.answer(tr("app.menu_s_saves_l_loads_p_for_preferences_e_exits_to_the_main_m", "Menu. S saves, L loads, P for preferences, E exits to the "
+                   "main menu, Escape goes back to the game."))
+
+    def poll(self, ann: Announcer) -> None:
+        new = pausemenu.live_ids(self.proc) - self._before
+        if new and not self._asking:
+            self._asking = True
+            ann.answer("{} {}".format(pausemenu.quit_question(self.proc),
+                                      tr("pausemenu.yes_no",
+                                         "Y or Enter for yes, N or Escape for no.")))
+        elif not new and self._asking:
+            self._asking = False
+            ann.answer(tr("app.menu", "Menu."))
+
+    def repeat(self, ann: Announcer) -> None:
+        if self._asking:
+            ann.answer("{} {}".format(pausemenu.quit_question(self.proc),
+                                      tr("pausemenu.yes_no",
+                                         "Y or Enter for yes, N or Escape for no.")))
+            return
+        ann.answer(tr("app.menu_s_saves_l_loads_p_for_preferences_e_exits_escape_goes_b", "Menu. S saves, L loads, P for preferences, E exits, "
+                   "Escape goes back."))
+
+    describe = repeat
+    summary = repeat
+
+
+class PrefsWatcher(Watcher):
+    """Preferences, as a list: Up and Down for the setting, Left and Right to
+    change it. Enter and Escape are the screen's own Done and Cancel."""
+
+    key = screens.PREFS
+    TITLE = "Preferences"
+    KEYS = (
+        Binding("Up and Down", "the settings", "previous", ("dlg_prev", "num8"),
+                "step", (-1,)),
+        Binding("Up and Down", "the settings", "next", ("dlg_next", "num2"),
+                "step", (1,)),
+        Binding("Left and Right", "change it", "less", ("left",), "change",
+                (-1,)),
+        Binding("Left and Right", "change it", "more", ("right",), "change",
+                (1,)),
+        Binding("Home", "the lowest", "least", ("home",), "extreme", (False,)),
+        Binding("End", "the highest", "most", ("end",), "extreme", (True,)),
+        Binding("Enter", "save and close", "choose"),
+        Binding("Escape", "close without saving", "back"),
+        Binding("Numpad 5", "say it again", "repeat", ("dlg_say",), "repeat"),
+    )
+
+    def __init__(self, settings) -> None:
+        self.prefs = settings
+
+    def reset(self) -> None:
+        self.prefs.reset()
+
+    def enter(self, ann: Announcer) -> None:
+        self.prefs.reset()
+        ann.answer(tr("prefs.opened", "Preferences. {setting} Up and down move, left "
+                      "and right change, Enter saves, Escape cancels.",
+                      setting=self.prefs.say()))
+
+    def step(self, ann: Announcer, delta: int) -> None:
+        ann.answer(self.prefs.step(delta))
+
+    def change(self, ann: Announcer, delta: int) -> None:
+        ann.answer(self.prefs.change(delta))
+
+    def extreme(self, ann: Announcer, top: bool) -> None:
+        ann.answer(self.prefs.extreme(top))
+
+    def repeat(self, ann: Announcer) -> None:
+        ann.answer(self.prefs.say())
+
+    describe = repeat
+    summary = repeat
 
 
 class WorldMapWatcher(Watcher):
@@ -1773,6 +2587,24 @@ class WorldMapWatcher(Watcher):
     """
 
     key = screens.WORLDMAP
+    TITLE = "World map"
+    KEYS = tuple(
+        Binding("Numpad 1 to 9", "move the cursor a square", "cursor",
+                ("wm_" + d,), "wm_" + d)
+        for d in ("n", "s", "e", "w", "ne", "nw", "se", "sw")
+    ) + (
+        Binding("Numpad 5", "back to where you are", "cursor", ("wm_snap",),
+                "wm_snap"),
+        Binding("Square brackets", "the places you know", "scan",
+                ("wm_scan_prev",), "wm_scan_prev"),
+        Binding("Square brackets", "the places you know", "scan",
+                ("wm_scan_next",), "wm_scan_next"),
+        Binding("Slash", "put the cursor on that place", "scan",
+                ("wm_scan_jump",), "wm_scan_jump"),
+        Binding("Enter", "travel to the cursor, or go in", "choose",
+                ("enter",), "travel"),
+        Binding("T", "the town map", "watch", ("wm_town",), "wm_town"),
+    )
 
     # How far the view must scroll before it is worth mentioning. A press of an
     # arrow key moves it tens of pixels; anything smaller is the engine nudging
@@ -1818,7 +2650,7 @@ class WorldMapWatcher(Watcher):
         self._travelling = worldmap.travelling(self.proc)
         self._dest = worldmap.destination(self.proc)
         self._area = worldmap.current_area(self.proc)
-        ann.answer("World map. " + self._where())
+        ann.answer(tr("app.world_map", "World map.") + " " + self._where())
 
     def _where(self) -> str:
         """Where the player is standing, in one sentence."""
@@ -1827,14 +2659,15 @@ class WorldMapWatcher(Watcher):
         table = worldmap.areas(self.proc)
         index = worldmap.current_area(self.proc)
         if index is not None and 0 <= index < len(table):
-            return "At {}.".format(table[index].name)
+            return tr("worldmap.at", "At {place}.", place=table[index].name)
         here = worldmap.player_subtile(self.proc)
         if here is None:
             return ""
         square = worldmap.subtile(self.proc, *here)
         names = worldmap.terrain_names(self.proc)
         ground = names.get(square.terrain) if square else None
-        return "In open country. {}.".format(ground) if ground else "In open country."
+        return tr("worldmap.open_country", "In open country. {ground}.",
+                  ground=ground) if ground else tr("app.in_open_country", "In open country.")
 
     # -- the cursor ----------------------------------------------------------
 
@@ -1882,6 +2715,19 @@ class WorldMapWatcher(Watcher):
         if said:
             ann.answer(said)
 
+    def wm_town(self, ann: Announcer) -> None:
+        """T was pressed. Explain it only when the engine is going to ignore it.
+
+        The key is not sent from here -- it is the engine's own and it already
+        works, so pressing it again would open the town view twice. What this
+        adds is the sentence the engine does not say when it declines.
+        """
+        if self.proc is None:
+            return
+        why = worldtravel.town_key_explanation(self.proc)
+        if why:
+            ann.answer(why)
+
     def wm_scan_jump(self, ann: Announcer) -> None:
         """Slash: put the cursor on the place being read out."""
         if self.proc is None:
@@ -1898,13 +2744,13 @@ class WorldMapWatcher(Watcher):
 
     def repeat(self, ann: Announcer) -> None:
         said = self.cursor.repeat()
-        ann.answer(said if said else "Nothing read yet. Press numpad 5.")
+        ann.answer(said if said else tr("app.nothing_read_yet_press_numpad_5", "Nothing read yet. Press numpad 5."))
 
     def describe(self, ann: Announcer) -> None:
         if self.proc is None:
             return
         said = self.cursor.say_full(self.proc)
-        ann.answer(said if said else "Nothing to describe.")
+        ann.answer(said if said else tr("app.nothing_to_describe", "Nothing to describe."))
 
     def summary(self, ann: Announcer) -> None:
         """Where you are, what the day is, and whether you are going anywhere.
@@ -1935,10 +2781,14 @@ class WorldMapWatcher(Watcher):
         dy = dest[1] // worldmap.SUBTILE - here[1] // worldmap.SUBTILE
         name = self._area_name_at(dest)
         left = worldcursor.steps_away(dx, dy)
-        unit = "square" if left == 1 else "squares"
+        if left == 1:
+            away = tr("worldmap.one_square", "1 square")
+        else:
+            away = tr("worldmap.squares", "{count} squares", count=left)
         if name:
-            return "Travelling to {}, {} {} away.".format(name, left, unit)
-        return "Travelling, {} {} away.".format(left, unit)
+            return tr("travel.to_away", "Travelling to {place}, {distance} away.",
+                      place=name, distance=away)
+        return tr("travel.away", "Travelling, {distance} away.", distance=away)
 
     def _area_name_at(self, world: Tuple[int, int]) -> str:
         for area in worldmap.areas(self.proc):
@@ -1964,21 +2814,28 @@ class WorldMapWatcher(Watcher):
         Anywhere else is a click on the map, scrolled into view first.
         """
         if self.proc is None or self.hwnd is None:
-            ann.answer("Not attached to the game.")
+            ann.answer(tr("app.not_attached_to_the_game", "Not attached to the game."))
             return
         if not self.cursor.ensure(self.proc):
-            ann.answer("Cannot read the world map.")
+            ann.answer(tr("app.cannot_read_the_world_map", "Cannot read the world map."))
             return
         if worldmap.travelling(self.proc):
-            ann.answer("Already travelling.")
+            ann.answer(tr("app.already_travelling", "Already travelling."))
             return
 
         sx, sy = self.cursor.x, self.cursor.y
         here = worldmap.player_subtile(self.proc)
         if here == (sx, sy):
-            ok, why = worldtravel.enter_town_view(self.proc, self.hwnd)
-            if not ok:
-                ann.answer(why or "Nothing to go into here.")
+            ok, said = worldtravel.enter_here(
+                self.proc, self.hwnd, self.log_path)
+            if said:
+                ann.answer(said)
+            elif not ok:
+                ann.answer(tr("app.nothing_to_go_into_here", "Nothing to go into here."))
+            # Either way the view may have been centred to reach the marker,
+            # so take a fresh note of it rather than announcing a scroll the
+            # player did not ask for.
+            self._scroll = worldmap.scroll(self.proc)
             return
 
         area = worldmap.area_at(self.proc, sx, sy)
@@ -1998,11 +2855,12 @@ class WorldMapWatcher(Watcher):
         ok, said = worldtravel.travel_to_point(
             self.proc, self.hwnd, centre[0], centre[1], self.log_path)
         if not ok:
-            ann.answer(said or "That did not work.")
+            ann.answer(said or tr("app.that_did_not_work", "That did not work."))
             return
         if not said:
             reading = self.cursor.read(self.proc)
-            said = "Travelling. {}".format(reading.step() if reading else "")
+            said = tr("travel.travelling", "Travelling. {where}",
+                      where=reading.step() if reading else "").strip()
         self._begin(ann, said)
 
     def _begin(self, ann: Announcer, said: str) -> None:
@@ -2035,7 +2893,7 @@ class WorldMapWatcher(Watcher):
         if showing is None:
             if self._town is not None:
                 self._town = None
-                ann.say("Back to the world map.", interrupt=True, force=True)
+                ann.say(tr("app.back_to_the_world_map", "Back to the world map."), interrupt=True, force=True)
             return
         area, ways = showing
         if self._town == area.index:
@@ -2043,7 +2901,8 @@ class WorldMapWatcher(Watcher):
         self._town = area.index
         listed = ", ".join(
             "{} {}".format(e.key, e.name) for e in ways if e.key and e.name)
-        ann.say("{} map. {}. Escape to go back.".format(area.name, listed),
+        ann.say(tr("worldmap.town_map", "{place} map. {entrances}. Escape to go back.",
+                   place=area.name, entrances=listed),
                 interrupt=True, force=True)
 
     def _town_entrances(self):
@@ -2086,7 +2945,7 @@ class WorldMapWatcher(Watcher):
         dx, dy = now[0] - was[0], now[1] - was[1]
         if max(abs(dx), abs(dy)) < self.SCROLL_NOTICE:
             return
-        ann.say("View {}.".format(self._view_says(now, dx, dy)),
+        ann.say(tr("worldmap.view", "View {where}.", where=self._view_says(now, dx, dy)),
                 interrupt=True, force=True)
 
     def _view_says(self, offset: Tuple[int, int], dx: int, dy: int) -> str:
@@ -2096,13 +2955,18 @@ class WorldMapWatcher(Watcher):
                   (offset[1] + worldmap.VIEW_H // 2) // worldmap.SUBTILE)
         area = worldmap.area_at(self.proc, middle[0], middle[1])
         if area is not None:
-            return "{}, centred on {}".format(way, area.name)
+            return tr("worldmap.centred_on", "{direction}, centred on {place}",
+                      direction=way, place=area.name).lstrip(", ")
         here = worldmap.player_subtile(self.proc)
         if here is not None:
             gap = worldcursor.steps_away(middle[0] - here[0], middle[1] - here[1])
             if gap == 0:
-                return "{}, centred on you".format(way) if way else "centred on you"
-            return "{}, {} squares from you".format(way, gap)
+                if way:
+                    return tr("worldmap.centred_on_you_way", "{direction}, centred on you",
+                              direction=way)
+                return tr("worldmap.centred_on_you", "centred on you")
+            return tr("worldmap.from_you", "{direction}, {count} squares from you",
+                      direction=way, count=gap).lstrip(", ")
         return way
 
     def _watch_travel(self, ann: Announcer) -> None:
@@ -2149,14 +3013,15 @@ class WorldMapWatcher(Watcher):
             if area is not None:
                 table = worldmap.areas(self.proc)
                 if 0 <= area < len(table):
-                    ann.say("At {}. Press T for its map.".format(table[area].name),
+                    ann.say(tr("worldmap.at_town", "At {place}. Press T for its map.",
+                               place=table[area].name),
                             interrupt=False, force=True)
 
     def _stopped(self) -> str:
         here = worldmap.player(self.proc)
         want = self._dest
         if here is None:
-            return "Stopped."
+            return tr("app.stopped", "Stopped.")
         name = self._area_name_at(here) or self._area_name_at(want or here)
         if want is not None:
             gap = max(abs(want[0] - here[0]), abs(want[1] - here[1]))
@@ -2167,9 +3032,9 @@ class WorldMapWatcher(Watcher):
                 left = worldcursor.steps_away(
                     (want[0] - here[0]) // worldmap.SUBTILE,
                     (want[1] - here[1]) // worldmap.SUBTILE)
-                return ("Stopped short, {} squares from where you were going."
-                        .format(left))
-        return "Arrived at {}.".format(name) if name else "Arrived."
+                return tr("travel.stopped_short", "Stopped short, {count} squares from "
+                          "where you were going.", count=left)
+        return tr("travel.arrived_at", "Arrived at {place}.", place=name) if name else tr("app.arrived", "Arrived.")
 
 
 class App:
@@ -2190,6 +3055,11 @@ class App:
         # (item name, list length before, deadline) while a move is awaiting
         # the script's re-read. Nothing is claimed until that comes back.
         self._moved: Optional[tuple] = None
+        # Set when a move ended with the "How many?" window on screen, so the
+        # key that asks the script for the new totals still has to be sent once
+        # that window has gone. It cannot be sent while it is up: that window
+        # reads numpad 0 as the digit zero -- see `_ask_totals`.
+        self._owed_totals: bool = False
         # The item marked by the first press: (name, side, index, total).
         # Nothing has been sent to the game while this is set -- it is the mod's
         # own note of what the player chose, not a state the game is in.
@@ -2225,6 +3095,15 @@ class App:
             self._offsets = None
             print("[offsets] resolution failed: {}".format(exc), flush=True)
         self.hwnd = find_game_window(self.proc.pid)
+        # Full screen breaks every click the mod makes, and it breaks it
+        # silently: DirectX parks the game's real window off screen behind its
+        # own, so aims are computed against a window at -25600 and simply grind
+        # until they give up. Say so, out loud and once, for the same reason an
+        # unresolved address is said out loud -- the symptom is indistinguishable
+        # from the mod being slow, and that is exactly how it got reported.
+        self._window_complaint = fullscreen_complaint(self.hwnd, self.proc.pid)
+        if self._window_complaint:
+            print("[app] {}".format(self._window_complaint), flush=True)
         # debug.log lives beside the game's executable -- it is the game that
         # writes it. Ask the process where it lives rather than working it out
         # from where THIS file happens to sit: that worked only while the mod
@@ -2245,8 +3124,12 @@ class App:
                   "in game, check DebugMode=2 in ddraw.ini".format(game_dir),
                   flush=True)
         self.saves = SaveWatcher(game_dir)
+        # Everything the game said, for Shift with comma and period.
+        self.history = history.History()
         self.world = WorldWatcher(WorldLog(log_path), self.saves, self.proc,
                                   ticker=self.ticker)
+        self.world.engine_actions = _unsafe_scripting(game_dir)
+        self.world.history = self.history
         self.aimer = Aimer(self.hwnd, log_path) if self.hwnd else None
         # The world watcher needs these for the one question that
         # requires a pointer: what can be done to the selected object.
@@ -2263,9 +3146,17 @@ class App:
         self.watchers = {
             screens.TIMER: TimerWatcher(
                 timerwin.Timer(self.proc, self.hwnd, self.finder)),
+            screens.QUANTITY: QuantityWatcher(
+                quantity.Quantity(self.proc, self.hwnd),
+                self.world.inventory),
             screens.SLOTS: SlotScreenWatcher(self.slots, self.saves, pager),
             screens.PIPBOY: PipboyWatcher(
                 pipboy.Pipboy(self.proc, self.hwnd)),
+            screens.PAUSE: PauseWatcher(self.proc),
+            screens.PREFS: PrefsWatcher(prefs.Prefs(self.proc)),
+            screens.CALLED_SHOT: CalledShotWatcher(
+                calledshot.CalledShot(self.proc, self.hwnd, self.world.combat,
+                                      log_path)),
             screens.MAIN_MENU: MainMenuWatcher(),
             screens.SELECT: SelectWatcher(PremadeScreen(self.proc)),
             screens.CHARGEN: CharGenWatcher(CharGen(self.proc), self.world.log),
@@ -2324,31 +3215,46 @@ class App:
             # Of all the misplaced clicks this mod guards against, this is the
             # only one that cannot be walked back.
             if self.world.talking():
-                if button == "left":
-                    self.say_reply()
-                else:
-                    self.ann.answer(dialogue.HINT)
+                self.ann.answer(dialogue.hint_text())
                 return
-            if button == "left" and screens.is_item_window(mode):
-                self.move_item()
-                return
-            if button == "left" and not screens.is_map_mode(mode):
-                # Something is over the map, so there is no hex to aim at and
-                # the click goes to whatever panel is up. Say which -- an escape
-                # menu left open swallows every click in the world, and with no
-                # way to see it the game simply appears to have stopped
-                # responding. That cost a whole debugging round.
-                self.ann.answer("{}.".format(screens.mode_name(mode).capitalize()))
-                guarded_click(self.hwnd, button)
+            if not screens.is_map_mode(mode):
+                # Something is over the map, so there is no hex to aim at:
+                # click nothing. This used to click wherever the pointer had
+                # been left, on whatever panel was up; the mouse buttons are
+                # the map's, and a panel has its own keys (F1).
+                #
+                # And say nothing. It used to explain the mouse keys every
+                # time, which on the inventory -- where + is an easy key to
+                # reach for -- was a lecture on every press (owner, 0.2.36).
                 return
 
             if button == "left":
                 if self.aimer is None:
                     return
                 ok, reading, why = self.aimer.aim()
+                if not ok and reading is not None and reading.pinned():
+                    # The hex is beyond the edge of the view, not merely hard
+                    # to land on. Walk the part of the way that is on screen:
+                    # the view follows you, so the next press can reach it.
+                    # Never in a fight, where a walk nobody chose costs action
+                    # points, and never with a skill armed, which is not a walk.
+                    armed = self.world.log.cursor_mode
+                    walking = (mode is not None
+                               and not mode & screens.MODE_COMBAT
+                               and armed not in screens.SKILL_CURSORS
+                               and armed != screens.CURSOR_USE_ITEM)
+                    if walking and self.aimer.walk_toward() is not None:
+                        time.sleep(CURSOR_SETTLE)
+                        guarded_click(self.hwnd, button)
+                        self.ann.answer(tr("app.that_hex_is_out_of_view_walking_towards_it_press_again_when_", "That hex is out of view. Walking "
+                                        "towards it; press again when you stop."))
+                        return
+                    self.ann.answer(tr("app.that_hex_is_out_of_view", "That hex is out of view."))
+                    return
                 if not ok:
                     self.ann.answer(
-                        "Cannot aim at that hex: {}.".format(why or "unknown reason")
+                        tr("aim.cannot", "Cannot aim at that hex: {why}.",
+                           why=why or tr("aim.unknown_reason", "unknown reason"))
                     )
                     return
 
@@ -2362,7 +3268,7 @@ class App:
                     # "cannot point at that", which is what they got when
                     # "blocked" was added to the readout and this test, which
                     # only knew "empty" and "you", was not told about it.
-                    self.ann.answer("That hex is blocked.")
+                    self.ann.answer(tr("app.that_hex_is_blocked", "That hex is blocked."))
                     return
                 # Is there anything on this hex a click could be aimed at?
                 #
@@ -2395,23 +3301,93 @@ class App:
                 # see HexReading.names(). Naming only the first is what made
                 # every door in the game unclickable.
                 wanted = last.names() if (expects_object and last) else None
+                # **Using something on yourself, which was aiming at the
+                # floor.**
+                #
+                # Your own hex reports "you", and "you" is one of the words that
+                # means the hex holds nothing to point at -- deliberately, since
+                # every other click wants the ground you are standing on rather
+                # than your own body. So the aim settled dead centre on the hex,
+                # which is where your FEET are, and Fallout picks what a click
+                # hits by the sprite drawn over that pixel. Measured live with
+                # Healing Powder armed and the cursor snapped to the player: the
+                # engine reported "Wooden Wall" at the hex centre and "Tara"
+                # fifty-six pixels higher up.
+                #
+                # So when a click is going to act on something -- an item armed
+                # by the reload key, or a skill armed from the Skilldex -- and
+                # the cursor is on you, then YOU are the thing to point at, and
+                # the aimer already knows how to walk up a sprite until the
+                # engine agrees. It could not do it here before, for the plain
+                # reason that the script asked the engine to ignore the player.
+                myself = worldlog.aim_at_yourself(
+                    last, self.world.log.cursor_mode,
+                    self.world.log.player_name)
+                if myself:
+                    expects_object, wanted = True, myself
                 name, _at = self.aimer.prepare(expects_object, wanted=wanted)
+                # Every hunt goes in the log, hit or miss. A miss used to leave
+                # only the game's probe lines behind, which say where the
+                # pointer went but not what the player was reaching for.
+                if expects_object:
+                    outcome = repr(name) if name else "missed"
+                else:
+                    outcome = "no clear spot" if name is False else "clear"
+                print("[click] hex {} wanted {}: {}{}".format(
+                    reading.look if reading else "?", wanted or "ground",
+                    outcome,
+                    " (covered by {})".format(self.aimer.blocked_by)
+                    if self.aimer.blocked_by else ""), flush=True)
+                if (expects_object and not name and not self.aimer.blocked_by
+                        and getattr(self.aimer, "bare", False) and not myself
+                        and self.world.log.cursor_mode not in screens.SKILL_CURSORS
+                        and self.world.log.cursor_mode != screens.CURSOR_USE_ITEM):
+                    # **Nothing there to point at, so the click is a walk.** The
+                    # readout names ground decoration -- Dirt, Weeds -- that the
+                    # engine will not pick, and with nothing in the way a
+                    # sighted player clicking that hex walks onto it. Refusing
+                    # with "cannot point at Dirt" was refusing a walk.
+                    ground, _at = self.aimer.prepare(False)
+                    print("[click] hex {}: {} cannot be picked, walking "
+                          "instead: {}".format(reading.look if reading else "?",
+                                               wanted, ground), flush=True)
+                    if ground is not False:
+                        time.sleep(CURSOR_SETTLE)
+                        guarded_click(self.hwnd, button)
+                        return
                 if expects_object and not name:
-                    self.ann.answer("Cannot point at {}.".format(
-                        wanted[0] if wanted else "that"))
+                    blocker = self.aimer.blocked_by
+                    # Name what was being reached FOR. A hex holding a Wall and
+                    # a Locker, with another wall drawn over both, is about the
+                    # locker; "cannot point at Wall; Wall is drawn over it"
+                    # is true and says nothing.
+                    hidden = [w for w in (wanted or ())
+                              if not (blocker and worldlog.names_match(blocker, [w]))]
+                    what = (hidden or wanted or [tr("use.that", "that")])[0]
+                    if blocker:
+                        said = tr("aim.covered", "Cannot point at {thing}; {blocker} is "
+                                  "drawn over it.", thing=what, blocker=blocker)
+                        if getattr(self.world, "engine_actions", False):
+                            said += " " + tr("aim.menu_reaches",
+                                             "Its action menu can still reach it.")
+                        self.ann.answer(said)
+                    else:
+                        self.ann.answer(tr("aim.cannot_point", "Cannot point at {thing}.",
+                                           thing=what))
                     return
                 if not expects_object and name is False:
                     # Every part of the hex is underneath something else's
                     # sprite, so a click would act on that instead of walking.
                     # Name it: "behind Wall" is something a player can act on,
                     # "behind something" is a shrug.
-                    self.ann.answer("That hex is behind {}.".format(
-                        self.aimer.blocked_by or "something"))
+                    self.ann.answer(tr("aim.behind", "That hex is behind {thing}.",
+                                       thing=self.aimer.blocked_by
+                                       or tr("route.something", "something")))
                     return
                 time.sleep(CURSOR_SETTLE)
             guarded_click(self.hwnd, button)
         except FocusLost:
-            self.ann.answer("Game is not focused.")
+            self.ann.answer(tr("app.game_is_not_focused", "Game is not focused."))
         except Exception as exc:  # never let a hotkey kill the loop
             print("[app] click: {}".format(exc), flush=True)
 
@@ -2430,21 +3406,22 @@ class App:
         """
         reading = self.world.read_dialogue()
         if reading is None or not reading.options:
-            self.ann.answer("No replies offered.")
+            self.ann.answer(tr("app.no_replies_offered", "No replies offered."))
             return
         index = max(0, min(self.world.dlg_index, len(reading.options) - 1))
         if index >= 9:
             # Only 1 to 9 are bound. A tenth reply exists in the array and can
             # be read out, but saying it would mean clicking on it, and that is
             # not built. Say so plainly rather than pressing something else.
-            self.ann.answer("The mod cannot say replies past the ninth yet.")
+            self.ann.answer(tr("app.the_mod_cannot_say_replies_past_the_ninth_yet", "The mod cannot say replies past the ninth yet."))
             return
         text = reading.options[index]
         # Said before the key goes down, because this is the one confirmation
         # the player gets that they said what they meant to. The NPC's answer
         # follows on its own, off the memory poll.
-        self.ann.answer("Saying: {}".format(
-            text or "reply {}".format(index + 1)))
+        self.ann.answer(tr("dialogue.saying", "Saying: {reply}",
+                           reply=text or tr("dialogue.reply_number", "reply {number}",
+                                            number=index + 1)))
         guarded_tap(self.hwnd, str(index + 1), settle=0.2)
 
     def move_item(self) -> None:
@@ -2463,10 +3440,10 @@ class App:
         """
         inv = self.world.inventory
         if not inv.open or inv.rect is None or inv.side is None:
-            self.ann.answer("Nothing selected.")
+            self.ann.answer(tr("app.nothing_selected", "Nothing selected."))
             return
         if self.world.finder is None:
-            self.ann.answer("Not attached to the game.")
+            self.ann.answer(tr("app.not_attached_to_the_game", "Not attached to the game."))
             return
         # First press marks the item. Nothing is sent to the game at all: the
         # move is a drag, and a drag begun on one keypress and finished on
@@ -2475,23 +3452,28 @@ class App:
         # reliably detect. So the whole drag happens on the second press.
         if self._holding is None:
             if not inv.selected:
-                self.ann.answer("No item selected.")
+                self.ann.answer(tr("app.no_item_selected", "No item selected."))
                 return
-            self._holding = (inv.selected, inv.side, inv.index, inv.total)
+            self._holding = (inv.selected, inv.side, inv.index, inv.total,
+                             inv.selected_count)
             self.ann.answer(
-                "{}. Choose where to put it and press numpad plus again."
-                .format(inv.selected)
+                tr("move.picked_up", "{item}. Choose where to put it and press "
+                   "Enter again.", item=inv.selected)
             )
             return
 
-        name, side, index, total = self._holding
+        name, side, index, total, count = self._holding
         before = inv.counts
+        # The count goes with the item, not with the cursor: by now the cursor
+        # is on the destination, and that is what the "Move Items" window used
+        # to be sized from.
+        inv.start_moving(count)
         # Say so before starting. The drag aims twice and each aim asks the
         # game where the pointer is a dozen times, so this takes a few seconds
         # -- and a few seconds of silence after a keypress reads exactly like
         # the key never arrived, which is the misreading this whole project
         # keeps having to design against.
-        self.ann.answer("Moving {}.".format(name))
+        self.ann.answer(tr("move.moving", "Moving {item}.", item=name))
         try:
             itemmove.drag(self.world.finder, self.hwnd, inv.rect,
                           (side, index, total),
@@ -2503,20 +3485,46 @@ class App:
             return
         except FocusLost:
             self._holding = None
-            self.ann.answer("Game is not focused.")
+            self.ann.answer(tr("app.game_is_not_focused", "Game is not focused."))
             return
 
-        # Ask the script for the TOTALS, not for the selected item. An item
-        # equipped from the carried list changes the carried count and nothing
-        # at all about the slot it went into, so re-reading the selection --
-        # which is what this used to do -- reported every successful equip as a
-        # failure. Its reply arrives through the log on a later tick.
+        self._holding = None
+        self._moved = (name, before, time.time() + 1.5)
+        self._ask_totals()
+
+    def _ask_totals(self) -> None:
+        """Ask the script for both lists' counts, once it is safe to ask.
+
+        The TOTALS, not the selected item. An item equipped from the carried
+        list changes the carried count and nothing at all about the slot it went
+        into, so re-reading the selection -- which is what this used to do --
+        reported every successful equip as a failure. Its reply arrives through
+        the log on a later tick.
+
+        **Never while the "Move Items" window is up, and that is not a nicety.**
+        Dragging a stack is exactly what puts that window up, so this ran into
+        it every time a shop was involved. It is a modal loop of the engine's
+        own and it reads the keyboard itself: numpad 0 is the digit zero to it,
+        and gl_inven.ssl stands down while it is showing, so the key was not
+        even swallowed on the way past. The mod answered "how many?" with
+        "none" before the player had touched anything, the window sat on a
+        count the engine will not accept, and Enter answered with the error
+        sound -- the one at 0x0047692A, which is the only thing in the game
+        that plays `iisxxxx1`.
+        """
+        if self.hwnd is None:
+            return
+        # Asked of the live window list rather than of `self.screen`: the drag
+        # takes seconds and the window opens in the middle of it, so the mod's
+        # idea of which screen is up is from before the question was asked.
+        if self.proc is not None and quantity.showing(self.proc):
+            self._owed_totals = True
+            return
+        self._owed_totals = False
         try:
             guarded_tap(self.hwnd, "numpad0", settle=0.25)
         except Exception:
             pass
-        self._holding = None
-        self._moved = (name, before, time.time() + 1.5)
 
     def _settle_move(self) -> None:
         """Say what the click actually did, once the script has re-read the list.
@@ -2538,20 +3546,35 @@ class App:
             return
         name, before, deadline = self._moved
         inv = self.world.inventory
+        # **Not while the game is still asking how many.** Moving a stack puts
+        # the "Move Items" window up and nothing has moved yet -- the player is
+        # part way through deciding. Judging here would call every stack a
+        # failure a second after the question appeared, and say so over the top
+        # of the question.
+        if self.screen == screens.QUANTITY:
+            self._moved = (name, before, time.time() + 1.5)
+            return
+        # The window has gone, so the question the drag could not ask can be
+        # asked now. Without this the totals never arrive and every stack moved
+        # in a shop is reported as one that did not move.
+        if self._owed_totals:
+            self._ask_totals()
+            self._moved = (name, before, time.time() + 1.5)
+            return
         # Compare the whole reading, not just the count. Dropping something into
         # an equipment slot changes no list length anywhere -- the slot's
         # contents change -- so a count test called every successful equip a
         # failure and told the player they were still holding it.
         if inv.counts is not None and inv.counts != before:
             self._moved = None
-            self.ann.answer("Moved {}.".format(name))
+            self.ann.answer(tr("move.moved", "Moved {item}.", item=name))
         elif time.time() > deadline:
             self._moved = None
             # The drag ran and the reading did not change. Say so plainly. The
             # earlier version guessed "you must be holding it" here, which was
             # a story invented to explain silence -- and it was wrong, because
             # what silence actually meant was that the clicks did nothing.
-            self.ann.answer("{} did not move.".format(name))
+            self.ann.answer(tr("move.not_moved", "{item} did not move.", item=name))
 
     def action(self, what: str) -> None:
         """Queue a hotkey. Called from the keyboard listener's thread.
@@ -2571,15 +3594,6 @@ class App:
         """
         self._pending.append((what, time.time()))
 
-    def _travel(self) -> None:
-        """Numpad plus on the world map. Kept here so the screen test that
-        routes it and the guard that it can run at all sit together."""
-        watcher = self.current_watcher()
-        if watcher is None:
-            self.ann.answer("No screen recognised.")
-            return
-        watcher.travel(self.ann)
-
     def _run_item_action(self) -> None:
         """Carry out an item-menu choice, off the log-parsing path.
 
@@ -2587,6 +3601,10 @@ class App:
         seconds and drive the pointer, and doing that in the middle of parsing a
         batch of log lines would stall the rest of them behind it.
         """
+        if self.world is not None and self.world.pending_move:
+            self.world.pending_move = False
+            self.move_item()
+            return
         line = self.world.pending_item_action if self.world else None
         if not line:
             return
@@ -2598,75 +3616,15 @@ class App:
             done, why = itemactions.click_item_slot(
                 self.proc, self.hwnd, log_path=self.world.log.path)
             if not done:
-                self.ann.answer(why or "That did not work.")
+                self.ann.answer(why or tr("app.that_did_not_work", "That did not work."))
             return
         m = inventory._DO.match(line)
         if not m:
             return
-        what, name, side, index, total, active = (
-            m.group(1).strip(), m.group(2).strip(), int(m.group(3)),
-            int(m.group(4)), int(m.group(5)), m.group(6) == "1")
-        if self.proc is None or self.hwnd is None:
-            self.ann.answer("Not attached to the game.")
-            return
-
-        self.ann.answer("{} {}.".format(what.capitalize(), name))
-        log_path = self.world.log.path
-        if what.startswith("use"):
-            done, why = itemactions.use(self.proc, self.hwnd, side, index,
-                                        active, log_path=log_path)
-        elif what.startswith("drop"):
-            done, why = itemactions.drop(self.world.finder, self.proc,
-                                         self.hwnd, side, index, total,
-                                         log_path=log_path)
-        else:
-            done, why = False, "The mod has no way to do that yet."
-        if not done:
-            self.ann.answer(why or "That did not work.")
-
-    def _run_menu_action(self) -> None:
-        """Carry out a world action-menu choice: look at it, talk to it.
-
-        Both are done by driving the engine's own menu, which means aiming at
-        the object again and creeping the highlight onto the icon -- several
-        seconds, and far too slow to do while parsing a batch of log lines.
-        """
-        line = self.world.pending_menu_action if self.world else None
-        if not line:
-            return
-        self.world.pending_menu_action = None
-        parts = line.split("|")
-        head = parts[0].split()
-        if len(head) < 2 or not head[1].lstrip("-").isdigit():
-            return
-        code = int(head[1])
-        target = parts[1].strip() if len(parts) > 1 else ""
-        if self.proc is None or self.hwnd is None or self.aimer is None:
-            self.ann.answer("Not attached to the game.")
-            return
-
-        # Say so first. This takes a few seconds, and silence after a keypress
-        # reads as the key never having arrived -- the misreading this project
-        # keeps having to design against.
-        self.ann.answer("{}{}.".format(
-            actions.name(code).capitalize(),
-            ": {}".format(target) if target else ""))
-        try:
-            done, why = actions.perform(self.proc, self.aimer, self.hwnd, code,
-                                        wanted=target or None)
-        except FocusLost:
-            self.ann.answer("Game is not focused.")
-            return
-        except Exception as exc:  # never let this kill the loop
-            print("[app] menu action: {}".format(exc), flush=True)
-            self.ann.answer("That did not work.")
-            return
-        if not done:
-            self.ann.answer("Could not {}: {}.".format(
-                actions.name(code), why or "no answer"))
-        # Nothing is said on success. Looking prints the game's own sentence
-        # along the bottom of the screen and talking opens a conversation, and
-        # both of those are already announced by whoever owns them.
+        # Drop and look are carried out by gl_inven.ssl itself now, so an entry
+        # that still arrives here is one the mod has no way to carry out.
+        self.ann.answer(tr("app.the_mod_has_no_way_to_do_that_yet",
+                           "The mod has no way to do that yet."))
 
     def _run_pending(self) -> None:
         while self._pending:
@@ -2699,17 +3657,137 @@ class App:
     # they scroll the view.
     _NUMPAD_ON_WORLDMAP = {"num8": "wm_n", "num2": "wm_s", "num5": "wm_snap"}
 
+    # The screens whose keys are entirely the mod's table. Nothing reaches past
+    # them: three are modal loops of the engine's own, where a key that got
+    # through would act on the window behind, and on the other two a stray
+    # mouse button would click wherever the pointer was last left.
+    _TABLE_SCREENS = (screens.CALLED_SHOT, screens.QUANTITY, screens.TIMER,
+                      screens.PIPBOY, screens.WORLDMAP, screens.PREFS,
+                      screens.PAUSE)
+
+    # Numpad plus or minus anywhere but the map.
+
+    def help(self) -> None:
+        """F1: the keys for the screen you are on, from its own table."""
+        watcher = self.current_watcher()
+        if watcher is None:
+            self.ann.answer(tr("app.no_screen_recognised_so_no_keys_to_list", "No screen recognised, so no keys to list."))
+            return
+        self.ann.answer(controls.help_text(watcher.help_keys(),
+                                           watcher.help_title()))
+
     def _do_action(self, what: str) -> None:
+        if what == "help":
+            self.help()
+            return
+        if what in ("log_prev", "log_next"):
+            # The message log works on every screen: what was said a moment
+            # ago is worth hearing again wherever you are when you want it.
+            self.ann.answer(self.history.older() if what == "log_prev"
+                            else self.history.newer())
+            return
         if what in self._NUMPAD_AS_ARROWS:
             what = (self._NUMPAD_ON_WORLDMAP if self.screen == screens.WORLDMAP
                     else self._NUMPAD_AS_ARROWS)[what]
-        if self.screen == screens.WORLDMAP and what in ("click", "rclick"):
-            # Numpad plus sets off for the square the cursor is on. Numpad minus
-            # is left alone: there is nothing on this screen a right click does
-            # that the player would want, and falling through to `click()` would
-            # send a real one at wherever the pointer was last left.
-            if what == "click":
-                self._travel()
+        if self.screen in self._TABLE_SCREENS:
+            watcher = self.current_watcher()
+            if watcher is None:
+                return
+            if self.screen == screens.QUANTITY:
+                # Control with up or down moves by ten -- sixty caps is six
+                # presses, not sixty. Typing the number is quicker still.
+                watcher.big = 10 if getattr(self, "ctrl_held", False) else 1
+            if controls.dispatch(watcher, what, self.ann):
+                return
+            if what in ("repeat", "summary", "describe"):
+                getattr(watcher, what)(self.ann)
+            return
+        if what == "enter":
+            # A conversation is the one place outside the table screens where
+            # the mod answers Enter: gl_dialog.ssl takes the key from the
+            # engine, and this types the number of the reply the list is on.
+            # In an item window gl_inven.ssl takes it and says so in the log;
+            # on the map the action menu is the script's own.
+            if (self.screen == screens.WORLD and self.world is not None
+                    and self.world.talking()):
+                self.say_reply()
+            return
+        if what in ("back", "left", "right", "home", "end"):
+            # The game's own keys on every screen without a table.
+            return
+        # The "Move Items" window first, and FIRST is the whole point.
+        #
+        # Up and down arrive here under the dialogue names, because that is
+        # what they are everywhere else, and the dialogue branch below answers
+        # for them -- or declines to, silently, which is what it did. A stack
+        # dragged onto a barter table put this window up, the mod announced it
+        # and said which keys to press, and then every one of those keys went
+        # to a conversation that was not the thing on screen. The arrows did
+        # nothing at all, and there was no way to hear why.
+        #
+        # Everything falls in here while this window is up, including the keys
+        # this screen has no use for. There is a modal loop of the engine's own
+        # running: a key that reaches past it reaches the barter window behind
+        # it, and `o` pressing OFFER through a half-answered question is not a
+        # thing to leave possible.
+        #
+        # Enter and Escape are deliberately absent: they are the engine's own
+        # keys on this window and already work, and binding them would press
+        # twice.
+        # The called-shot window, for the same reason as the one below: a modal
+        # loop of the engine's, so nothing the mod does may reach past it.
+        if what.startswith("digit"):
+            # Everywhere but the "how many" window the number row is the
+            # game's, and it has already had the key.
+            return
+        if what == "barter_offer":
+            # Only where there is a barter to offer in. `o` is an ordinary
+            # letter everywhere else, so this must reach nothing and say
+            # nothing off this screen -- the same rule the world map's keys
+            # follow.
+            proc = getattr(self, "proc", None)
+            hwnd = getattr(self, "hwnd", None)
+            if proc is None or hwnd is None:
+                return
+            if not barter.offering(proc):
+                return
+            world = getattr(self, "world", None)
+            # **A lopsided offer is asked about first.** Caps put on the table
+            # while meaning to buy, with nothing asked for, went for nothing
+            # the moment O was pressed. Said once; pressed again within a few
+            # seconds, on the same table, it goes.
+            inv = getattr(world, "inventory", None) if world is not None else None
+            worry = inv.lopsided() if inv is not None else None
+            if worry:
+                now = time.time()
+                pending = getattr(self, "_offer_confirm", None)
+                if not (pending and pending[0] == inv.price and now < pending[1]):
+                    self._offer_confirm = (inv.price, now + OFFER_CONFIRM_SECONDS)
+                    self.ann.answer("{} {}".format(worry, tr(
+                        "barter.offer_anyway", "Press O again to offer anyway.")))
+                    return
+            self._offer_confirm = None
+            log_path = world.log.path if world is not None and hasattr(world, "log") else None
+            sent, why = barter.offer(proc, hwnd, log_path=log_path)
+            if not sent:
+                self.ann.answer(why or tr("app.that_did_not_work", "That did not work."))
+            # Nothing is said on success. What the shopkeeper did with the
+            # offer arrives through the price hook a moment later, and saying
+            # "offered" here as well would announce it twice -- once as an
+            # intention and once as a fact.
+            return
+        if what.startswith("wm_"):
+            # The world map's keys, and four of them are ordinary letters and
+            # punctuation -- `[`, `]`, `/` and `T`. Everywhere else those are
+            # things a player types, so they must reach nothing and say
+            # nothing. Falling through to the generic dispatch below would
+            # answer "No screen recognised" at a name field, which is both
+            # wrong and loud.
+            if self.screen != screens.WORLDMAP:
+                return
+            watcher = self.current_watcher()
+            if watcher is not None:
+                getattr(watcher, what, lambda _a: None)(self.ann)
             return
         # The reply-list keys are the hex cursor's keys wearing another hat.
         # In a conversation gl_dialog.ssl swallows them so the engine never
@@ -2724,17 +3802,6 @@ class App:
             # The engine does nothing with them on this panel -- it is mouse
             # only -- so nothing is being taken from anybody, and unlike the
             # conversation screen no script has to swallow them first.
-            if self.screen == screens.PIPBOY:
-                watcher = self.current_watcher()
-                if watcher is None:
-                    return
-                if what == "dlg_prev":
-                    watcher.step(self.ann, -1)
-                elif what == "dlg_next":
-                    watcher.step(self.ann, 1)
-                else:
-                    watcher.repeat(self.ann)
-                return
             if not (self.world is not None and self.world.talking()):
                 return
             if what == "dlg_prev":
@@ -2744,27 +3811,12 @@ class App:
             elif what == "dlg_say":
                 self.world.dlg_say(self.ann)
             return
-        if what in ("click", "rclick") and self.screen == screens.TIMER:
-            # Nothing to point at here either: the two step buttons are the
-            # only controls, and Enter and Escape are already the game's.
-            watcher = self.current_watcher()
-            if watcher:
-                watcher.adjust(self.ann, 1 if what == "click" else -1)
-            return
-        if what in ("click", "rclick") and self.screen == screens.PIPBOY:
-            # Numpad plus chooses what you are on, numpad minus comes back out
-            # of a page. Neither is a mouse button here in the sense they are on
-            # the map: there is no hex under the pointer and nothing to aim at
-            # that the player picked by looking. Falling through to `click()`
-            # would send a real click at wherever the pointer was last left,
-            # which on this panel is a page you did not ask for.
-            watcher = self.current_watcher()
-            if watcher is None:
-                return
-            if what == "click":
-                watcher.choose(self.ann)
-            else:
-                watcher.back(self.ann)
+        if what in ("click", "rclick") and self.screen == screens.CHARGEN:
+            # The game's own keys here: plus and minus spend and take back
+            # points, and the engine gets the key whatever the mod does. Going
+            # on to `click()` sent a REAL left click to wherever the pointer
+            # was left, once per point, and said "Character screen." each time
+            # -- on top of the point being announced, so that was cut off.
             return
         if what in ("click", "rclick") and self.screen == screens.SLOTS:
             # **Nothing at all.** This screen is the game's own keyboard from
@@ -2789,7 +3841,7 @@ class App:
             return
         watcher = self.current_watcher()
         if watcher is None:
-            self.ann.answer("No screen recognised.")
+            self.ann.answer(tr("app.no_screen_recognised", "No screen recognised."))
             return
         getattr(watcher, what, lambda _a: None)(self.ann)
 
@@ -2817,7 +3869,10 @@ class App:
             # made no sound, and a load that worked was indistinguishable from
             # a key that never arrived.
             if not first:
-                self.ann.answer("Game loaded.")
+                # What was said before belongs to a game that no longer
+                # exists; reading it back would describe the wrong world.
+                self.history.clear()
+                self.ann.answer(tr("app.game_loaded", "Game loaded."))
 
         if not self.display.located:
             # Only worth looking once a session is live; before a game loads
@@ -2831,6 +3886,13 @@ class App:
             # The engine narrates its own blows now, so stop assembling ours.
             self.world.combat.narrate_damage = False
         for line in self.display.poll():
+            # Into the log as well as the speech. The game's debug.log does not
+            # carry these and the mod's log did not either, so "it never said
+            # his hit points" could not be checked against anything: whether
+            # the engine wrote the line and the mod lost it, or the engine never
+            # wrote it, looked the same afterwards.
+            print("[display] {}".format(line), flush=True)
+            self.history.add(line)
             self.ann.say(line, force=True)
 
     def _ticks_to_believe(self, detected: str) -> int:
@@ -2844,7 +3906,50 @@ class App:
         """
         if self.screen == screens.CHARGEN and detected == screens.SELECT:
             return SELECT_AFTER_EDITOR_TICKS
+        if self.screen == screens.MAIN_MENU and detected == screens.CHARGEN:
+            return EDITOR_FROM_MENU_TICKS
         return SCREEN_STABLE_TICKS
+
+    def _watch_box(self) -> None:
+        """The engine's question box, put up over the map.
+
+        **Control and X asked "are you sure you want to quit?" in silence.**
+        The pause menu already noticed this box when Exit raised it; over the
+        map nothing was looking. It is the engine's general dialog (0x0041CF20)
+        and its words are drawn into the window, not kept anywhere, so it is
+        noticed by shape -- the same shape the save screen's boxes have -- and
+        named by the key that opened it. Any other box is said to be a
+        question, which is true, rather than guessed at.
+        """
+        if self.screen not in (screens.WORLD, screens.UNKNOWN) or self.proc is None:
+            self._box = None
+            return
+        world = self.world
+        if world.talking() or world.inventory.open:
+            self._box = None
+            return
+        try:
+            box = slotscreen.confirm_box(self.proc)
+        except Exception:
+            box = None
+        seen = (box.addr, box.width, box.height, len(box.buttons)) if box else None
+        if seen == getattr(self, "_box", None):
+            return
+        self._box = seen
+        if box is None:
+            return
+        if len(box.buttons) < 2:
+            self.ann.answer(tr("app.the_game_is_showing_a_message_that_cannot_be_read_press_ente",
+                               "The game is showing a message that cannot be read. "
+                               "Press Enter to dismiss it."))
+            return
+        yes_no = tr("pausemenu.yes_no", "Y or Enter for yes, N or Escape for no.")
+        if time.time() - getattr(self, "quit_key_at", 0.0) < QUIT_KEY_SECONDS:
+            self.ann.answer("{} {}".format(pausemenu.quit_question(self.proc), yes_no))
+            return
+        self.ann.answer("{} {}".format(
+            tr("app.question_box", "The game is asking a question the mod cannot read."),
+            yes_no))
 
     def tick(self) -> None:
         if not self.proc:
@@ -2852,20 +3957,31 @@ class App:
         # Always pump the script log first: it is the only thing that can tell
         # us a game session is live, and memory alone mistakes the map for the
         # premade-character screen.
+        # **Each stage is timed, and a slow tick says which stage.** Typed
+        # amounts in the "how many" window were all thrown away as stale: the
+        # loop was taking over a second a turn there, and a queued key only
+        # lives for one. Nothing said where the second went.
+        marks = [("start", time.time())]
         self.world.pump()
+        marks.append(("script log", time.time()))
         self._settle_move()
+        marks.append(("settle move", time.time()))
         self.pump_display()
+        marks.append(("display", time.time()))
         # A save is always worth hearing, whatever screen the mod thinks is up.
         # It is also the one announcement that must never be dropped: acting on
         # a save that did not happen is how an evening's play is lost.
         for line in self.saves.poll():
             self.ann.say(line, force=True)
+        marks.append(("saves", time.time()))
         # The script's mode says whether this is Save or Load; before a game
         # loads there is no script, and the only way here is Load.
         self.slots.mode = self.world.log.game_mode if self.world.log.session_live else None
         detected = screens.detect(self.proc,
                                   in_game=self.world.log.session_live,
                                   mode=self.world.log.game_mode)
+        marks.append(("detect", time.time()))
+        self._slow_tick(marks)
 
         if detected != self.screen:
             # Debounce: only believe a new screen once it has held steady.
@@ -2911,24 +4027,39 @@ class App:
             watcher = self.current_watcher()
             if watcher:
                 watcher.poll(self.ann)
+            self._watch_box()
 
         # Hotkeys last: an aimed click sends its own keystrokes and reads the
         # same log, so it must not run half way through a screen transition.
         self._run_pending()
         self._run_item_action()
-        self._run_menu_action()
 
-    def run(self, on_tick: Optional[Callable[[], None]] = None) -> None:
+    @staticmethod
+    def _slow_tick(marks) -> None:
+        """Log where the time went, when a tick took long enough to matter."""
+        total = marks[-1][1] - marks[0][1]
+        if total < SLOW_TICK_SECONDS:
+            return
+        parts = ", ".join("{} {:.2f}".format(name, at - marks[i][1])
+                          for i, (name, at) in enumerate(marks[1:]))
+        print("[app] slow tick {:.2f}s: {}".format(total, parts), flush=True)
+
+    def run(self, on_tick: Optional[Callable[[], None]] = None,
+            until: Optional[Callable[[], bool]] = None) -> None:
+        """Poll the game until `until` says to stop, or forever without it."""
         period = 1.0 / POLL_HZ
         last_try = 0.0
         print("[app] waiting for Fallout 2 ...", flush=True)
         while True:
+            if until is not None and until():
+                print("[app] stopping", flush=True)
+                return
             if not self._connected():
                 now = time.time()
                 if now - last_try >= RECONNECT_SECONDS:
                     last_try = now
                     if self.connect():
-                        self.ann.say("Fallout 2 accessibility connected.", force=True)
+                        self.ann.say(tr("app.fallout_2_accessibility_connected", "Fallout 2 accessibility connected."), force=True)
                         # And, only if something is wrong, what is missing.
                         # Said here rather than in connect() so it lands after
                         # the greeting instead of ahead of it.
@@ -2936,11 +4067,22 @@ class App:
                                    if self._offsets is not None else None)
                         if warning:
                             self.ann.say(warning, force=True)
+                        # And whether the pointer can be used at all. This one
+                        # matters more than it looks: without it, full screen
+                        # presents as every click in the mod quietly doing
+                        # nothing.
+                        if getattr(self, "_window_complaint", None):
+                            self.ann.say(self._window_complaint, force=True)
                 time.sleep(RECONNECT_SECONDS)
                 continue
             try:
                 if self._active():
+                    began = time.time()
                     self.tick()
+                    took = time.time() - began
+                    if took >= SLOW_TICK_SECONDS:
+                        print("[app] tick took {:.2f}s on {}".format(
+                            took, self.screen), flush=True)
             except OSError:
                 pass
             except Exception:
@@ -2963,8 +4105,8 @@ class App:
                 summary = where.strip().splitlines()[-1]
                 if summary != self._last_fault:
                     self._last_fault = summary
-                    self.ann.say("The mod hit an error and carried on. "
-                                 "Check the console.", force=True)
+                    self.ann.say(tr("app.the_mod_hit_an_error_and_carried_on_check_the_console", "The mod hit an error and carried on. "
+                                 "Check the console."), force=True)
             if on_tick:
                 on_tick()
             time.sleep(period)

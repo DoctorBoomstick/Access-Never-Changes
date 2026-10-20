@@ -1,6 +1,6 @@
 """A read-only view of the character creation screen.
 
-Every address here was confirmed against the live process (see HARNESS.md);
+Every address here was confirmed against the live process (docs/DEVELOPING.md);
 none were borrowed from a reimplementation. The index map in particular was
 *measured* by walking the editor, because the real executable's ranges differ
 from fallout2-ce's and include two genuine non-contiguous outliers.
@@ -27,10 +27,23 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from ..memory.process import Process
 from ..msg.memlist import read_message_list
+from . import appearance
+from ..i18n import tr
+from .. import words
 
 # -- confirmed addresses -----------------------------------------------------
 
-SEL_ADDR = 0x005709EC          # characterEditorSelectedItem
+# Which row the keys are on. NOT the address this file read for most of its
+# life: 0x005709EC is which INFO CARD is showing, which tracks the row for the
+# simple sections and goes its own way in the folder box, where every perk,
+# karma title, town and kind of kill has a card of its own. That is where
+# "Item 152, not covered yet" came from -- card numbers, read as rows.
+#
+# Read out of the editor's own Tab handler (0x004325D2), which steps this one,
+# and confirmed by logging all three while the sheet was walked end to end.
+SEL_ADDR = 0x005707D0          # characterEditorSelectedItem: the row
+FOLDER_ADDR = 0x005707D4       # which folder the box shows: perks, karma, kills
+CARD_ADDR = 0x005709EC         # the info card on show, by art number
 SPECIAL_ADDR = 0x0051C394      # 7 x i32, Strength..Luck
 CHAR_POINTS_ADDR = 0x00518538  # unspent character points
 NAME_ADDR = 0x0056D75C         # char buffer, the character's name
@@ -103,56 +116,86 @@ MSG_STAT = 0x0066817C
 MSG_SKILL = 0x00668080
 MSG_TRAIT = 0x0066BE38
 
-# -- measured index map ------------------------------------------------------
-# Tab cycles these five sections. The order within each is the order the editor
-# actually visits on Down, including the outliers 83 and 94 (both verified
-# stable across ~200 samples; 94 is Sex Appeal).
-
-SPECIAL_INDICES = [0, 1, 2, 3, 4, 5, 6]
-# Name, age and sex. Measured on the in-game sheet by tabbing onto the row and
-# reading the indices the mod could not name -- 7, 8 and 9, which is the gap
-# between SPECIAL and the condition block that had been sitting unexplained in
-# this map since it was first written.
+# -- the rows ----------------------------------------------------------------
+# The editor's own numbering, one contiguous run per box, read out of its Tab
+# handler and confirmed against a live walk of the whole sheet:
 #
-# During creation these three are buttons that open dialogs, and the dialogs are
-# read separately; here they are simply a row to be read.
+#     0-6      SPECIAL
+#     7-9      name, age, sex
+#     10-42    the folder box -- one row per line of whichever folder is open
+#     43-50    hit points and the conditions
+#     51-60    derived stats
+#     61-78    skills
+#     79       unspent skill points
+#     82-97    traits, during creation
+#     1281     Race    -- sfall's hero appearance mod, not the engine's; its
+#     1282     Style      buttons are numbered from 0x500 and still move this
+SPECIAL_INDICES = list(range(0, 7))
 IDENTITY_INDICES = [7, 8, 9]
-CONDITION_INDICES = [10, 11, 12, 13, 14, 15, 16, 17]
-DERIVED_INDICES = [18, 19, 20, 21, 22, 23, 83, 24, 25, 26]
-SKILL_INDICES = list(range(28, 46))
-TRAIT_INDICES = [55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 94, 69, 70]
+FOLDER_INDICES = list(range(10, 43))
+CONDITION_INDICES = list(range(43, 51))
+DERIVED_INDICES = list(range(51, 61))
+SKILL_INDICES = list(range(61, 79))
+POINTS_INDICES = [79]
+TRAIT_INDICES = list(range(82, 98))
+APPEARANCE_INDICES = [1281, 1282]
 
-# The Perks, Karma and Kills box, which only a character who exists has.
-#
-# Measured by walking the in-game sheet and reading the index the mod could not
-# name against the label the trait pointer was holding at that moment:
-#
-#     71  Perks          (with its description in the condition pointer)
-#     48  Karma
-#     46  Kills          -- one row per creature, "Giant Ants Kills"
-#
-# 47, 54 and 135 turn up in the same three tabs and are almost certainly the
-# rest of that box, but they were not caught with a label attached, so they are
-# listed here to be READ rather than to be named: the label comes from the
-# pointer at the time, and an entry whose pointer says nothing sensible falls
-# back to its number instead of being guessed at.
-RECORD_INDICES = [46, 47, 48, 54, 71, 135]
-
-SECTION_ORDER = ["special", "identity", "condition", "derived", "skill",
-                 "trait", "record"]
+SECTION_ORDER = ["special", "identity", "folder", "condition", "derived",
+                 "skill", "points", "trait", "appearance"]
 
 _SECTION_OF: Dict[int, Tuple[str, int]] = {}
 for _name, _seq in (
     ("special", SPECIAL_INDICES),
     ("identity", IDENTITY_INDICES),
+    ("folder", FOLDER_INDICES),
     ("condition", CONDITION_INDICES),
     ("derived", DERIVED_INDICES),
     ("skill", SKILL_INDICES),
+    ("points", POINTS_INDICES),
     ("trait", TRAIT_INDICES),
-    ("record", RECORD_INDICES),
+    ("appearance", APPEARANCE_INDICES),
 ):
     for _pos, _idx in enumerate(_seq):
         _SECTION_OF[_idx] = (_name, _pos)
+
+# Sections whose words come from the engine's label pointers rather than from a
+# message file. The pointers are set when the box is DRAWN, a frame after the
+# row moves, so these are read once they have settled -- see the watcher.
+POINTER_SECTIONS = frozenset(("folder", "condition", "trait"))
+
+# What the folder box is showing.
+FOLDER_PERKS = 0
+FOLDER_KARMA = 1
+FOLDER_KILLS = 2
+
+# The karma folder's towns.
+#
+# The engine pairs each town's reputation variable with its world map area in a
+# table of nineteen at 0x0051854C, and draws a "town: standing" row for every
+# area the player knows, in table order, under a "Reputation" heading -- see
+# 0x0043BEA3. The row's own text is formatted on the stack and thrown away; what
+# the engine keeps for the highlighted row is only the standing ("Accepted"),
+# its description, and a card. So the town is worked out from where the row is.
+#
+# The heading's card is 48, and each standing has a card of its own (the same
+# routine, picking by threshold). Rows are stepped one at a time, so whoever
+# reaches a town has passed the heading on the way and its row is known.
+REP_TABLE = 0x0051854C          # 19 x (reputation gvar, area index)
+REP_TABLE_COUNT = 19
+REP_HEADING_CARD = 48
+REP_TOWN_CARDS = frozenset((0x87, 0x89, 0x8D, 0x96, 0x99))
+
+# editor.msg: "Skill Points" and what they are for.
+MSG_SKILL_POINTS = 130
+MSG_SKILL_POINTS_DESC = 131
+
+# What the box says when a skill will go no further, as 0x0043B370 builds it:
+# the skill's name with a colon, then two lines -- or, short of points, one.
+MSG_AT_MAX = (132, 133)          # "At maximum level." "Unable to increment it."
+MSG_AT_MIN = (134, 135)          # "At minimum level." "Unable to decrement it."
+MSG_NO_POINTS = 136              # "Not enough skill points available."
+# The engine's ceiling for a skill: skillAdd answers -3 past it.
+SKILL_CEILING = 300
 
 # stat.msg message numbers for the seven SPECIAL stats and their descriptions.
 SPECIAL_NAME_MSG = [100, 101, 102, 103, 104, 105, 106]
@@ -196,18 +239,23 @@ def rating_msg(value: int) -> int:
 
 # Derived stats in the order the editor lists them, matching DERIVED_INDICES.
 # The label is looked up in stat.msg where a clean equivalent exists.
-DERIVED_LAYOUT = [
-    ("Armor Class", 109),
-    ("Action Points", 108),
-    ("Carry Weight", 112),
-    ("Melee Damage", 111),
-    ("Damage Resistance", 124),
-    ("Poison Resistance", 132),
-    ("Radiation Resistance", 131),
-    ("Sequence", 113),
-    ("Healing Rate", 114),
-    ("Critical Chance", 115),
-]
+DERIVED_LAYOUT = [109, 108, 112, 111, 124, 132, 131, 113, 114, 115]
+
+
+def derived_fallback(pos: int) -> str:
+    """The English for a derived stat, for when stat.msg is not loaded."""
+    return [
+        tr("stat.armor_class", "Armor Class"),
+        tr("stat.action_points", "Action Points"),
+        tr("stat.carry_weight", "Carry Weight"),
+        tr("stat.melee_damage", "Melee Damage"),
+        tr("stat.damage_resistance", "Damage Resistance"),
+        tr("stat.poison_resistance", "Poison Resistance"),
+        tr("stat.radiation_resistance", "Radiation Resistance"),
+        tr("stat.sequence", "Sequence"),
+        tr("stat.healing_rate", "Healing Rate"),
+        tr("stat.critical_chance", "Critical Chance"),
+    ][pos]
 
 
 class EditorItem(NamedTuple):
@@ -235,11 +283,41 @@ class CharGen:
         # app when the in-game character screen reports one. While it is here it
         # WINS over everything computed below -- see the note on `special`.
         self.sheet = None
+        # Which karma-folder row held the Reputation heading, once seen, and the
+        # towns that follow it. Both belong to one visit to the screen.
+        self._rep_heading: Optional[int] = None
+        self._towns: Optional[List[str]] = None
+
+    def reset(self) -> None:
+        """Forget what was learned about the folder box on the last visit."""
+        self._rep_heading = None
+        self._towns = None
 
     # -- raw state ----------------------------------------------------------
 
     def selection(self) -> Optional[int]:
         return self.proc.read_i32(SEL_ADDR)
+
+    def folder(self) -> Optional[int]:
+        return self.proc.read_i32(FOLDER_ADDR)
+
+    def card(self) -> Optional[int]:
+        return self.proc.read_i32(CARD_ADDR)
+
+    def towns(self) -> List[str]:
+        """The towns the karma folder lists, in the order it lists them."""
+        if self._towns is None:
+            from . import worldmap
+
+            known = {a.index: a.name for a in worldmap.areas(self.proc)
+                     if a.state in (worldmap.KNOWN, worldmap.VISITED)}
+            out: List[str] = []
+            for i in range(REP_TABLE_COUNT):
+                area = self.proc.read_i32(REP_TABLE + 8 * i + 4)
+                if area is not None and area in known:
+                    out.append(known[area])
+            self._towns = out
+        return self._towns
 
     def _live(self):
         """The engine's report for an existing character, or None.
@@ -324,7 +402,8 @@ class CharGen:
         if value is None:
             return None
         text = self._msg(MSG_EDITOR).get(SEX_MSG.get(value, -1))
-        return text.capitalize() if text else "sex {}".format(value)
+        return text.capitalize() if text else tr("chargen.sex_number", "sex {number}",
+                                                 number=value)
 
     def dialog(self) -> Optional[str]:
         """Which of the name, age and sex dialogs is open, if any.
@@ -400,6 +479,102 @@ class CharGen:
         if not any(ch.isalpha() for ch in text):
             return None
         return text
+
+    def adjust_refused(self, direction: int) -> Optional[str]:
+        """What the engine's "will go no further" box says, in its own words.
+
+        The box is drawn text; nothing keeps the string. But 0x0043B370 has
+        only three things to say, and which one follows from the push and the
+        skill: lowering is refused only at the floor, and raising is refused
+        either at the ceiling or for want of points.
+        """
+        item = self.current()
+        if item is None or item.section != "skill":
+            return None
+        ed = self._msg(MSG_EDITOR)
+        if direction > 0:
+            values = self.skills()
+            value = values[item.position] if item.position < len(values) else 0
+            if value < SKILL_CEILING:
+                return ed.get(MSG_NO_POINTS) or tr(
+                    "chargen.no_points", "Not enough skill points available.")
+            lines = MSG_AT_MAX
+        else:
+            lines = MSG_AT_MIN
+        said = " ".join(ed.get(n, "") for n in lines).strip()
+        return "{}: {}".format(item.label, said) if said else None
+
+    def appearance_choice(self) -> Optional[appearance.Choice]:
+        try:
+            if not hasattr(self, "_hero_var"):
+                # Once per attach: it reads the whole of sfall's DLL.
+                self._hero_var = appearance.find_hero_var(self.proc)
+            return appearance.current(self.proc, self._hero_var)
+        except Exception:
+            return None
+
+    def _appearance_row(self, index: int, pos: int) -> EditorItem:
+        """Race or Style: sfall's rows, named by the packs' own text.
+
+        sfall's key handler takes Left and Right on these rows itself, and Tab
+        from the skills lands here, so the rows were always usable -- they just
+        never said what had been picked. See appearance.py for where that is.
+        """
+        which = "race" if pos == 0 else "style"
+        fallback = (tr("chargen.race", "Race") if pos == 0
+                    else tr("chargen.style", "Style"))
+        choice = self.appearance_choice()
+        if choice is None:
+            return EditorItem(index, "appearance", pos, fallback, None, None)
+        texts = getattr(self, "_appearance_texts", None)
+        if texts is None:
+            texts = self._appearance_texts = appearance.Texts(self.proc.directory)
+        title, desc = texts.entry(choice, which)
+        if title:
+            label, value = appearance.split_title(title)
+        else:
+            # A pack with no text: say which one by number, counted from 1.
+            label = fallback
+            value = str((choice.race if pos == 0 else choice.style) + 1)
+        return EditorItem(index, "appearance", pos, label, value, desc)
+
+    def _folder_row(self, index: int, pos: int) -> EditorItem:
+        """One line of the perks, karma or kills folder.
+
+        The engine names the highlighted line in the trait pointers when it
+        draws the box -- "Gifted", "Virgin of the Wastes", "Geckos Kills" --
+        with the matching description, so every perk and title the game has,
+        RPU's included, reads in the game's own words. What it does not keep is
+        the number drawn beside a kill, or the town in front of a standing;
+        those are put back here.
+        """
+        label = self._label_text(TRAIT_NAME_PTR)
+        desc = self._ptr_text(TRAIT_DESC_PTR, 400)
+        if not label:
+            # Honest about not knowing, rather than confident and wrong.
+            return EditorItem(index, "folder", pos,
+                              tr("chargen.line", "Line {number}", number=pos + 1),
+                              None, None)
+        which = self.folder()
+        value = None
+        if which == FOLDER_KILLS:
+            live = self._live()
+            if live is not None:
+                from .charsheet import kill_count
+
+                hit = kill_count(live.kills, label)
+                if hit is not None:
+                    value = str(hit[1])
+        elif which == FOLDER_KARMA:
+            card = self.card()
+            if card == REP_HEADING_CARD:
+                self._rep_heading = index
+            elif card in REP_TOWN_CARDS and self._rep_heading is not None:
+                towns = self.towns()
+                k = index - self._rep_heading - 1
+                if 0 <= k < len(towns):
+                    label = "{}: {}".format(towns[k], label)
+        return EditorItem(index, "folder", pos, label, value, desc)
 
     # -- computed values ----------------------------------------------------
 
@@ -489,7 +664,8 @@ class CharGen:
             stats = self.special()
             names = self._msg(MSG_STAT)
             descs = self._msg(MSG_STAT)
-            label = names.get(SPECIAL_NAME_MSG[pos]) or "Stat {}".format(pos)
+            label = (names.get(SPECIAL_NAME_MSG[pos])
+                     or tr("chargen.stat", "Stat {number}", number=pos))
             value = None
             if pos < len(stats):
                 value = str(stats[pos])
@@ -522,35 +698,42 @@ class CharGen:
         if section == "skill":
             names = self._msg(MSG_SKILL)
             values = self.skills()
-            label = names.get(100 + pos) or "Skill {}".format(pos)
-            value = "{} percent".format(values[pos]) if pos < len(values) else None
+            label = names.get(100 + pos) or tr("chargen.skill", "Skill {number}",
+                                                number=pos)
+            value = (tr("chargen.percent", "{value} percent", value=values[pos])
+                     if pos < len(values) else None)
             if pos in self.tags():
-                value = "{}, tagged".format(value) if value else "tagged"
+                tagged = tr("chargen.tagged", "tagged")
+                value = "{}, {}".format(value, tagged) if value else tagged
             return EditorItem(
                 index, section, pos, label, value, names.get(200 + pos)
             )
 
         if section == "trait":
-            label = self._ptr_text(TRAIT_NAME_PTR, 96) or "Trait {}".format(pos)
-            value = "selected" if pos in self.traits() else None
+            label = (self._ptr_text(TRAIT_NAME_PTR, 96)
+                     or tr("chargen.trait", "Trait {number}", number=pos))
+            value = tr("chargen.selected", "selected") if pos in self.traits() else None
             return EditorItem(
                 index, section, pos, label, value,
                 self._ptr_text(TRAIT_DESC_PTR, 400),
             )
 
-        if section == "record":
-            # Perks, Karma and Kills. The label is whatever the trait pointer
-            # is holding, because that is the pointer the engine moves for this
-            # box -- confirmed by reading "Perks", "Karma" and "Giant Ants
-            # Kills" off it while stepping these very indices. When it is not
-            # holding anything readable the index is said instead, which is
-            # honest about not knowing rather than confident and wrong.
-            label = self._label_text(TRAIT_NAME_PTR)
-            if not label:
-                return EditorItem(index, section, pos,
-                                  "Item {}".format(index), None, None)
-            return EditorItem(index, section, pos, label, None,
-                              self._ptr_text(TRAIT_DESC_PTR, 400))
+        if section == "folder":
+            return self._folder_row(index, pos)
+
+        if section == "points":
+            ed = self._msg(MSG_EDITOR)
+            live = self._live()
+            value = None
+            if live is not None and live.unspent is not None:
+                value = str(live.unspent)
+            return EditorItem(index, section, pos,
+                              ed.get(MSG_SKILL_POINTS)
+                              or tr("chargen.skill_points", "Skill Points"), value,
+                              ed.get(MSG_SKILL_POINTS_DESC))
+
+        if section == "appearance":
+            return self._appearance_row(index, pos)
 
         if section == "identity":
             # Labels from editor.msg, which is loaded whenever this screen is.
@@ -559,18 +742,22 @@ class CharGen:
             ed = self._msg(MSG_EDITOR)
             if pos == 0:
                 name = self.name()
-                return EditorItem(index, section, pos, ed.get(106) or "Name",
+                return EditorItem(index, section, pos,
+                                  ed.get(106) or tr("chargen.name", "Name"),
                                   name if name and name != "None" else None,
                                   None)
             if pos == 1:
                 age = self.age()
-                return EditorItem(index, section, pos, ed.get(104) or "Age",
+                return EditorItem(index, section, pos,
+                                  ed.get(104) or tr("chargen.age", "Age"),
                                   None if age is None else str(age), None)
-            return EditorItem(index, section, pos, ed.get(105) or "Sex",
+            return EditorItem(index, section, pos,
+                              ed.get(105) or tr("chargen.sex", "Sex"),
                               self.sex_name(), None)
 
         if section == "condition":
-            label = self._ptr_text(COND_NAME_PTR, 96) or "Condition {}".format(pos)
+            label = (self._ptr_text(COND_NAME_PTR, 96)
+                     or tr("chargen.condition", "Condition {number}", number=pos))
             value = None
             live = self._live()
             if live:
@@ -585,13 +772,12 @@ class CharGen:
             elif pos == 0:
                 hp = self.hit_points()
                 if hp is not None:
-                    value = "{} of {}".format(hp, hp)
+                    value = words.of(hp, hp)
             return EditorItem(index, section, pos, label, value, None)
 
         if section == "derived":
             stat_msg = self._msg(MSG_STAT)
-            fallback, msg_num = DERIVED_LAYOUT[pos]
-            label = stat_msg.get(msg_num) or fallback
+            label = stat_msg.get(DERIVED_LAYOUT[pos]) or derived_fallback(pos)
             values = self.derived()
             value = str(values[pos]) if pos < len(values) else None
             return EditorItem(index, section, pos, label, value, None)
@@ -612,10 +798,10 @@ class CharGen:
         if name:
             # Labelled, because an unnamed character's buffer literally reads
             # "None" and a bare "None." at the start of the summary is baffling.
-            bits.append("Name {}".format(name))
+            bits.append(tr("chargen.summary_name", "Name {name}", name=name))
         age = self.age()
         if age is not None:
-            bits.append("Age {}".format(age))
+            bits.append(tr("chargen.summary_age", "Age {age}", age=age))
         sex = self.sex_name()
         if sex:
             bits.append(sex)
@@ -634,10 +820,11 @@ class CharGen:
         if not self._live():
             points = self.char_points()
             if points is not None:
-                bits.append("{} character points remaining".format(points))
+                bits.append(tr("chargen.points_left", "{points} character points remaining",
+                               points=points))
             hp = self.hit_points()
             if hp is not None:
-                bits.append("Hit points {}".format(hp))
+                bits.append(tr("chargen.hit_points", "Hit points {hp}", hp=hp))
 
         # An existing character has facts a new one does not: how hurt they are,
         # what is wrong with them, and how far along they are.
@@ -646,40 +833,44 @@ class CharGen:
             from .charsheet import conditions
 
             if live.hp is not None and live.max_hp is not None:
-                bits.append("Health {} of {}".format(live.hp, live.max_hp))
+                bits.append(tr("chargen.health", "Health {hp} of {most}",
+                               hp=live.hp, most=live.max_hp))
             wrong = conditions(live)
             if wrong:
                 bits.append(", ".join(wrong).capitalize())
             # The level box, the way the screen lays it out: Level, Exp, and
             # what the next one wants.
             if live.level is not None:
-                bits.append("Level {}".format(live.level))
+                bits.append(tr("chargen.level", "Level {level}", level=live.level))
             if live.experience is not None:
-                bits.append("{} experience".format(live.experience))
+                bits.append(tr("chargen.experience", "{experience} experience",
+                               experience=live.experience))
             from .charsheet import next_level_experience
 
             needed = next_level_experience(live.level)
             if needed is not None:
-                bits.append("Next level at {}".format(needed))
+                bits.append(tr("chargen.next_level", "Next level at {experience}",
+                               experience=needed))
             if live.unspent:
-                bits.append("{} skill points to spend".format(live.unspent))
+                bits.append(tr("chargen.unspent", "{points} skill points to spend",
+                               points=live.unspent))
 
         tags = self.tags()
         if tags:
-            bits.append(
-                "Tagged: "
-                + ", ".join(skill_msg.get(100 + t, "skill {}".format(t)) for t in tags)
-            )
-        bits.append("{} of {} tags used".format(len(tags), MAX_TAGS))
+            bits.append(tr("chargen.tagged_list", "Tagged: {skills}", skills=", ".join(
+                skill_msg.get(100 + t) or tr("skilldex.skill", "skill {number}", number=t)
+                for t in tags)))
+        bits.append(tr("chargen.tags_used", "{used} of {most} tags used",
+                       used=len(tags), most=MAX_TAGS))
 
         traits = self.traits()
         if traits:
-            bits.append(
-                "Traits: "
-                + ", ".join(trait_msg.get(100 + t, "trait {}".format(t)) for t in traits)
-            )
+            bits.append(tr("premade.traits", "Traits: {traits}", traits=", ".join(
+                trait_msg.get(100 + t) or tr("chargen.trait_number", "trait {number}",
+                                             number=t)
+                for t in traits)))
         else:
-            bits.append("No traits chosen")
+            bits.append(tr("chargen.no_traits", "No traits chosen"))
         return ". ".join(bits) + "."
 
     def is_plausible(self) -> bool:

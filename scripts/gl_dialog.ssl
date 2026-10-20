@@ -158,7 +158,11 @@ procedure on_key begin
     * one control and put nothing in its place.
     */
    if (m bwand DIALOGVIEW) then return;
-   if (key == DIK_UP or key == DIK_DOWN) then begin
+   /*
+    * And Enter, which says the reply the list is on -- the Python side types
+    * its number. Taken so the one press cannot also be read by the engine.
+    */
+   if (key == DIK_UP or key == DIK_DOWN or key == DIK_RETURN) then begin
       set_sfall_return(KEY_SWALLOW);
    end
 end

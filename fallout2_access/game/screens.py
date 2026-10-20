@@ -27,9 +27,10 @@ someone who cannot check it against the screen.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
 from ..memory.process import Process
+from ..i18n import tr
 
 # **These are absolute into fallout2.exe, and they do not survive a patched one.**
 #
@@ -72,8 +73,12 @@ CHARGEN = "chargen"
 WORLD = "world"          # a loaded map, walked in hexes
 SLOTS = "slots"          # the save or load screen
 TIMER = "timer"          # the explosive countdown
+QUANTITY = "quantity"    # how many of a stack to move
 PIPBOY = "pipboy"        # the Pip-Boy 2000
 WORLDMAP = "worldmap"    # travelling between places, in subtiles
+CALLED_SHOT = "calledshot"  # where on the target an aimed attack goes
+PAUSE = "pause"          # the menu Escape opens on the map
+PREFS = "prefs"          # the preferences screen
 UNKNOWN = "unknown"
 
 # Sub-modes reported by the in-game script's get_game_mode bitmask, from
@@ -107,28 +112,29 @@ MODE_PAUSEWIN = 0x200000
 # several bits are set. LOCALMAP and PCOMBAT are absent on purpose: the first
 # means "on a map", which is the ordinary state, and the second only ever
 # accompanies COMBAT and would say it twice.
-MODE_NAMES = [
-    (MODE_DIALOG, "dialogue"),
-    (MODE_BARTER, "barter"),
-    (MODE_INVENTORY, "inventory"),
-    (MODE_INTFACELOOT, "loot"),
-    (MODE_INTFACEUSE, "use item on"),
-    (MODE_PIPBOY, "pipboy"),
-    (MODE_SKILLDEX, "skilldex"),
-    (MODE_CHARSCREEN, "character screen"),
-    (MODE_AUTOMAP, "automap"),
-    (MODE_WORLDMAP, "world map"),
-    (MODE_ESCMENU, "escape menu"),
-    (MODE_SAVEGAME, "save game"),
-    (MODE_LOADGAME, "load game"),
-    (MODE_OPTIONS, "options"),
-    (MODE_HELP, "help"),
-    (MODE_HEROWIN, "party member screen"),
-    (MODE_DIALOGVIEW, "dialogue"),
-    (MODE_COUNTERWIN, "quantity"),
-    (MODE_PAUSEWIN, "paused"),
-    (MODE_COMBAT, "combat"),
-]
+def mode_names() -> List[Tuple[int, str]]:
+    return [
+        (MODE_DIALOG, tr("mode.dialogue", "dialogue")),
+        (MODE_BARTER, tr("mode.barter", "barter")),
+        (MODE_INVENTORY, tr("mode.inventory", "inventory")),
+        (MODE_INTFACELOOT, tr("mode.loot", "loot")),
+        (MODE_INTFACEUSE, tr("mode.use_item_on", "use item on")),
+        (MODE_PIPBOY, tr("mode.pipboy", "pipboy")),
+        (MODE_SKILLDEX, tr("mode.skilldex", "skilldex")),
+        (MODE_CHARSCREEN, tr("mode.character", "character screen")),
+        (MODE_AUTOMAP, tr("mode.automap", "automap")),
+        (MODE_WORLDMAP, tr("mode.worldmap", "world map")),
+        (MODE_ESCMENU, tr("mode.escape_menu", "escape menu")),
+        (MODE_SAVEGAME, tr("mode.save", "save game")),
+        (MODE_LOADGAME, tr("mode.load", "load game")),
+        (MODE_OPTIONS, tr("mode.options", "options")),
+        (MODE_HELP, tr("mode.help", "help")),
+        (MODE_HEROWIN, tr("mode.party", "party member screen")),
+        (MODE_DIALOGVIEW, tr("mode.dialogue", "dialogue")),
+        (MODE_COUNTERWIN, tr("mode.quantity", "quantity")),
+        (MODE_PAUSEWIN, tr("mode.paused", "paused")),
+        (MODE_COMBAT, tr("mode.combat", "combat")),
+    ]
 
 
 # Several bits can be set at once, and these three do not hide the map, so
@@ -202,10 +208,10 @@ def is_map_mode(mode: Optional[int]) -> bool:
 def mode_name(mode: Optional[int]) -> str:
     """Human name for a get_game_mode bitmask."""
     if mode is None:
-        return "unknown"
-    names = [name for bit, name in MODE_NAMES if mode & bit]
+        return tr("mode.unknown", "unknown")
+    names = list(dict.fromkeys(name for bit, name in mode_names() if mode & bit))
     # No panel bits set means the plain map view, whether or not LOCALMAP is on.
-    return ", ".join(names) if names else "exploring"
+    return ", ".join(names) if names else tr("mode.exploring", "exploring")
 
 
 # Cursor modes reported by the script's get_cursor_mode. This decides what a
@@ -230,44 +236,58 @@ CURSOR_TARGETING = 2
 # First Aid where fallout2-ce puts USE_CROSSHAIR.
 CURSOR_USE_ITEM = 3
 
-CURSOR_NAMES = {
-    CURSOR_MOVEMENT: "movement cursor. A click walks you there",
-    CURSOR_COMMAND: "command cursor. A click interacts instead of walking",
-    CURSOR_TARGETING: "targeting cursor. A click attacks",
-    CURSOR_USE_ITEM: "item ready. A click uses it on what you point at",
-}
+def cursor_names() -> Dict[int, str]:
+    return {
+        CURSOR_MOVEMENT: tr("cursor.movement",
+                            "movement cursor. A click walks you there"),
+        CURSOR_COMMAND: tr("cursor.command",
+                           "command cursor. A click interacts instead of walking"),
+        CURSOR_TARGETING: tr("cursor.targeting",
+                             "targeting cursor. A click attacks"),
+        CURSOR_USE_ITEM: tr("cursor.use_item",
+                            "item ready. A click uses it on what you point at"),
+    }
 
-# mode -> the skill a click will apply.
-SKILL_CURSORS = {
-    4: "First Aid",
-    5: "Doctor",
-    6: "Lockpick",
-    7: "Steal",
-    8: "Traps",
-    9: "Science",
-    10: "Repair",
-}
+
+# mode -> the skill a click will apply. The keys are what callers test against.
+SKILL_CURSORS = {4: "first_aid", 5: "doctor", 6: "lockpick", 7: "steal",
+                 8: "traps", 9: "science", 10: "repair"}
+
+
+def skill_cursor_name(mode: int) -> Optional[str]:
+    return {
+        4: tr("cursor.first_aid", "First Aid"),
+        5: tr("cursor.doctor", "Doctor"),
+        6: tr("cursor.lockpick", "Lockpick"),
+        7: tr("cursor.steal", "Steal"),
+        8: tr("cursor.traps", "Traps"),
+        9: tr("cursor.science", "Science"),
+        10: tr("cursor.repair", "Repair"),
+    }.get(mode)
 
 
 def armed_skill(mode: Optional[int]) -> Optional[str]:
     """The skill a click would use, or None if the cursor is not holding one."""
     if mode is None:
         return None
-    return SKILL_CURSORS.get(mode)
+    return skill_cursor_name(mode)
 
 
 def cursor_name(mode: Optional[int]) -> Optional[str]:
     """What a left click will do right now, or None if we cannot say."""
     if mode is None:
         return None
-    if mode in CURSOR_NAMES:
-        return CURSOR_NAMES[mode]
-    skill = SKILL_CURSORS.get(mode)
+    names = cursor_names()
+    if mode in names:
+        return names[mode]
+    skill = skill_cursor_name(mode)
     if skill:
-        return "{} ready. A click uses it".format(skill)
+        return tr("cursor.skill", "{skill} ready. A click uses it", skill=skill)
     # Never seen one outside 0-10, but an unknown mode gets a number and the
     # one thing that is definitely true, rather than a confident guess.
-    return "cursor mode {}. Not the movement cursor. Press numpad 0 to walk".format(mode)
+    return tr("cursor.unknown",
+              "cursor mode {mode}. Not the movement cursor. Press M to change it",
+              mode=mode)
 
 
 def detect(proc: Process, in_game: bool = False,
@@ -306,13 +326,38 @@ def detect(proc: Process, in_game: bool = False,
     # The countdown first. It is a small window drawn over the map, so every
     # other detector still reports the map underneath it -- and a charge whose
     # timer is being set is the last thing that should be narrated as scenery.
+    # The countdown and the "Move Items" window are the SAME window -- 259x162,
+    # the same step buttons at 6000 and 7000 -- and the engine separates them
+    # with a mode argument it keeps in a register. So a shape test cannot, and
+    # this used to answer TIMER for both: moving a stack of caps onto a barter
+    # table was announced as an explosive being armed.
+    #
+    # What separates them is what is underneath. The countdown is opened from
+    # the map; the quantity window only ever appears over an item window. That
+    # is a bit in the game mode, which is the engine stating it rather than
+    # this mod inferring it from a rectangle.
     if timerwin.showing(proc):
-        return TIMER
+        return QUANTITY if is_item_window(mode) else TIMER
 
     if slotscreen.showing(proc):
         return SLOTS
 
+    # Preferences before the session test: the main menu's Options opens it
+    # with no game loaded and so no game mode to go by. Its window is the
+    # evidence, as the save screen's is.
+    from . import prefs
+    if prefs.showing(proc):
+        return PREFS
+
     if in_game:
+        # The called-shot window is a modal loop over a fight, and the game
+        # mode says only "combat" while it is up -- there is no bit for it. So
+        # it is asked of the open window list, like the countdown.
+        from . import calledshot, pausemenu
+        if calledshot.showing(proc):
+            return CALLED_SHOT
+        if mode is not None and mode & MODE_ESCMENU and pausemenu.showing(proc):
+            return PAUSE
         if mode is not None:
             # The Pip-Boy before the character screen. Both are bits in the
             # mask and neither is ever set with the other, so the order is only

@@ -752,21 +752,27 @@ class KeyWiring(unittest.TestCase):
         self._press("dlg_prev")
         self.assertIn("1 of 5", self.app.ann.last)
 
-    def test_numpad_plus_chooses(self):
-        self._press("click")
+    def test_enter_chooses(self):
+        self._press("enter")
         self.assertEqual(self.watcher.pip.pressed, [pipboy.ALARM_CLOCK])
 
-    def test_numpad_minus_backs_out_and_never_falls_through_to_a_raw_click(self):
+    def test_backspace_backs_out(self):
+        self.watcher.page = pipboy.ALARM_CLOCK
+        self._press("back")
+        self.assertEqual(self.watcher.pip.pressed, [])
+        self.assertIn("main list", self.app.ann.last)
+
+    def test_the_mouse_buttons_never_fall_through_to_a_raw_click(self):
         """The `return` in the dispatcher is the whole point of this test.
 
         Without it these fall through to `App.click`, which sends a real mouse
         click at wherever the pointer was last left -- on a panel where that is
         a page nobody asked for, and one of whose rows costs six hours.
         """
-        self.watcher.page = pipboy.ALARM_CLOCK
-        self._press("rclick")
-        self.assertEqual(self.watcher.pip.pressed, [])
-        self.assertIn("main list", self.app.ann.last)
+        for what in ("click", "rclick"):
+            self._press(what)
+            self.assertEqual(self.watcher.pip.pressed, [])
+            self.assertEqual(self.app.ann.last, "")
 
     def test_the_dialogue_keys_still_belong_to_a_conversation_elsewhere(self):
         class _World:
@@ -805,3 +811,35 @@ class ScreenDetection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheCannotRestBox(unittest.TestCase):
+    """The alarm clock's refusal is a modal box over the panel (0x00499518)."""
+
+    def _with(self, sizes_after):
+        from fallout2_access.game import uiwindow
+
+        pip = uiwindow.Window(id=7, flags=0, left=0, top=0, width=640,
+                              height=480, addr=0x1000, buttons=[])
+        others = [uiwindow.Window(id=8 + i, flags=0, left=0, top=0, width=w,
+                                  height=h, addr=0x2000 + i, buttons=[])
+                  for i, (w, h) in enumerate(sizes_after)]
+        bar = uiwindow.Window(id=3, flags=0, left=0, top=380, width=640,
+                              height=100, addr=0x900, buttons=[])
+        real_window, real_live = pipboy.window, uiwindow.live_windows
+        pipboy.window = lambda _proc: pip
+        uiwindow.live_windows = lambda _proc, buttons=False: [bar, pip] + others
+        try:
+            return pipboy.box_over(None)
+        finally:
+            pipboy.window, uiwindow.live_windows = real_window, real_live
+
+    def test_a_small_window_over_the_pipboy_is_a_box(self):
+        self.assertTrue(self._with([(280, 150)]))
+
+    def test_windows_under_it_are_not(self):
+        """The interface bar is drawn before the Pip-Boy, not over it."""
+        self.assertFalse(self._with([]))
+
+    def test_the_refusal_has_a_message_number(self):
+        self.assertEqual(pipboy.MSG_CANNOT_REST, 215)

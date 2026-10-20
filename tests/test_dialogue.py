@@ -198,14 +198,14 @@ class SayTest(unittest.TestCase):
         said = dialogue.say_reading(reading, opening=True, hint=True)
         self.assertLess(said.index("Greetings"), said.index("Say hello"))
         self.assertTrue(said.startswith("Conversation."))
-        self.assertTrue(said.endswith(dialogue.HINT))
+        self.assertTrue(said.endswith(dialogue.hint_text()))
 
     def test_a_later_line_does_not_reintroduce_itself(self):
         reading = dialogue.Dialogue(
             memory_with_dialogue(GREETING, ["Say hello"])).read()
         said = dialogue.say_reading(reading)
         self.assertNotIn("Conversation.", said)
-        self.assertNotIn(dialogue.HINT, said)
+        self.assertNotIn(dialogue.hint_text(), said)
 
 
 if __name__ == "__main__":

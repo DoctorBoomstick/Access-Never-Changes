@@ -493,6 +493,38 @@ class TestConfirmWording(unittest.TestCase):
         self.assertIn("Load slot 3", said)
         self.assertNotIn("Save", said)
 
+    def test_the_box_after_an_overwrite_takes_the_description(self):
+        """Saving over a game is two boxes. The second -- the description,
+        taken by a second Enter -- used to arrive in silence."""
+        from fallout2_access.app import SlotScreenWatcher
+
+        class _Live(_FakeScreen):
+            box = None
+
+            def confirm(self):
+                return self.box
+
+        class _Ann:
+            def __init__(self):
+                self.said = []
+
+            def answer(self, text):
+                self.said.append(text)
+
+        screen, ann = _Live(taken=True), _Ann()
+        w = SlotScreenWatcher(screen, None, None)
+        first, second = _Box(2), _Box(2)
+        first.addr, first.width, first.height = 0x100, 300, 90
+        second.addr, second.width, second.height = 0x200, 300, 120
+        screen.box = first
+        w.poll(ann)
+        w.poll(ann)
+        screen.box = second            # straight in, with no gap between
+        w.poll(ann)
+        self.assertEqual(len(ann.said), 2)
+        self.assertIn("overwrite", ann.said[0])
+        self.assertIn("Description", ann.said[1])
+
     def test_a_single_button_admits_it_cannot_be_read(self):
         """An unreadable notice is exactly the thing not to invent words for."""
         said = self.line(_FakeScreen(), buttons=1)

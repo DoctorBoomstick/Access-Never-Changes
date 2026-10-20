@@ -76,7 +76,16 @@ REGISTRY = {
     "WINDOW_LIST":       (0x006ADE58, [("..game.uiwindow", "WINDOW_LIST")]),
     "WINDOW_COUNT":      (0x006ADF24, [("..game.uiwindow", "WINDOW_COUNT")]),
     # -- character creation, and the premade screen that shares its tables ---
-    "CHARGEN_SELECTED":  (0x005709EC, [("..game.chargen", "SEL_ADDR")]),
+    # The row the keys are on, the folder the box shows, and the info card --
+    # three different things, and the card was read as the row for a long time.
+    "CHARGEN_SELECTED":  (0x005707D0, [("..game.chargen", "SEL_ADDR")]),
+    "CHARGEN_FOLDER":    (0x005707D4, [("..game.chargen", "FOLDER_ADDR")]),
+    "CHARGEN_CARD":      (0x005709EC, [("..game.chargen", "CARD_ADDR")]),
+    # The Pick a Perk window: its options, scroll and lit line, and perk.msg.
+    "PERK_OPTIONS":      (0x0056FCB0, [("..game.perkpick", "OPTIONS")]),
+    "PERK_TOP":          (0x005707A8, [("..game.perkpick", "TOP_ADDR")]),
+    "PERK_LINE":         (0x005707DC, [("..game.perkpick", "LINE_ADDR")]),
+    "MSG_PERK":          (0x006642D4, [("..game.perkpick", "MSG_PERK")]),
     "STAT_TABLE":        (0x0051C394, [("..game.chargen", "SPECIAL_ADDR"),
                                        ("..game.premade", "SPECIAL_ADDR")]),
     "CHAR_POINTS":       (0x00518538, [("..game.chargen", "CHAR_POINTS_ADDR")]),

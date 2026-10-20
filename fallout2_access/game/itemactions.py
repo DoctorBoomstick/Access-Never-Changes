@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import time
 from typing import Optional, Tuple
+from ..i18n import tr
 
 # The inventory's own panel, and the character figure in the middle of it.
 PANEL_WIDTH = 499
@@ -79,7 +80,7 @@ def click_item_slot(proc, hwnd, log_path: Optional[str] = None
     script instead lands it at (632,728), on the slot.
     """
     from ..input.send import guarded_tap, mouse_click
-    from .pointer import MenuMouse, aim_to
+    from .pointer import aim_ui
 
     # The bar is underneath the inventory window, so that has to go first.
     if _panel(proc, PANEL_WIDTH, PANEL_HEIGHT) is not None:
@@ -88,90 +89,19 @@ def click_item_slot(proc, hwnd, log_path: Optional[str] = None
 
     bar = _panel(proc, BAR_WIDTH, BAR_HEIGHT)
     if bar is None:
-        return False, "Cannot find the interface bar."
+        return False, tr("items.no_bar", "Cannot find the interface bar.")
     slot = [b for b in bar.buttons if (b.left, b.top) == BAR_ITEM_SLOT]
     if not slot:
-        return False, "Cannot find the item slot."
+        return False, tr("items.no_slot", "Cannot find the item slot.")
 
-    # The interface bar only exists in a loaded game, so the script is always
-    # there to ask. MenuMouse stays only as a fallback for a caller with no log
-    # path, and it is the wrong answer whenever the real one is available.
-    ok, _where, why = aim_to(proc, hwnd, *slot[0].centre(bar),
-                             log_path=log_path,
-                             reader=None if log_path else MenuMouse(proc))
+    # `aim_ui` tries the memory reader first and falls back to the script when
+    # it cannot converge, so a caller with no log path still gets the fast
+    # attempt and a caller with one still gets the reliable second try.
+    ok, _where, why = aim_ui(proc, hwnd, *slot[0].centre(bar),
+                             log_path=log_path)
     if not ok:
-        return False, "Cannot reach the item slot: {}.".format(why or "no answer")
+        return False, tr("items.slot_unreachable", "Cannot reach the item slot: {why}.",
+                         why=why or tr("items.no_answer", "no answer"))
     mouse_click("left", settle=0.5)
     time.sleep(0.6)
-    return True, ""
-
-
-def use(proc, hwnd, side: int, index: int, active: bool,
-        log_path: Optional[str] = None) -> Tuple[bool, str]:
-    """Arm the chosen item. Returns (done, what to say).
-
-    Refuses clearly rather than clicking hopefully. A refusal that says what to
-    do about it is worth more here than an attempt that starts a fight.
-    """
-    if side != SIDE_WORN or index not in HAND_INDEXES:
-        return False, "Put it in one of your hands first, then use it."
-
-    if not active:
-        # No blind key-pressing to "fix" this. Which hand is live is something
-        # the mod can read and the player can change, and an unmeasured guess at
-        # swapping it is what started a fight once already.
-        return False, "Make it the active item first, then use it."
-
-    return click_item_slot(proc, hwnd, log_path=log_path)
-
-
-def drop(finder, proc, hwnd, side: int, index: int, total: int,
-         log_path: Optional[str] = None) -> Tuple[bool, str]:
-    """Drop the chosen item on the ground, by dragging it onto yourself.
-
-    Aimed through the script for the same reason `click_item_slot` is: the
-    inventory only exists in a loaded game, and in one MenuMouse does not agree
-    with the real pointer. The error is smaller here than down on the interface
-    bar, which is worse rather than better -- it is the size that lands on the
-    row above the one you chose while reporting that it arrived.
-    """
-    from . import itemmove
-
-    win = _panel(proc, PANEL_WIDTH, PANEL_HEIGHT)
-    if win is None:
-        return False, "The inventory is not open."
-    if win.by_press(FIGURE) is None:
-        return False, "Cannot find where to drop it."
-
-    from ..input.send import mouse_down, mouse_up
-    from .pointer import MenuMouse, aim_to
-
-    reader = None if log_path else MenuMouse(proc)
-
-    def go(x, y):
-        return aim_to(proc, hwnd, x, y, log_path=log_path, reader=reader)
-
-    rect = (win.left, win.top, win.width, win.height)
-    try:
-        src = itemmove._target(finder, hwnd, rect, side, index, total, None)
-    except itemmove.CannotMove as exc:
-        return False, str(exc).capitalize() + "."
-
-    ok, _where, why = go(*src)
-    if not ok:
-        return False, "Cannot reach it: {}.".format(why or "no answer")
-    time.sleep(0.1)
-    mouse_down("left")
-    try:
-        figure = win.by_press(FIGURE)
-        ok, _where, why = go(*figure.centre(win))
-        if not ok:
-            # Put it back where it came from rather than letting go at whatever
-            # point the pointer stalled at.
-            go(*src)
-            return False, "Cannot reach the drop point: {}.".format(why or "")
-        time.sleep(0.1)
-    finally:
-        mouse_up("left")
-    time.sleep(0.4)
     return True, ""

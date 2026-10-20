@@ -89,7 +89,7 @@ class TestCursorNames(unittest.TestCase):
     def test_a_mode_outside_the_known_set_claims_nothing(self):
         text = screens.cursor_name(99)
         self.assertIn("99", text)
-        self.assertIn("numpad 0", text)
+        self.assertIn("Press M", text)
 
     def test_unknown_is_none_not_a_guess(self):
         self.assertIsNone(screens.cursor_name(None))
@@ -107,7 +107,7 @@ class TestModeNames(unittest.TestCase):
         player nothing while the escape menu sat open over their game and
         swallowed every click -- the game looked like it had stopped
         responding, and the mod knew exactly why and did not say."""
-        for bit, _name in screens.MODE_NAMES:
+        for bit, _name in screens.mode_names():
             self.assertNotIn("mode ", screens.mode_name(bit), hex(bit))
 
     def test_the_escape_menu_is_named(self):

@@ -45,6 +45,31 @@
 
 variable g_lastap := -1;
 variable g_lastmaxap := -1;
+variable g_unsafe := 0;
+// The interface bar's selection as last reported, packed into one string so a
+// change in any part of it is one comparison. Empty until the first poll after
+// a load, which records without speaking: nobody pressed anything.
+variable g_lastbar := "";
+
+/*
+ * The interface bar's two item buttons, as intface_get_attack (0x0045EF6C)
+ * reads them. 24 bytes each: the item at +0, the primary and secondary hit
+ * modes at +8 and +0xC, and at +0x10 which of them the button is on:
+ *
+ *     0 use    1 primary    2 primary, aimed    3 secondary
+ *     4 secondary, aimed    5 reload
+ *
+ * N steps that number and B swaps which button is active. Nothing else in the
+ * game says which it is on: the bar draws a picture, a crosshair when aimed.
+ */
+#define BAR_ITEMS       (0x005970F8)
+#define BAR_HAND        (0x00518F78)
+#define BAR_WINDOW      (0x00519024)   // -1 while there is no interface bar
+// item_w_mp_cost: (critter, hit mode, aiming) -> the action points the bar
+// prints, perks and traits included. Called by the bar itself and by the
+// attack, so it is the number the attack will actually charge.
+#define F_AP_COST       (0x00478B24)
+#define ART_ALIASES     (0x0056CAEC)   // art_alias_num's table, one int per critter art
 
 procedure start;
 procedure poll_combat;
@@ -53,6 +78,9 @@ procedure on_damage;
 procedure on_hitroll;
 procedure on_death;
 procedure on_target;
+procedure on_tohit;
+procedure poll_bar;
+procedure part_name(variable critter, variable loc);
 
 procedure start begin
    if game_loaded then begin
@@ -63,10 +91,124 @@ procedure start begin
       register_hook_proc(HOOK_AFTERHITROLL, on_hitroll);
       register_hook_proc(HOOK_ONDEATH,      on_death);
       register_hook_proc(HOOK_TARGETOBJECT, on_target);
+      register_hook_proc(HOOK_TOHIT,        on_tohit);
+      g_unsafe := get_ini_setting("ddraw.ini|Debugging|AllowUnsafeScripting");
+      g_lastbar := "";
       debug_msg("COMBAT:ready" + SEP);
    end else begin
       call poll_combat;
+      call poll_bar;
    end
+end
+
+/*
+ * poll_bar  --  what pressing the attack button would do, said when it changes.
+ *
+ * The weapon readout lists what a weapon CAN do -- swing or thrust, single or
+ * burst. This is which of those the bar is on, which is what N changes and the
+ * only way to know whether the next attack is aimed. Reported on any change:
+ * N, B, a new weapon put in the hand, a gun that has run dry and gone to
+ * reload.
+ *
+ * Fields: hand | action | hit mode | aimed | attack kind | action points |
+ * item name. The attack kind is the weapon's own ATTACK_MODE for that hit
+ * mode (swing, thrust, single, burst...), so the Python side names it in the
+ * same words the weapon readout uses.
+ */
+procedure poll_bar begin
+   variable hand, base, item, act, mode, aim, kind, ap, name, sig;
+
+   if (read_int(BAR_WINDOW) == -1) then return;
+   hand := read_int(BAR_HAND);
+   if (hand < 0 or hand > 1) then return;
+   base := BAR_ITEMS + hand * 24;
+   item := read_int(base);
+   act := read_int(base + 0x10);
+
+   mode := -1;
+   if (act == 1 or act == 2) then mode := read_int(base + 8);
+   else if (act == 3 or act == 4) then mode := read_int(base + 0xC);
+   // Reload is an action too, and it is a hit mode of its own to the engine:
+   // left hand 6, right hand 7.
+   else if (act == 5) then mode := 6 + hand;
+   aim := (act == 2 or act == 4);
+
+   sig := "" + hand + "|" + item + "|" + act + "|" + mode;
+   if (sig == g_lastbar) then return;
+   if (g_lastbar == "") then begin
+      g_lastbar := sig;
+      return;
+   end
+   g_lastbar := sig;
+
+   kind := 0;
+   name := "";
+   if (item) then begin
+      name := obj_name(item);
+      if (obj_item_subtype(item) == item_type_weapon) then begin
+         if (act == 1 or act == 2) then kind := weapon_attack_mode1(obj_pid(item));
+         else if (act == 3 or act == 4) then kind := weapon_attack_mode2(obj_pid(item));
+      end
+   end
+
+   ap := -1;
+   if (g_unsafe > 0 and mode >= 0) then
+      ap := call_offset_r3(F_AP_COST, dude_obj, mode, aim);
+
+   debug_msg("COMBAT:bar " + hand + SEP + act + SEP + mode + SEP + aim + SEP
+      + kind + SEP + ap + SEP + name + SEP);
+end
+
+/*
+ * part_name  --  a body part in combat.msg's words, as the called-shot window
+ * labels it.
+ *
+ * Numbered by the critter's ART ALIAS, not its kill type -- combat.msg says so
+ * itself ("Hit Locations (by art_num alias)"): humans from 1110, cattle from
+ * 1150, robots from 1170. The window's own lookup is 0x0042612C, 1000 + 10 *
+ * alias + part, and the alias is one read out of the table art_alias_num
+ * (0x00419998) indexes. Kill type was the first guess and it named every
+ * part of every critter "Error": Sulik as much as the rats.
+ *
+ * The entries are written to finish a sentence -- "the head", "the left
+ * hindleg" -- so the article comes off for a list.
+ */
+procedure part_name(variable critter, variable loc) begin
+   variable alias, name;
+   alias := read_int(read_int(ART_ALIASES) + 4 * (obj_art_fid(critter) bwand 0xFFF));
+   name := message_str_game(GAME_MSG_COMBAT, 1000 + 10 * alias + loc);
+   if (strlen(name) > 4) then begin
+      if (substr(name, 0, 4) == "the ") then name := substr(name, 4, strlen(name) - 4);
+   end
+   return name;
+end
+
+/*
+ * on_tohit  --  HOOK_TOHIT, for the called-shot window.
+ *
+ * arg0 the chance, arg1 attacker, arg2 target, arg3 body part, arg5 attack type.
+ *
+ * The window works out each body part's chance as it draws it -- calls at
+ * 0x00426437 and 0x004264C3 -- and those numbers are drawn and stored nowhere.
+ * This hook is inside the function it calls, so it hears every one of them
+ * as the window opens. The body part's name comes from combat.msg, the file
+ * the window takes its labels from.
+ *
+ * Only the player's, and only aimed: everything else (the crosshair's hover,
+ * the AI weighing its options) asks for body part 8, "uncalled".
+ */
+procedure on_tohit begin
+   variable chance, attacker, target, loc;
+   chance   := get_sfall_arg;
+   attacker := get_sfall_arg;
+   target   := get_sfall_arg;
+   loc      := get_sfall_arg;
+
+   if (attacker != dude_obj or not target) then return;
+   if (loc < 0 or loc > 7) then return;
+   debug_msg("COMBAT:aim " + loc + SEP + chance + SEP
+      + part_name(target, loc)
+      + SEP + obj_name(target) + SEP);
 end
 
 /*

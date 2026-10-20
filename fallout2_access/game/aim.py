@@ -32,6 +32,7 @@ from typing import NamedTuple, Optional
 
 from ..input.send import guarded_tap, move_mouse_relative, park_pointer
 from . import worldlog
+from ..i18n import tr
 
 # Fallout 2's tile numbering is row-major with 200 tiles to a row, so a tile
 # number splits into a row and a column that behave like coordinates. The screen
@@ -51,7 +52,8 @@ CURSOR_MOVEMENT = 0
 SKILL_CURSORS = range(4, 11)
 
 _TARGET = re.compile(r"COMBAT:target (\d+)\|(\d+)\|([^|]*)")
-_PREPARE = re.compile(r"WORLD:prepare (-?\d+)\|([^|]*)\|(-?\d+)\|(-?\d+)\|(\d*)")
+_PREPARE = re.compile(r"WORLD:prepare (-?\d+)\|([^|]*)\|(-?\d+)\|(-?\d+)\|(\d*)"
+                      r"(?:\|(-?\d+))?")
 
 # How far above a hex to look for the critter standing on it, in pixels. Fallout
 # picks critters by their drawn sprite rather than by the tile they occupy, so
@@ -111,6 +113,11 @@ TARGET_OFFSETS = tuple(
 CLEAR_STEPS = ((0, 0), (0, 4), (0, -4), (0, 8), (10, 0), (10, 4),
                (-6, 0), (-6, 4), (0, 12), (10, 8))
 
+# Printed by the same key, just before the calibration line: where the
+# interface bar is, which is the bottom of the map a click can reach.
+_BAR = re.compile(r"WORLD:win under=\S+ ifacebar=\S+ onbar=\S+ "
+                  r"barrect=(-?\d+),(-?\d+) (\d+)x(\d+)")
+
 _CALIB = re.compile(
     r"WORLD:calib mouse=(-?\d+),(-?\d+) btns=(-?\d+) under=(-?\d+) "
     r"cursor=(-?\d+) match=(-?\d+) screen=(\d+)x(\d+) obj=([^|]*)\|"
@@ -131,11 +138,24 @@ J_COL_PER_X = -0.031
 J_ROW_PER_Y = 0.063
 J_COL_PER_Y = 0.040
 
-# Keep the pointer away from the window edges. Fallout scrolls the map when the
-# pointer reaches a screen edge, which would move the very thing being aimed at,
-# and the interface bar along the bottom swallows clicks entirely.
-MARGIN = 80
-BOTTOM_MARGIN = 180
+# Keep the pointer off the window edges and off the interface bar. Fallout
+# scrolls the map when the pointer reaches a screen edge, which would move the
+# very thing being aimed at, and the bar along the bottom swallows clicks.
+#
+# **This used to be 80 pixels from every edge and 180 from the bottom, and that
+# box was most of the misses.** The scroll needs the very edge, not 80 pixels
+# of it, and at 1024x768 the bar is 100 tall -- the script reports it at
+# y=668. So a strip of visible map round three sides could not be pointed at.
+# One session's log: 16 of 156 aims failed, and 12 of them were the pointer
+# parked on the box's edge -- nine in a row at y=588, three at x=944 -- with
+# the hex a row or two beyond it and plainly on screen. That is why exit grids,
+# out at the edge of the view, were the worst, and why walking a few steps
+# "fixed" it: the view re-centred and brought the hex inside the box.
+#
+# So the edges get a few pixels, and the bottom is the bar's own top edge as
+# the script reports it. BOTTOM_MARGIN is only for a reading without it.
+MARGIN = 8
+BOTTOM_MARGIN = 108
 
 MAX_STEPS = 10
 MAX_NUDGE = 320  # pixels per step; a whole-screen lunge overshoots wildly
@@ -154,6 +174,22 @@ class Reading(NamedTuple):
     width: int
     height: int
     obj: str        # what the engine says a click would act on, "" for nothing
+    bar_top: Optional[int] = None   # the interface bar's top edge, if known
+
+    def lowest(self) -> int:
+        """The lowest y the pointer may go to: just above the interface bar."""
+        if self.bar_top is not None and 0 < self.bar_top <= self.height:
+            return self.bar_top - MARGIN
+        return self.height - BOTTOM_MARGIN
+
+    def pinned(self, slack: int = 2) -> bool:
+        """Is the pointer up against the edge of where it may go?
+
+        A miss here is a hex the pointer could not reach rather than one it
+        could not settle on: the view does not reach that far.
+        """
+        return (self.x <= MARGIN + slack or self.x >= self.width - MARGIN - slack
+                or self.y <= MARGIN + slack or self.y >= self.lowest() - slack)
 
     @property
     def on_target(self) -> bool:
@@ -184,6 +220,10 @@ class Aimer:
         # What was covering the hex the last time a clear spot could not be
         # found. Set by prepare(), read only to word the refusal.
         self.blocked_by: Optional[str] = None
+        # Set by an object hunt that failed with the pointer on the hex and the
+        # engine naming nothing there: what the readout named is drawn on the
+        # floor and cannot be picked -- Dirt, Weeds -- so a click is a walk.
+        self.bare = False
 
     # -- sensing --------------------------------------------------------
 
@@ -210,10 +250,14 @@ class Aimer:
         deadline = time.time() + timeout
         found = None
         seen = ""
+        bar_top = None
         while time.time() < deadline:
             chunk = self._tail()
             seen += chunk
             for line in chunk.splitlines():
+                b = _BAR.search(line)
+                if b and int(b.group(4)) > 0:
+                    bar_top = int(b.group(2))
                 m = _CALIB.search(line)
                 if m:
                     found = Reading(
@@ -221,6 +265,7 @@ class Aimer:
                         under=int(m.group(4)), look=int(m.group(5)),
                         width=int(m.group(7)), height=int(m.group(8)),
                         obj=m.group(9).strip(),
+                        bar_top=bar_top,
                     )
             if found:
                 return found
@@ -245,9 +290,11 @@ class Aimer:
     def _probe(self, per_step: float = 0.25):
         """Ask the script to set the cursor, and report what it found there.
 
-        Returns (mode, object_name, hex_under_pointer, look_hex, flat) or None.
-        `flat` is the engine's FLAG_FLAT: the thing under the pointer is drawn
-        lying on the floor rather than standing up out of the hex.
+        Returns (mode, object_name, hex_under_pointer, look_hex, flat,
+        object_hex) or None. `flat` is the engine's FLAG_FLAT: the thing under
+        the pointer is drawn lying on the floor rather than standing up out of
+        the hex. `object_hex` is the hex that thing stands on, -1 if nothing
+        was named or the script is too old to say.
         """
         self._tail()
         guarded_tap(self.hwnd, "backslash", settle=0.08)
@@ -255,9 +302,9 @@ class Aimer:
         while time.time() < deadline:
             found = _PREPARE.findall(self._tail())
             if found:
-                mode, name, under, look, flat = found[-1]
+                mode, name, under, look, flat, tile = found[-1]
                 return (int(mode), name.strip(), int(under), int(look),
-                        flat == "1")
+                        flat == "1", int(tile) if tile else -1)
             time.sleep(0.03)
         return None
 
@@ -321,9 +368,14 @@ class Aimer:
         candidates = list(TARGET_OFFSETS) if want_object else list(CLEAR_STEPS)
         acceptable = _wanted_names(wanted)
         self.blocked_by = None
+        # Did the engine ever say "nothing" with the pointer on the hex? Read
+        # by the caller after an object hunt fails: see `bare`.
+        self.bare = False
         # The best flat answer seen so far, and where it was seen. Only used if
         # the whole search goes by without anything standing up out of the hex.
         underfoot = None
+        # What was drawn over the hex instead, counted, to name in a refusal.
+        covering = {}
         # Is there anything to choose BETWEEN? A flat answer is only the wrong
         # one when the hex holds something else that could be the right one.
         # Told about a single object -- a rug on its own, or the one name the
@@ -340,12 +392,35 @@ class Aimer:
             probe = self._probe(per_step)
             if probe is None:
                 continue
-            mode, name, under, look, flat = probe
-            if under != look:
+            mode, name, under, look, flat = probe[:5]
+            tile = probe[5] if len(probe) > 5 else -1
+            # **The object, not the pointer, has to be on the hex.** A critter
+            # behind a bar is only clickable at its head, which is drawn over
+            # the hex BEHIND it. The engine said "Sajag" there, correctly, and
+            # this threw it away for being off the hex -- seven times in one
+            # session, and five more on the Dunton brothers behind their table.
+            # The script now says which hex the named thing stands on, and if
+            # that is the one chosen, the pointer is wherever it had to be.
+            reached = (want_object and bool(name) and tile == look
+                       and (not acceptable or _names_match(name, acceptable)))
+            if under != look and not reached:
                 continue          # drifted off the hex entirely
+            if want_object and not name and under == look:
+                self.bare = True
             if want_object and name:
                 if acceptable and not _names_match(name, acceptable):
+                    covering[name] = covering.get(name, 0) + 1
                     continue          # something else is drawn over it
+                if tile >= 0 and tile != look:
+                    # The right name on the wrong object: something of the same
+                    # kind standing next door, drawn over this hex. **Never a
+                    # fallback.** It briefly was, and a locker on a wall hex,
+                    # hidden behind the next wall along, was "clicked" by
+                    # looking at that wall -- six times, while the readout said
+                    # Wall, Locker. The thing on the hex is a different object
+                    # whatever it is called, so this is cover, not an answer.
+                    covering[name] = covering.get(name, 0) + 1
+                    continue
                 if flat and choosing:
                     # Keep looking. See the note above: this is the door track
                     # under the door, and stopping here is what spent the skill
@@ -412,6 +487,8 @@ class Aimer:
                 prev = at
                 self._probe(per_step)
             return name, prev
+        if want_object and covering:
+            self.blocked_by = max(covering, key=covering.get)
         return (None, prev) if want_object else (False, prev)
 
     # -- solving --------------------------------------------------------
@@ -480,6 +557,23 @@ class Aimer:
 
     # -- the servo ------------------------------------------------------
 
+    def walk_toward(self) -> Optional[int]:
+        """The hex to walk to on the way to one out of view, or None.
+
+        Called with the pointer left where a failed aim pinned it, at the edge
+        of the view on the side the hex is. The engine is asked what a click
+        there would do, and the answer is only yes for a plain walk: anything
+        else -- a door, an item, an armed skill -- would act on whatever
+        happens to be at the edge, which nobody chose.
+        """
+        probe = self._probe()
+        if probe is None:
+            return None
+        mode, _name, under, look = probe[:4]
+        if mode != CURSOR_MOVEMENT or under == look or under < 0:
+            return None
+        return under
+
     def aim(self, trace=None) -> tuple:
         """Move the pointer onto the look hex.
 
@@ -503,7 +597,8 @@ class Aimer:
             if r is not None:
                 break
         if r is None:
-            return False, None, "the game did not report the cursor position"
+            return False, None, tr("aim.no_report",
+                                   "the game did not report the cursor position")
 
         # Damping. Without it the servo overshoots small corrections and
         # oscillates for ever: a 28-pixel step hopped from the hex one short of
@@ -523,19 +618,19 @@ class Aimer:
             if prev_err is not None and err >= prev_err:
                 gain *= 0.5
                 if gain < 0.02:
-                    return False, r, "cannot land exactly on that hex"
+                    return False, r, tr("aim.inexact", "cannot land exactly on that hex")
             prev_err = err
 
             step = self._solve(lr - ur, lc - uc)
             if step is None:
-                return False, r, "cannot work out which way to move"
+                return False, r, tr("aim.no_way", "cannot work out which way to move")
             dx, dy = step[0] * gain, step[1] * gain
 
             # Clamp to the safe box, and to a sane step size.
             dx = max(-MAX_NUDGE, min(MAX_NUDGE, dx))
             dy = max(-MAX_NUDGE, min(MAX_NUDGE, dy))
             target_x = min(max(r.x + dx, MARGIN), r.width - MARGIN)
-            target_y = min(max(r.y + dy, MARGIN), r.height - BOTTOM_MARGIN)
+            target_y = min(max(r.y + dy, MARGIN), r.lowest())
             want_x, want_y = target_x - r.x, target_y - r.y
             dx, dy = int(round(want_x)), int(round(want_y))
             # A damped step can round away to nothing while still being the
@@ -546,12 +641,13 @@ class Aimer:
                 elif abs(want_y) > 0.1:
                     dy = 1 if want_y > 0 else -1
                 else:
-                    return False, r, "that hex is off the edge of the view"
+                    return False, r, tr("aim.off_view",
+                                        "that hex is off the edge of the view")
 
             move_mouse_relative(dx, dy, settle=0.05, hwnd=self.hwnd)
             nxt = self.read()
             if nxt is None:
-                return False, r, "lost contact with the game"
+                return False, r, tr("aim.lost_game", "lost contact with the game")
 
             if trace:
                 trace(r, (dx, dy), nxt)
@@ -561,4 +657,5 @@ class Aimer:
             self._learn(moved_x, moved_y, nr - ur, nc - uc)
             r = nxt
 
-        return r.on_target, r, "" if r.on_target else "could not settle on that hex"
+        return r.on_target, r, "" if r.on_target else tr(
+            "aim.unsettled_hex", "could not settle on that hex")

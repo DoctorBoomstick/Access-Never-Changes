@@ -28,7 +28,10 @@ reading out of the running process, so a translated game reads out translated.
 from __future__ import annotations
 
 import re
-from typing import List, NamedTuple, Optional
+import time
+from typing import List, NamedTuple, Optional, Tuple
+from ..i18n import tr
+from .. import words
 
 # The ten derived stats, in the order the sheet lists them, paired with the
 # stat.msg entry that names each one. Same table the editor uses, because it is
@@ -54,15 +57,16 @@ DERIVED_PERCENT = {"Damage Resistance", "Poison Resistance",
 # critter_state's bits, and the condition each one is. The engine's own flags;
 # the English is ours, because these have no .msg entries of their own that the
 # mod can reach -- see the note on `conditions`.
-STATE_FLAGS = [
-    (0x001, "knocked out"),
-    (0x002, "knocked down"),
-    (0x004, "crippled left leg"),
-    (0x008, "crippled right leg"),
-    (0x010, "crippled left arm"),
-    (0x020, "crippled right arm"),
-    (0x040, "blinded"),
-]
+def state_flags() -> List[Tuple[int, str]]:
+    return [
+        (0x001, tr("condition.knocked_out", "knocked out")),
+        (0x002, tr("condition.knocked_down", "knocked down")),
+        (0x004, tr("condition.left_leg", "crippled left leg")),
+        (0x008, tr("condition.right_leg", "crippled right leg")),
+        (0x010, tr("condition.left_arm", "crippled left arm")),
+        (0x020, tr("condition.right_arm", "crippled right arm")),
+        (0x040, tr("condition.blinded", "blinded")),
+    ]
 
 # The condition box, row by row, in the order the panel lists them -- which is
 # also the order the editor's own arrow keys walk, indices 10 to 17.
@@ -90,12 +94,14 @@ def condition_value(sheet, position: int) -> Optional[str]:
     if which == "hp":
         if sheet.hp is None or sheet.max_hp is None:
             return None
-        return "{} of {}".format(sheet.hp, sheet.max_hp)
+        return words.of(sheet.hp, sheet.max_hp)
     if which == "poison":
-        return "yes" if sheet.poison else "no"
-    if which == "rads":
-        return "yes" if sheet.rads else "no"
-    return "yes" if sheet.state & which else "no"
+        on = sheet.poison
+    elif which == "rads":
+        on = sheet.rads
+    else:
+        on = sheet.state & which
+    return tr("words.yes", "yes") if on else tr("words.no", "no")
 
 
 # skill.msg numbers the eighteen skill names from 100.
@@ -118,7 +124,13 @@ def sneak_line(line: str) -> Optional[str]:
     m = _SNEAK.match(line)
     if not m:
         return None
-    return "Sneaking." if m.group(1) != "0" else "Not sneaking."
+    return sneaking(m.group(1) != "0")
+
+
+def sneaking(on: bool) -> str:
+    if on:
+        return tr("skilldex.sneaking", "Sneaking.")
+    return tr("skilldex.not_sneaking", "Not sneaking.")
 
 
 def skilldex_line(line: str, names) -> Optional[str]:
@@ -142,14 +154,16 @@ def skilldex_line(line: str, names) -> Optional[str]:
     # separately it was a second announcement, and both are marked as answers to
     # a keypress, so it cut the list off mid-word -- the panel read out as
     # nothing but "Not sneaking." and the eight skills were never heard.
-    said = ["Skilldex.", "Sneaking." if m.group(1) != "0" else "Not sneaking."]
+    said = [tr("skilldex.title", "Skilldex."), sneaking(m.group(1) != "0")]
     for key, pair in enumerate(m.group(2).rstrip("|").split("|"), start=1):
         index, _, level = pair.partition(",")
         try:
-            name = names.get(SKILL_NAME_MSG + int(index)) or "skill {}".format(index)
+            name = (names.get(SKILL_NAME_MSG + int(index))
+                    or tr("skilldex.skill", "skill {number}", number=index))
         except ValueError:
             continue
-        said.append("{} {}, {} percent.".format(key, name, level))
+        said.append(tr("skilldex.entry", "{key} {skill}, {level} percent.",
+                       key=key, skill=name, level=level))
     return " ".join(said) if len(said) > 1 else None
 
 
@@ -158,6 +172,11 @@ _DERIVED = re.compile(r"CHAR:derived " + r"(-?\d+)\|" * 10)
 _COND = re.compile(r"CHAR:cond " + r"(-?\d+)\|" * 5)
 _SKILLS = re.compile(r"CHAR:skills " + r"(-?\d+)\|" * 18)
 _PC = re.compile(r"CHAR:pc " + r"(-?\d+)\|" * 3)
+# "CHAR:kills Geckos|12|Giant Ants|3|" -- every kind with a count, in the game's
+# own words for them (proto.msg 1450 onwards).
+_KILLS = "CHAR:kills "
+# "CHAR:adjust -1|61|" -- plus or minus pressed on the sheet, and on which row.
+_ADJUST = re.compile(r"CHAR:adjust (-?\d+)\|(-?\d+)\|")
 
 
 class Sheet:
@@ -180,6 +199,11 @@ class Sheet:
         self.level: Optional[int] = None
         self.experience: Optional[int] = None
         self.unspent: Optional[int] = None
+        # (name, count) for every kind of creature with a count above nothing.
+        self.kills: List[Tuple[str, int]] = []
+        # (direction, row, when) for the last plus or minus pressed on the
+        # sheet, so a box that opens straight after can be read for what it is.
+        self.adjust: Optional[Tuple[int, int, float]] = None
 
     @property
     def ready(self) -> bool:
@@ -204,12 +228,49 @@ class Sheet:
             (self.hp, self.max_hp, self.poison,
              self.rads, self.state) = (int(g) for g in m.groups())
             return True
+        m = _ADJUST.match(line)
+        if m:
+            self.adjust = (int(m.group(1)), int(m.group(2)), time.time())
+            return True
+        if line.startswith(_KILLS):
+            self.kills = parse_kills(line[len(_KILLS):])
+            return True
         m = _PC.match(line)
         if m:
             self.level, self.experience, self.unspent = (
                 int(g) for g in m.groups())
             return True
         return line.startswith("CHAR:")
+
+
+def parse_kills(body: str) -> List[Tuple[str, int]]:
+    """Pairs of name and count out of the body of a CHAR:kills line."""
+    fields = body.split("|")
+    out: List[Tuple[str, int]] = []
+    for i in range(0, len(fields) - 1, 2):
+        name = fields[i].strip()
+        try:
+            count = int(fields[i + 1])
+        except ValueError:
+            break
+        if name:
+            out.append((name, count))
+    return out
+
+
+def kill_count(kills: List[Tuple[str, int]], title: str) -> Optional[Tuple[str, int]]:
+    """Which kind of kill a Kills row is about, and how many.
+
+    The row's title is the engine's -- "Geckos Kills" -- and it begins with the
+    creature's name. Matched on that rather than on the row's position, so it
+    does not matter how the engine sorts the folder. Longest name first, so
+    "Giant Ants" is never taken for a kind called "Giant".
+    """
+    low = title.lower()
+    for name, count in sorted(kills, key=lambda k: -len(k[0])):
+        if low.startswith(name.lower()):
+            return name, count
+    return None
 
 
 def next_level_experience(level: Optional[int]) -> Optional[int]:
@@ -247,11 +308,11 @@ def conditions(sheet: Sheet) -> List[str]:
     in the character screen's art rather than in a message list.
     """
     out: List[str] = []
-    for bit, name in STATE_FLAGS:
+    for bit, name in state_flags():
         if sheet.state & bit:
             out.append(name)
     if sheet.poison:
-        out.append("poisoned")
+        out.append(tr("condition.poisoned", "poisoned"))
     if sheet.rads:
-        out.append("radiated")
+        out.append(tr("condition.radiated", "radiated"))
     return out

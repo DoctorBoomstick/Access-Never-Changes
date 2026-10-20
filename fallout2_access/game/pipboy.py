@@ -64,6 +64,7 @@ from __future__ import annotations
 import datetime
 import struct
 from typing import List, NamedTuple, Optional, Tuple
+from ..i18n import tr
 
 # -- the panel ---------------------------------------------------------------
 #
@@ -148,7 +149,10 @@ MSG_CANNOT_REST = 215
 # with. The art says CLOSE, `pipboy.msg` has no such string, and 214 -- the
 # nearest thing the file has -- reads out as "Done", which is not obviously the
 # way out when you meet it at the end of a list of places to go.
-DOES = {CLOSE: "closes the Pip-Boy"}
+def does_text(code: int) -> Optional[str]:
+    if code == CLOSE:
+        return tr("pipboy.close", "closes the Pip-Boy")
+    return None
 
 # The rest options, in the order the alarm clock page lists them: ten minutes
 # through six hours, the four "rest until" times, rest until healed, and rest
@@ -454,9 +458,9 @@ class Clock(NamedTuple):
         inventing a name -- "half past five" is a rendering of a number, not a
         translation of a word the game displays.
         """
-        return "{}. Day {} of month {}, {}.".format(
-            say_time(self.hour, self.minute),
-            self.date.day, self.date.month, self.date.year)
+        return tr("pipboy.date", "{time}. Day {day} of month {month}, {year}.",
+                  time=say_time(self.hour, self.minute), day=self.date.day,
+                  month=self.date.month, year=self.date.year)
 
 
 def say_time(hour: int, minute: int) -> str:
@@ -467,13 +471,16 @@ def say_time(hour: int, minute: int) -> str:
     and twenty four" -- so the hour is said as a twelve-hour number with the
     part of the day after it, which is how anyone would read a clock aloud.
     """
-    part = "in the morning"
-    if hour >= 18:
-        part = "in the evening"
-    elif hour >= 12:
-        part = "in the afternoon"
     twelve = hour % 12 or 12
-    return "{}:{:02d} {}".format(twelve, minute, part)
+    minute = "{:02d}".format(minute)
+    if hour >= 18:
+        return tr("pipboy.evening", "{hour}:{minute} in the evening",
+                  hour=twelve, minute=minute)
+    if hour >= 12:
+        return tr("pipboy.afternoon", "{hour}:{minute} in the afternoon",
+                  hour=twelve, minute=minute)
+    return tr("pipboy.morning", "{hour}:{minute} in the morning",
+              hour=twelve, minute=minute)
 
 
 def from_ticks(ticks: int) -> Clock:
@@ -517,6 +524,45 @@ def window(proc):
 def showing(proc) -> bool:
     """Is the Pip-Boy on screen right now?"""
     return window(proc) is not None
+
+
+# "You cannot rest at this location!" -- what the alarm clock says when the game
+# will not let you rest. pipboy.msg 215, asked for at 0x0049954C.
+MSG_CANNOT_REST = 215
+
+
+def box_over(proc) -> bool:
+    """Is one of the game's message boxes up over the Pip-Boy?
+
+    **The alarm clock's refusal is a box, not a picture.** At 0x00499518 the
+    alarm clock asks whether you can rest (0x0042E564) and, if not, plays the
+    error sound and opens the engine's general dialog box (0x0041CF20) over the
+    panel. That box is modal: until Enter or Escape closes it, every click on
+    the Pip-Boy goes nowhere, and the page underneath is whatever was there
+    before -- which the mod then read out as though it were the page asked for.
+    That is why choosing the alarm clock, or pressing Z, sounded like opening
+    the automaps after a fight in Klamath: hostiles about, no resting, and a
+    box nobody could hear.
+
+    GNW's window list is in drawing order, so a box over the Pip-Boy is a
+    smaller window after it in the list.
+    """
+    from . import uiwindow
+    pip = window(proc)
+    if pip is None:
+        return False
+    try:
+        wins = uiwindow.live_windows(proc)
+    except Exception:
+        return False
+    seen = False
+    for w in wins:
+        if w.addr == pip.addr:
+            seen = True
+            continue
+        if seen and w.width < PANEL_WIDTH and w.height < PANEL_HEIGHT:
+            return True
+    return False
 
 
 def destinations(win) -> List[Tuple[int, object]]:
@@ -650,9 +696,9 @@ class Pipboy:
         """
         text = self.message(MSG_NAME.get(code, -1))
         if not text:
-            return "Place {}".format(code - STATUS + 1)
+            return tr("pipboy.place", "Place {number}", number=code - STATUS + 1)
         name = text.strip().rstrip(":").capitalize()
-        does = DOES.get(code)
+        does = does_text(code)
         return "{}, {}".format(name, does) if does else name
 
     def clock(self) -> Optional[Clock]:
@@ -678,11 +724,11 @@ class Pipboy:
         from .pointer import MenuMouse, aim_to
 
         if self.hwnd is None:
-            return False, "not attached to the game"
+            return False, tr("pipboy.detached", "not attached to the game")
         ok, _where, why = aim_to(self.proc, self.hwnd, *button.centre(win),
                                  reader=MenuMouse(self.proc))
         if not ok:
-            return False, why or "could not put the pointer on it"
+            return False, why or tr("pipboy.unreachable", "could not put the pointer on it")
         # Let the arrival register before the button goes down. GNW decides
         # what the pointer is over on its own schedule, and a click sent in the
         # same breath as the last motion acts on where the pointer was -- the

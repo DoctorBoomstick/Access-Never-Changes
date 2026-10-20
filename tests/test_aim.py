@@ -384,9 +384,6 @@ class TestTheDoorAndTheTrackUnderIt(ScriptedProbes):
         self.assertIsNone(name)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestLearnedResponse(unittest.TestCase):
     """The servo's model of how screen pixels map to hex rows and columns.
@@ -451,3 +448,160 @@ class TestLearnedResponse(unittest.TestCase):
         for j in ([0, 0, 0, 0], [1, 2, 2, 4], list(a.j)):
             a.j = list(j)
             self.assertIsNotNone(a._solve(3, -2), "singular j={}".format(j))
+
+
+class TestWhereThePointerMayGo(unittest.TestCase):
+    """The box the aim keeps the pointer in.
+
+    It used to stop 80 pixels short of every edge and 180 short of the bottom,
+    and that box was most of one session's misses: nine aims in a row parked
+    at y=588 and three at x=944, each with its hex a row or two further on and
+    in plain view.
+    """
+
+    @staticmethod
+    def _at(x, y, bar_top=None):
+        return aim.Reading(x=x, y=y, under=1, look=2, width=1024, height=768,
+                           obj="", bar_top=bar_top)
+
+    def test_the_bottom_is_the_bars_top_edge(self):
+        self.assertEqual(self._at(500, 300, bar_top=668).lowest(),
+                         668 - aim.MARGIN)
+
+    def test_the_old_floor_is_now_reachable(self):
+        self.assertGreater(self._at(500, 300, bar_top=668).lowest(), 588)
+
+    def test_without_the_bar_a_bar_height_is_assumed(self):
+        self.assertEqual(self._at(500, 300).lowest(), 768 - aim.BOTTOM_MARGIN)
+
+    def test_a_nonsense_bar_is_ignored(self):
+        self.assertEqual(self._at(500, 300, bar_top=-1).lowest(),
+                         768 - aim.BOTTOM_MARGIN)
+
+    def test_pinned_at_each_edge(self):
+        self.assertTrue(self._at(aim.MARGIN, 300).pinned())
+        self.assertTrue(self._at(1024 - aim.MARGIN, 300).pinned())
+        self.assertTrue(self._at(500, aim.MARGIN).pinned())
+        self.assertTrue(self._at(500, 668 - aim.MARGIN, bar_top=668).pinned())
+
+    def test_not_pinned_in_the_middle(self):
+        self.assertFalse(self._at(512, 384, bar_top=668).pinned())
+
+    def test_the_bar_line_is_read(self):
+        line = "WORLD:win under=1 ifacebar=4 onbar=0 barrect=112,668 800x100"
+        m = aim._BAR.search(line)
+        self.assertEqual((m.group(2), m.group(4)), ("668", "100"))
+
+
+class TestWalkingTowardsWhatIsOutOfView(ScriptedProbes):
+    """Only a plain walk is sent towards a hex beyond the edge of the view."""
+
+    def test_walkable_ground_at_the_edge_is_walked_to(self):
+        a = self._Aimer([(0, "", 29714, 30517, False)])
+        self.assertEqual(a.walk_toward(), 29714)
+
+    def test_something_to_act_on_at_the_edge_is_not_clicked(self):
+        a = self._Aimer([(2, "Door", 29714, 30517, False)])
+        self.assertIsNone(a.walk_toward())
+
+    def test_no_answer_is_no_walk(self):
+        self.assertIsNone(self._Aimer([]).walk_toward())
+
+
+
+class TestReachedFromAbove(ScriptedProbes):
+    """A critter behind a counter is only clickable at its head.
+
+    Taken from the Klamath bar: Sulik and a table are drawn over the bottom of
+    Sajag's hex 17917, and the engine only says "Sajag" once the pointer is up
+    over 17717 behind him. The last field is the hex the named object stands
+    on, which is what makes that answer usable.
+    """
+
+    WANTED = ["Sajag, facing south west"]
+
+    def test_the_object_on_the_chosen_hex_counts_wherever_the_pointer_is(self):
+        (name, _at), a, _moved = self._prepare([
+            (1, "Sulik, facing north east", 17917, 17917, False, 18117),
+            (1, "Table", 17917, 17917, False, 17918),
+            (1, "Sajag, facing south west", 17717, 17917, False, 17917),
+        ], want_object=True, wanted=self.WANTED)
+        self.assertEqual(name, "Sajag, facing south west")
+
+    def test_without_the_object_hex_off_the_hex_is_still_off_it(self):
+        """An older script, or nothing named: the old rule stands."""
+        (name, _at), _a, _moved = self._prepare([
+            (1, "Sajag, facing south west", 17717, 17917, False),
+        ], want_object=True, wanted=self.WANTED)
+        self.assertIsNone(name)
+
+    def test_the_same_name_standing_on_another_hex_is_not_taken(self):
+        (name, _at), _a, _moved = self._prepare([
+            (1, "Sajag, facing south west", 17717, 17917, False, 17717),
+        ], want_object=True, wanted=self.WANTED)
+        self.assertIsNone(name)
+
+    def test_a_lookalike_next_door_loses_to_the_real_one(self):
+        wanted = ["Table", "Sledgehammer"]
+        (name, _at), _a, _moved = self._prepare([
+            (1, "Table", 14088, 14088, False, 14288),
+            (1, "Sledgehammer", 14087, 14088, True, 14088),
+            (1, "Table", 14088, 14088, False, 14088),
+        ], want_object=True, wanted=wanted)
+        self.assertEqual(name, "Table")
+
+    def test_a_lookalike_is_never_taken_for_the_real_one(self):
+        """The locker on hex 12482, behind the wall standing on 12682.
+
+        The readout said "Wall, Locker". Every probe said Wall -- the one next
+        door -- and taking it as the hex's own wall meant looking at a wall
+        each time the player tried to open the locker.
+        """
+        (name, _at), a, _moved = self._prepare([
+            (1, "Wall", 12482, 12482, False, 12682),
+            (1, "Wall", 12481, 12482, False, 12682),
+        ], want_object=True, wanted=["Wall", "Locker"])
+        self.assertIsNone(name)
+        self.assertEqual(a.blocked_by, "Wall")
+
+    def test_a_miss_names_what_was_drawn_over_the_hex(self):
+        (name, _at), a, _moved = self._prepare([
+            (1, "Tin Wall", 15690, 15690, False, 15690),
+            (1, "Tin Wall", 15690, 15690, False, 15690),
+            (1, "Wall", 15690, 15690, False, 15891),
+        ], want_object=True, wanted=["Meat Jerky"])
+        self.assertIsNone(name)
+        self.assertEqual(a.blocked_by, "Tin Wall")
+
+
+class TestReadingTheObjectHex(unittest.TestCase):
+    def test_the_new_field_is_read_and_the_old_line_still_parses(self):
+        new = aim._PREPARE.findall("WORLD:prepare 1|Sajag|17717|17917|0|17917|")
+        old = aim._PREPARE.findall("WORLD:prepare 1|Sajag|17717|17917|0|")
+        self.assertEqual(new[-1][5], "17917")
+        self.assertEqual(old[-1][5], "")
+
+
+
+class TestGroundDecoration(ScriptedProbes):
+    """Dirt and Weeds on hex 16093: named by the readout, never by a probe."""
+
+    def test_a_hex_the_engine_calls_empty_is_marked_bare(self):
+        (name, _at), a, _moved = self._prepare([
+            (1, "", 16093, 16093, False, -1),
+            (1, "Tin Wall", 15892, 16093, False, 15892),
+        ], want_object=True, wanted=["Dirt", "Weeds"])
+        self.assertIsNone(name)
+        self.assertTrue(a.bare)
+        self.assertIsNone(a.blocked_by)
+
+    def test_something_drawn_over_it_is_cover_not_bare_ground(self):
+        (name, _at), a, _moved = self._prepare([
+            (1, "Wall", 12482, 12482, False, 12682),
+        ], want_object=True, wanted=["Locker"])
+        self.assertFalse(a.bare)
+        self.assertEqual(a.blocked_by, "Wall")
+
+
+if __name__ == "__main__":
+    unittest.main()

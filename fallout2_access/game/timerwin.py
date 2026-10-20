@@ -16,19 +16,25 @@ positive the save screen produced, where a value "tracked" the selection by
 rising on both arrows, and the lesson is the same: motion is not evidence,
 motion in OPPOSITE directions is.
 
-**So the number is not read at all.** It is caused, the way the save screen's
-page and the inventory's scroll position are. Pressing the down arrow more times
-than the range is long leaves the timer at its minimum *whatever it started at*,
-and every step after that is arithmetic this module controls. Nothing to find,
-nothing to drift, and it needs no address that a patch could move.
+**So the number is not read at all.** It is known, because the engine says
+where it starts. The countdown is the "how many" window's loop at 0x0047688C
+in its mode 5, and that mode opens at sixty seconds -- `mov ebx, 3Ch` at
+0x004768C3 -- with a floor of ten, ten a press, and a ceiling the one caller
+that arms a charge passes in: `mov ebx, 0B4h` at 0x0047708D, three minutes.
+From the known start every value is arithmetic this module controls, every
+change a click it made.
 
-The range is the game's: ten seconds to three minutes, in ten-second steps.
+It used to find its start by force instead: twenty presses of the down arrow,
+on the reasoning that more presses than the range is long reach the floor from
+anywhere. That was right when the start was unknown, and cost two seconds of
+clicking and a ten-second countdown the player then had to wind back up.
 """
 
 from __future__ import annotations
 
 import time
 from typing import Optional
+from ..i18n import tr
 
 # The window, by its size and by the two buttons only it has. Size alone is not
 # enough -- COUNTERWIN is also used for moving a stack of items, and setting a
@@ -45,10 +51,8 @@ SECONDS_PER_STEP = 10
 MIN_STEPS = 1
 MAX_STEPS = 18
 
-# More presses than the range is long, so the floor is reached from anywhere.
-# Two extra, because a click that goes astray costs nothing here and a timer
-# that is one step from where the player thinks it is costs them the charge.
-REWIND_PRESSES = MAX_STEPS + 2
+# Where the engine opens it: sixty seconds (0x004768C3).
+START_STEPS = 6
 
 
 def seconds(steps: int) -> int:
@@ -63,12 +67,17 @@ def say_time(steps: int) -> str:
     """
     total = seconds(steps)
     if total < 60:
-        return "{} seconds".format(total)
+        return tr("timer.seconds", "{seconds} seconds", seconds=total)
     minutes, rest = divmod(total, 60)
-    name = "{} minute{}".format(minutes, "" if minutes == 1 else "s")
     if not rest:
-        return name
-    return "{} {} seconds".format(name, rest)
+        if minutes == 1:
+            return tr("timer.one_minute", "1 minute")
+        return tr("timer.minutes", "{minutes} minutes", minutes=minutes)
+    if minutes == 1:
+        return tr("timer.one_minute_seconds", "1 minute {seconds} seconds",
+                  seconds=rest)
+    return tr("timer.minutes_seconds", "{minutes} minutes {seconds} seconds",
+              minutes=minutes, seconds=rest)
 
 
 def showing(proc) -> bool:
@@ -132,17 +141,9 @@ class Timer:
             time.sleep(0.05)
         return True
 
-    def rewind(self) -> bool:
-        """Force the countdown to its minimum, and know that it is there.
-
-        The whole design rests on this: after more down-presses than the range
-        is long, the timer is at ten seconds no matter what it showed before.
-        """
-        if not self._click(STEP_DOWN, REWIND_PRESSES):
-            self.steps = None
-            return False
-        self.steps = MIN_STEPS
-        return True
+    def start(self) -> None:
+        """The window has just opened, so it holds the engine's starting value."""
+        self.steps = START_STEPS
 
     def step(self, delta: int) -> Optional[int]:
         """Move the countdown by whole steps. Returns the new value, or None.

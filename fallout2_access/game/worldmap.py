@@ -55,6 +55,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from ..memory.process import Process
 from ..msg.memlist import read_message_list
+from ..i18n import tr
 
 # -- addresses ---------------------------------------------------------------
 #
@@ -114,6 +115,10 @@ A_X = 0x2C
 A_Y = 0x30
 A_SIZE = 0x34
 A_STATE = 0x40
+# The town picture's art id. -1 means the place has no map to show, and the
+# engine tests it before opening the town view -- so it is part of the answer to
+# "will T do anything here", not decoration.
+A_LABEL_FID = 0x44
 A_ENTRANCE_COUNT = 0x4C
 A_ENTRANCES = 0x50
 ENTRANCE_STRIDE = 28
@@ -129,7 +134,10 @@ VISITED = 2
 # city.txt's way of hiding an area from the map entirely.
 INVISIBLE = -66
 
-STATE_WORDS = {UNKNOWN: "unknown", KNOWN: "known", VISITED: "visited"}
+def state_word(state: int) -> str:
+    return {UNKNOWN: tr("worldmap.state_unknown", "unknown"),
+            KNOWN: tr("worldmap.state_known", "known"),
+            VISITED: tr("worldmap.state_visited", "visited")}.get(state, "")
 
 # Message numbers. The bases are the engine's, the arithmetic is the engine's;
 # only the choice of which to speak is ours.
@@ -201,6 +209,7 @@ class Area(NamedTuple):
     size: int
     state: int                # UNKNOWN / KNOWN / VISITED
     entrances: List[Entrance]
+    label_fid: int = -1
 
     @property
     def subtile(self) -> Tuple[int, int]:
@@ -210,6 +219,42 @@ class Area(NamedTuple):
     def ways_in(self) -> List[Entrance]:
         """The entrances the town view actually offers."""
         return [e for e in self.entrances if e.available]
+
+    @property
+    def has_town_map(self) -> bool:
+        """Is there a town picture to show at all?"""
+        return self.label_fid != -1 and bool(self.ways_in)
+
+    @property
+    def shows_town_map(self) -> bool:
+        """Would T open the town view here?
+
+        The engine's own three conditions, at 0x004C04DC: the place must be
+        VISITED rather than merely KNOWN, and it must have a picture. A place
+        you have been told about but never entered fails the first, and T is
+        silently ignored -- which is exactly what it looks like when the mod is
+        broken, so it is worth being able to say which.
+        """
+        return self.state == VISITED and self.has_town_map
+
+    @property
+    def enters_directly(self) -> bool:
+        """Would clicking your own marker walk you straight in?
+
+        The other half of the same dispatch, at 0x004C0206. When there is no
+        town view to show, the engine finds the first entrance marked known and
+        enters through it -- which is how you get into anywhere the first time,
+        and why "T does nothing" is not the dead end it sounds like.
+        """
+        return not self.shows_town_map and any(e.known for e in self.entrances)
+
+    @property
+    def first_way_in(self) -> Optional[Entrance]:
+        """The entrance a direct entry would use."""
+        for entrance in self.entrances:
+            if entrance.known:
+                return entrance
+        return None
 
     @property
     def on_map(self) -> bool:
@@ -406,7 +451,7 @@ def areas(proc: Process) -> List[Area]:
         off = i * AREA_STRIDE
         index = struct.unpack_from("<i", blob, off + A_INDEX)[0]
         x, y, size = struct.unpack_from("<3i", blob, off + A_X)
-        state = struct.unpack_from("<i", blob, off + A_STATE)[0]
+        state, label_fid = struct.unpack_from("<2i", blob, off + A_STATE)
         n_ent = struct.unpack_from("<i", blob, off + A_ENTRANCE_COUNT)[0]
         # The index in the record is the one map.msg is keyed by. It has matched
         # the position in the table on every install seen, but reading it is
@@ -428,7 +473,7 @@ def areas(proc: Process) -> List[Area]:
                 elevation=elevation, tile=tile, orientation=orientation,
                 name=names.get(MSG_MAP_BASE + map_index * MSG_MAP_STRIDE, "")))
         out.append(Area(index=i, name=name, x=x, y=y, size=size, state=state,
-                        entrances=entrances))
+                        entrances=entrances, label_fid=label_fid))
     return out
 
 

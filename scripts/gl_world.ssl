@@ -52,6 +52,11 @@
                     DIALOGVIEW bwor COUNTERWIN bwor PAUSEWIN)
 
 #define CURSOR_UNSET        (-1)
+// sfall's headers name modes 0, 1 and 2 and stop. Three is the one you get
+// when an item is armed and waiting for something to be used on -- measured
+// live rather than documented, which is why it is defined here beside the
+// mod's own constants and not taken from sfall's.
+#define CURSOR_USE_ITEM     (3)
 
 #define DIR_NE              (0)
 #define DIR_E               (1)
@@ -63,7 +68,6 @@
 #define ACT_DESCRIBE        (-2)
 #define ACT_SNAP            (-3)
 #define ACT_CALIB           (-4)
-#define ACT_MOVEMODE        (-5)
 #define ACT_SCAN_TYPENEXT   (-6)
 #define ACT_SCAN_TYPEPREV   (-7)
 #define ACT_SCAN_CATNEXT    (-8)
@@ -72,11 +76,44 @@
 #define ACT_SCAN_INSTPREV  (-11)
 #define ACT_SCAN_JUMP      (-12)
 #define ACT_PREPARE        (-13)
-#define ACT_NORTH          (-14)
-#define ACT_SOUTH          (-15)
+#define ACT_BLOCKED        (-14)
 #define ACT_STATUS         (-16)
 #define ACT_MENU           (-17)
 #define ACT_USE_ACTIVE     (-18)
+#define ACT_WEAPON         (-19)
+#define ACT_LIGHT          (-20)
+#define ACT_ROUTE_SAY      (-21)
+#define ACT_ROUTE_GO       (-22)
+// The way there, Shift and Control with slash -- see route_begin.
+#define ROUTE_IDLE      (0)
+#define ROUTE_SEARCH    (1)
+#define ROUTE_WALK      (2)
+#define ROUTE_TILES     (40000)
+#define ROUTE_BATCH     (600)    // hexes searched per poll
+#define ROUTE_LEG       (12)     // steps handed to the engine at a time
+#define ROUTE_STALLS    (3)      // legs without a step before giving up
+#define ROUTE_SETTLE    (4)      // polls of stillness before the next leg
+#define ROUTE_RUNS      (40)     // turns sent to be spoken, at most
+#define ROUTE_SEEN_START (7)
+#define ROUTE_SEEN_SHUT  (8)
+#define RUN_PREF        (0x00663998)   // preferences: Running, 1 for always
+
+/*
+ * Light, as the engine works it out for whoever stands on a hex.
+ *
+ * obj_get_visible_light (0x0048AD04) takes the larger of the map's ambient
+ * light and the hex's own -- the lamps, fires and flares near it -- and, for
+ * the player only, first takes away the light the player gives off, since your
+ * own glow does not show you to anyone. 0x10000 is full light.
+ *
+ * The hex table is light_get_tile's (0x0047A9C4): one int per hex, a block of
+ * 0x27100 bytes (40000 hexes) per elevation. Ambient is light_get_ambient's
+ * (0x0047A8F8). Both are plain reads, so this needs no unsafe scripting.
+ */
+#define LIGHT_AMBIENT      (0x0051923C)
+#define LIGHT_TILES        (0x0059E994)
+#define LIGHT_ELEV_BYTES   (0x27100)
+#define OBJ_LIGHT          (0x70)
 
 #define ACTION_LIST     (0x00596C3C)
 #define MENU_MAX        (12)
@@ -84,6 +121,22 @@
 // How many polls to let pass before running a queued action. The
 // keypress that asked for it has to be completely finished first.
 #define PENDING_TICKS   (3)
+// The engine's list of floating text objects -- the lines characters say over
+// their heads. A count, and an array of pointers to 48-byte records whose owner
+// is at +4 and creation time at +8. Read out of text_object_create (0x4B036C);
+// see fallout2_access/game/floattext.py, which reads the words back out.
+#define FLOAT_COUNT     (0x0051D944)
+#define FLOAT_ARRAY     (0x006681C0)
+#define FLOAT_MAX       (20)
+// The character editor's own row number -- see fallout2_access/game/chargen.py.
+#define SHEET_ROW       (0x005707D0)
+// Sex, the row the editor's Tab handler forgets (0x004325D2).
+#define SHEET_ROW_SEX   (9)
+// proto.msg names the kinds of kill from here, one per kill type.
+#define MSG_KILL_NAMES  (1450)
+#define KILL_TYPES_MAX  (64)
+// About ten seconds at thirty polls a second: longer than the slowest aim and
+// menu walk measured, and still short enough to be gone before the next fight.
 
 #define ACT_CANCEL      (0)
 #define ACT_DROP        (1)
@@ -95,7 +148,71 @@
 #define ACT_UNLOAD      (7)
 #define ACT_USESKILL    (8)
 
+/*
+ * The engine's own action functions -- the ones its action menu calls once a
+ * choice is made, read off the dispatch at 0x0044C6F1 (a jump table at
+ * 0x0044BF68, menu codes 2 to 9, the same numbering as ACT_ above). Each takes
+ * the player in eax and the target in edx, which is how call_offset passes its
+ * first two arguments.
+ *
+ * Calling these is doing exactly what the menu does, minus the pointer: the
+ * player walks over, the action points are spent, the object's own script
+ * runs, the game prints what happened. So a container hidden behind a wall --
+ * a locker in Klamath's trapper town, on a wall hex with the next wall drawn
+ * over all of it -- opens like any other, as it would for a sighted player who
+ * found it with the menu.
+ *
+ * They need AllowUnsafeScripting in ddraw.ini; without it call_offset does
+ * nothing at all, so g_unsafe is checked and the old routes kept as fallback.
+ */
+#define F_USE_ITEM_ON   (0x00411F2C)   // (user, target, item) -- item 0 is "use"
+#define F_USE_OBJECT    (0x00412114)   // (user, target)       -- scenery
+#define F_GET_OBJECT    (0x00412134)   // (user, item)         -- items, containers
+#define F_LOOT_BODY     (0x004123E8)   // (user, critter)      -- bodies
+#define F_TALK_TO       (0x00413330)   // (user, critter)
+#define F_EXAMINE       (0x0049AD78)   // (looker, target), -1 if it has nothing
+#define F_LOOK_AT       (0x0049AC3C)   // (looker, target), the one-line fallback
+#define F_USE_SKILL_ON  (0x0041255C)   // (user, target, skill)
+/*
+ * Attacking, from the same reading.
+ *
+ * F_ATTACK_THIS is what a click with the targeting cursor ends in (called from
+ * 0x0044C296). It asks the interface bar for the selected mode, refuses in the
+ * game's own words if the shot is bad -- no ammunition, out of range, too few
+ * action points -- and outside a fight it starts one with this as the opening
+ * attack. Inside a fight with an aimed mode it opens the called-shot window,
+ * which is a modal loop of the engine's own; started from here, that loop
+ * would run underneath this script's call. So an aimed attack is taken apart
+ * at the one seam the engine has: F_BAD_SHOT is the check F_ATTACK_THIS runs
+ * first, the body part is chosen from this menu, and F_COMBAT_ATTACK is what
+ * F_ATTACK_THIS calls with it (0x00426A95) -- the roll, the action points the
+ * engine charges, the animation.
+ */
+#define F_ATTACK_THIS   (0x004267CC)   // (target)
+#define F_BAD_SHOT      (0x00426614)   // (attacker, target, hit mode, aiming), 0 is fine
+#define F_COMBAT_ATTACK (0x00422F3C)   // (attacker, target, hit mode, body part)
+#define F_TO_HIT        (0x0042436C)   // (attacker, target, body part, hit mode)
+// The interface bar's two item buttons, read the way intface_get_attack
+// (0x0045EF6C) reads them: 24 bytes each, +0x10 is the action selected on the
+// active hand's button and +8/+0xC are the hit modes it uses.
+#define BAR_ITEMS       (0x005970F8)
+#define BAR_HAND        (0x00518F78)
+#define BAR_ACT_PRIMARY_AIM   (2)
+#define BAR_ACT_SECONDARY     (3)
+#define BAR_ACT_SECONDARY_AIM (4)
+#define COMBAT_STATE    (0x00510944)   // bit 1: a fight is on
+#define ART_ALIASES     (0x0056CAEC)   // art_alias_num's table, one int per critter art
+
+// Menu codes past the engine's own. A skill is MENU_SKILL plus its number and a
+// body part is MENU_AIM plus the engine's hit location, so one array and one
+// queue carry all three lists.
+#define ACT_ATTACK      (20)
+#define MENU_SKILL      (100)
+#define MENU_AIM        (200)
+
 variable g_cursor := CURSOR_UNSET;
+// AllowUnsafeScripting from ddraw.ini: whether call_offset will do anything.
+variable g_unsafe := 0;
 variable g_lastmode := -1;
 variable g_lastcursormode := -1;
 variable g_lastdude := -1;
@@ -129,8 +246,30 @@ variable g_playercursor := 0;
  */
 variable g_usercursor := -1;
 variable g_armedskill := 0;
-// Which way the north/south staircase currently leans. See step_north.
-variable g_ndrift := 0;
+// The floating text objects seen on the last poll, as pointer and creation
+// time pairs. A pointer alone is not an identity -- the engine frees a record
+// and the next one is often allocated at the same address.
+variable g_float_ptrs;
+variable g_float_times;
+variable g_float_n := 0;
+// How many entries exit_strips left in the scanner's arrays.
+variable g_strips := 0;
+// The skills and unspent points last reported, as one string, so spending a
+// point while the sheet is open is reported and nothing else is.
+variable g_sheet_sig := "";
+variable g_sheet_tick := 0;
+// Set while the Tab fix is in flight -- see the character screen in on_key.
+variable g_tabfix := 0;
+// What click_pick found: the label of the object a click would act on, or "",
+// and whether it lies flat.
+variable g_pickname := "";
+variable g_pickflat := 0;
+// The hex the object click_pick found stands on, -1 for none. See prepare_cursor.
+variable g_picktile := -1;
+// The weapon whose load is being watched, and what was in it last look. -1
+// means nothing has been read yet, which is different from a gun holding none.
+variable g_ammogun := 0;
+variable g_ammo := -1;
 variable g_label := "";
 variable g_menu := 0;
 variable g_menu_index := 0;
@@ -169,9 +308,34 @@ variable g_do_what := 0;
 variable g_do_item := 0;
 variable g_do_target := 0;
 variable g_do_wait := 0;
+// Which list the action menu is showing: 0 the actions, else ACT_USESKILL or
+// ACT_ATTACK for the skills or body parts under them.
+variable g_menu_sub := 0;
+// The selected attack, as bar_attack last read it.
+variable g_bar_mode := -1;
+// The item U is using, while the target list it opened is up. 0 otherwise.
+variable g_pick_use := 0;
+variable g_bar_aim := 0;
 variable g_movestart := -1;
 variable g_moving := 0;
 variable g_stillticks := 0;
+// The way there -- see route_begin.
+variable g_rt_state := 0;
+variable g_rt_walk := 0;
+variable g_rt_quiet := 0;
+variable g_rt_goal := -1;
+variable g_rt_goalblock := 0;
+variable g_rt_from := -1;
+variable g_rt_elev := 0;
+variable g_rt_seen := 0;
+variable g_rt_queue := 0;
+variable g_rt_head := 0;
+variable g_rt_tail := 0;
+variable g_rt_path := 0;
+variable g_rt_len := 0;
+variable g_rt_stalls := 0;
+variable g_rt_lastdude := -1;
+variable g_rt_settle := 0;
 
 /*
  * KEY_SWALLOW  --  how to actually take a key away from the engine.
@@ -211,11 +375,7 @@ procedure recenter_view;
 procedure describe_cursor;
 procedure step_cursor(variable dir);
 procedure snap_to_dude;
-procedure step_north;
-procedure step_south;
 procedure calibrate;
-procedure force_action_cursor;
-procedure live_critter_at_cursor;
 procedure obj_label(variable obj);
 procedure scan_list_type(variable cat);
 procedure scan_keep(variable obj);
@@ -227,7 +387,14 @@ procedure scan_jump;
 procedure prepare_cursor;
 procedure on_useskill;
 procedure obj_is_real(variable obj);
+procedure click_pick;
+procedure is_exit_grid(variable obj);
+procedure exit_label(variable obj);
+procedure exit_strips(variable cands, variable dists, variable names, variable types, variable n);
 procedure menu_close;
+procedure poll_floats;
+procedure poll_sheet;
+procedure sheet_sig;
 procedure menu_step(variable delta);
 procedure menu_do;
 procedure menu_label(variable code);
@@ -242,7 +409,29 @@ procedure pick_step(variable delta);
 procedure pick_choose;
 procedure actions_open;
 procedure run_pending;
+procedure engine_act(variable what, variable target, variable item);
+procedure bar_attack;
+procedure menu_add(variable code);
+procedure menu_open_skills;
+procedure menu_open_aim;
+procedure attack_now(variable target);
+procedure part_name(variable critter, variable loc);
 procedure report_status;
+procedure report_weapon;
+procedure report_light;
+procedure route_is_door(variable b);
+procedure route_open(variable t);
+procedure route_free;
+procedure route_end(variable why);
+procedure route_begin(variable walk);
+procedure route_search_from(variable goal, variable walk);
+procedure route_search_step;
+procedure route_dir(variable a, variable b);
+procedure route_found(variable last);
+procedure route_where(variable here);
+procedure route_leg;
+procedure route_tick(variable m);
+procedure poll_ammo;
 
 /*
  * start  --  init once, then poll.
@@ -260,7 +449,7 @@ procedure report_status;
  * watcher below was dead code -- a whole session's debug.log contains exactly
  * one WORLD:gamemode line and not a single automatic WORLD:cursormode. So the
  * game mode was never re-reported after the first frame, and the cursor mode
- * was only ever heard when numpad 0 was pressed explicitly. It looked like the
+ * was only ever heard when a key set it explicitly. It looked like the
  * watchers were working because the one line they emit at startup is the one
  * the Python side needs to detect a live session.
  */
@@ -272,10 +461,14 @@ procedure start begin
       register_hook_proc(HOOK_USESKILLON, on_useskill);
       g_cursor := tile_num(dude_obj);
       g_lastdude := g_cursor;
+      g_unsafe := get_ini_setting("ddraw.ini|Debugging|AllowUnsafeScripting");
+      debug_msg("WORLD:unsafe " + g_unsafe + "|");
       // Permanent, not temporary: sfall deletes temp arrays at the end of
       // the frame, and this one has to survive between keypresses.
       g_menu_codes := create_array_list(MENU_MAX);
       g_pick_objs := create_array_list(MENU_MAX);
+      g_float_ptrs := create_array_list(FLOAT_MAX);
+      g_float_times := create_array_list(FLOAT_MAX);
       // Print a beacon into the interface bar's display window. The Python
       // side finds it by searching memory for this exact text, which is how it
       // learns where that buffer lives -- it is heap-allocated and moves every
@@ -326,6 +519,9 @@ procedure poll_state begin
    variable m, c, d, b;
 
    call run_pending;
+   call poll_floats;
+   if (get_game_mode bwand CHARSCREEN) then call poll_sheet;
+   call poll_ammo;
 
    // Game mode. This is the ONLY reliable way for the Python side to know we
    // are in a loaded game and which sub-screen is up: from memory alone, being
@@ -432,6 +628,7 @@ procedure poll_state begin
    // for equality (`m != 0`, then `m != 0 and m != COMBAT`) and both switched
    // every watcher below off for the whole of every fight, which is exactly
    // when they matter most.
+   call route_tick(m);
    if (m bwand MAP_HIDDEN) then return;
 
    // Did the player actually move, and have they finished?
@@ -458,7 +655,8 @@ procedure poll_state begin
          g_stillticks := 0;
       end else begin
          g_stillticks := g_stillticks + 1;
-         if (g_stillticks >= 10) then begin
+         // A pause between the legs of a route is not an arrival.
+         if (g_stillticks >= 10 and g_rt_state != ROUTE_WALK) then begin
             g_moving := 0;
             g_stillticks := 0;
             debug_msg("WORLD:arrive " + d + " dist "
@@ -505,6 +703,69 @@ procedure poll_state begin
          + " look=" + g_cursor
          + " mouse=" + get_mouse_x + "," + get_mouse_y);
    end
+end
+
+/*
+ * poll_floats  --  name each new line of floating text, and who said it.
+ *
+ * Torr is why. Talking to him ran his script and then, as far as the mod could
+ * tell, nothing: he answers everyone with a line over his head, and floating
+ * text went nowhere the mod could hear. Silence after "talk" is the one result
+ * that cannot be told apart from the mod failing.
+ *
+ * Only the WHO is worked out here. The words are not kept by the engine -- it
+ * draws them into a bitmap and lets the string go -- so the Python side reads
+ * the bitmap back with the game's own font, starting from the pointer logged
+ * here. What it cannot do is name an object, and obj_name can, because to a
+ * script the owner pointer IS the object.
+ *
+ * Read on every poll, in every game mode. Taunts in combat are floating text
+ * too, and combat is exactly when hearing them matters.
+ *
+ * The owner is named on the poll the line appears, while the owner is certain
+ * to exist: it is creating text this very frame. A record seen on a later poll
+ * is already known and is never dereferenced again.
+ */
+procedure poll_floats begin
+   variable n, i, j, ptr, tm, owner, known, nm, me;
+
+   n := read_int(FLOAT_COUNT);
+   if (n < 0 or n > FLOAT_MAX) then n := 0;
+
+   i := 0;
+   while (i < n) do begin
+      ptr := read_int(FLOAT_ARRAY + 4 * i);
+      tm := read_int(ptr + 8);
+      known := 0;
+      j := 0;
+      while (j < g_float_n and not known) do begin
+         if (get_array(g_float_ptrs, j) == ptr
+             and get_array(g_float_times, j) == tm) then known := 1;
+         j := j + 1;
+      end
+      if (not known) then begin
+         owner := read_int(ptr + 4);
+         nm := "";
+         me := 0;
+         if (owner) then begin
+            nm := obj_name(owner);
+            if (owner == dude_obj) then me := 1;
+         end
+         debug_msg("WORLD:float " + ptr + "|" + tm + "|" + me + "|" + nm + "|");
+      end
+      i := i + 1;
+   end
+
+   // Remember this poll's list, and only this poll's: anything gone from it has
+   // expired, and its address is free for the next line to reuse.
+   i := 0;
+   while (i < n) do begin
+      ptr := read_int(FLOAT_ARRAY + 4 * i);
+      set_array(g_float_ptrs, i, ptr);
+      set_array(g_float_times, i, read_int(ptr + 8));
+      i := i + 1;
+   end
+   g_float_n := n;
 end
 
 /*
@@ -574,6 +835,49 @@ procedure on_key begin
     * straight through, up and down alike.
     */
    variable pressed := (event == 1);
+
+   /*
+    * F1 is the mod's key for "what keys work here", answered by the Python
+    * side from its table of every screen's keys (fallout2_access/controls.py).
+    * The game's own F1 puts up a picture of the keyboard, which tells a blind
+    * player nothing and leaves a screen up to find the way out of.
+    */
+   if (key == DIK_F1) then begin
+      set_sfall_return(KEY_SWALLOW);
+      return;
+   end
+   /*
+    * Shift with comma and period is the message log, read by the Python side
+    * on every screen. The game's own `<` and `>` would turn you on the spot as
+    * well, so the shifted keys are taken from it here; comma and period
+    * without Shift still turn you.
+    */
+   if ((key == DIK_COMMA or key == DIK_PERIOD)
+       and (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT))) then begin
+      set_sfall_return(KEY_SWALLOW);
+      return;
+   end
+   /*
+    * Shift and 1: how much light is on the look cursor's hex. Ahead of the
+    * number row below, which would note a 1 as Sneak being armed. The game
+    * reads Shift and 1 as `!`, which it binds to nothing, so taking it costs
+    * nothing.
+    */
+   if (key == DIK_1 and (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT))
+       and not (get_game_mode bwand MAP_HIDDEN)) then begin
+      if (pressed) then call report_light;
+      set_sfall_return(KEY_SWALLOW);
+      return;
+   end
+   /*
+    * Enter chooses on the Pip-Boy, as in every list the mod has. The Pip-Boy's
+    * own loop closes on Enter -- 0x00497146, tested beside Escape and P -- so
+    * it is taken away here. Escape still closes it.
+    */
+   if (key == DIK_RETURN and (get_game_mode bwand PIPBOY)) then begin
+      set_sfall_return(KEY_SWALLOW);
+      return;
+   end
 
    /*
     * The map's keys belong to the map.
@@ -674,7 +978,11 @@ procedure on_key begin
          return;
       end
       if (key == DIK_ESCAPE) then begin
-         if (pressed) then begin
+         // Out of a skill or body-part list is back to the actions, the way
+         // out of any second list is.
+         if (pressed and g_menu_sub and g_menu_target) then
+            call actions_open;
+         else if (pressed) then begin
             call menu_close;
             debug_msg("WORLD:menu closed|");
          end
@@ -717,9 +1025,72 @@ procedure on_key begin
        * would be missing exactly the moments it is for.
        */
       if (key == DIK_SEMICOLON) then begin
-         if (pressed) then call report_status;
+         /*
+          * Shift makes it the WEAPON, and it has to work here for the same
+          * reason the status does: what is in your hand and how much is left
+          * in it are things a sighted player reads off the bar without
+          * looking away from whatever panel is open. A key that only answered
+          * on an empty screen would be silent in exactly the fight it is for.
+          */
+         if (pressed) then begin
+            if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
+               call report_weapon;
+            else
+               call report_status;
+         end
          set_sfall_return(KEY_SWALLOW);
          return;
+      end
+      /*
+       * Tab on the character sheet, from Sex.
+       *
+       * The editor's Tab handler (0x004325D2) sends rows 7 and 8 -- name and
+       * age -- on to the perks folder, and has no case for 9. Sex falls
+       * through to "anywhere else", which is back to Strength. A sighted
+       * player shrugs and clicks the box they wanted; Tab is the only way
+       * there for anyone else.
+       *
+       * So from Sex, this Tab is made an Up (Sex to Age), and then a Tab is
+       * pressed for real, which the engine handles from Age the way it was
+       * always meant to handle it from Sex. Nothing is written to the game.
+       *
+       * An overridden key must stay overridden for its release too, and the
+       * Tab pressed here comes back through this hook: g_tabfix says which
+       * of those is which, and lets the second Tab through untouched.
+       */
+      if (key == DIK_TAB and (m bwand CHARSCREEN)) then begin
+         if (g_tabfix == 2) then begin
+            if (not pressed) then g_tabfix := 0;
+            return;
+         end
+         if (g_tabfix == 1) then begin
+            set_sfall_return(DIK_UP);
+            if (not pressed) then begin
+               g_tabfix := 2;
+               tap_key(DIK_TAB);
+            end
+            return;
+         end
+         if (pressed and read_int(SHEET_ROW) == SHEET_ROW_SEX) then begin
+            g_tabfix := 1;
+            set_sfall_return(DIK_UP);
+            return;
+         end
+      end
+      /*
+       * Plus and minus on the sheet, noted and passed on.
+       *
+       * When a skill will go no further the engine says why in a modal box
+       * (0x0043B370) -- "At minimum level", "Not enough skill points" -- and
+       * the box is drawn text that nothing can read back. Which of its three
+       * messages it holds follows from which way the player pushed and where
+       * the skill stood, so the push is what is reported.
+       */
+      if ((m bwand CHARSCREEN) and pressed) then begin
+         if (key == DIK_ADD or key == DIK_EQUALS) then
+            debug_msg("CHAR:adjust 1|" + read_int(SHEET_ROW) + "|");
+         else if (key == DIK_SUBTRACT or key == DIK_MINUS) then
+            debug_msg("CHAR:adjust -1|" + read_int(SHEET_ROW) + "|");
       end
       // And the Skilldex is a way of arming a skill, so the digits below still
       // matter there.
@@ -755,13 +1126,20 @@ procedure on_key begin
    else if (key == DIK_NUMPAD1) then dir := DIR_SW;
    else if (key == DIK_NUMPAD4) then dir := DIR_W;
    else if (key == DIK_NUMPAD7) then dir := DIR_NW;
-   else if (key == DIK_NUMPAD8) then dir := ACT_NORTH;
-   else if (key == DIK_NUMPAD2) then dir := ACT_SOUTH;
+   // Numpad 8 and 2 are taken and do nothing. They used to fake north and
+   // south by alternating the diagonals, and on Fallout's maps that was not
+   // reliable enough to steer by (owner, 0.2.37). Still swallowed, so the
+   // engine does not read them as anything either.
+   else if (key == DIK_NUMPAD8 or key == DIK_NUMPAD2) then dir := ACT_BLOCKED;
    else if (key == DIK_NUMPAD5) then dir := ACT_SNAP;
    // Calibration is the aimer's own business, pressed several times per click
    // and never by a player, so it sits on a key nobody reaches for.
    else if (key == DIK_APOSTROPHE) then dir := ACT_CALIB;
-   else if (key == DIK_NUMPAD0) then dir := ACT_MOVEMODE;
+   // Numpad 0 used to set "the obvious cursor" outright. M and the right
+   // click already step the mode, each change is announced, and stepping away
+   // from a skill's cursor disarms it -- so it was a third way to do one thing
+   // (owner, 0.2.38). Still swallowed, like 8 and 2.
+   else if (key == DIK_NUMPAD0) then dir := ACT_BLOCKED;
    // The brackets carry all three scanner levels, chosen so the frequent
    // action needs no modifier at all:
    //     [ ]         the type of thing -- torches, rocks, ants
@@ -785,14 +1163,31 @@ procedure on_key begin
       else
          dir := ACT_SCAN_TYPENEXT;
    end
-   else if (key == DIK_SEMICOLON) then dir := ACT_STATUS;
-   else if (key == DIK_SLASH) then dir := ACT_SCAN_JUMP;
+   // Semicolon is you; shift-semicolon is what you are holding. The same
+   // finger, and the same trick the scanner brackets use -- a keypress hook is
+   // handed a scancode with no modifier in it, so the live keyboard is asked.
+   else if (key == DIK_SEMICOLON) then begin
+      if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
+         dir := ACT_WEAPON;
+      else
+         dir := ACT_STATUS;
+   end
+   // Slash takes the look cursor to what the scanner is on; with Shift it
+   // says the way to the look cursor, and with Control it walks it.
+   else if (key == DIK_SLASH) then begin
+      if (key_pressed(DIK_LCONTROL) or key_pressed(DIK_RCONTROL)) then
+         dir := ACT_ROUTE_GO;
+      else if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
+         dir := ACT_ROUTE_SAY;
+      else
+         dir := ACT_SCAN_JUMP;
+   end
    /*
     * The action menu, on the key the player actually presses.
     *
     * It was on M, and M is not ours to take: the manual gives it to the mouse
     * mode toggle, movement to command and back -- the vanilla equivalent of
-    * numpad 0, as docs/CONTROLS.md says in as many words. Binding the menu
+    * numpad 0, as the game's manual says in as many words. Binding the menu
     * there and swallowing the key deleted a control the game ships with.
     *
     * Numpad dot was then added on top, and its whole job was to synthesise the
@@ -828,12 +1223,11 @@ procedure on_key begin
    debug_msg("WORLD:key " + key + " dir " + dir);
 
    if      (dir == ACT_STATUS)   then call report_status;
-   else if (dir == ACT_NORTH)    then call step_north;
-   else if (dir == ACT_SOUTH)    then call step_south;
+   else if (dir == ACT_WEAPON)   then call report_weapon;
+   else if (dir == ACT_BLOCKED)  then dir := ACT_BLOCKED;
    else if (dir == ACT_SNAP)     then call snap_to_dude;
    else if (dir == ACT_DESCRIBE) then call describe_cursor;
    else if (dir == ACT_CALIB)    then call calibrate;
-   else if (dir == ACT_MOVEMODE) then call force_action_cursor;
    else if (dir == ACT_SCAN_TYPENEXT) then call scan_type(1);
    else if (dir == ACT_SCAN_TYPEPREV) then call scan_type(-1);
    else if (dir == ACT_SCAN_INSTNEXT) then call scan_instance(1);
@@ -841,6 +1235,8 @@ procedure on_key begin
    else if (dir == ACT_SCAN_CATNEXT)  then call scan_category(1);
    else if (dir == ACT_SCAN_CATPREV)  then call scan_category(-1);
    else if (dir == ACT_SCAN_JUMP)     then call scan_jump;
+   else if (dir == ACT_ROUTE_SAY)     then call route_begin(0);
+   else if (dir == ACT_ROUTE_GO)      then call route_begin(1);
    else if (dir == ACT_PREPARE)       then call prepare_cursor;
    else if (dir == ACT_MENU)          then call pick_open;
    else if (dir == ACT_USE_ACTIVE)    then call report_active;
@@ -874,7 +1270,7 @@ end
  * click in that state does not walk the player.
  *
  * That side effect made click testing impossible without anyone realising:
- * pressing numpad 0 to force the movement cursor and then stepping one hex to
+ * forcing the movement cursor and then stepping one hex to
  * pick a target put the cursor straight back into a scroll mode before the
  * click ever happened. Every click test so far has been run in the wrong mode.
  *
@@ -1010,12 +1406,6 @@ procedure calibrate begin
 end
 
 /*
- * live_critter_at_cursor  --  is there something alive on the look hex?
- *
- * Sets g_hascritter. A procedure rather than a returned value because SSL's
- * support for value-returning procedures is not worth relying on here.
- */
-/*
  * THE SCANNER
  *
  * The hex cursor lets you feel your way around one tile at a time, which is
@@ -1074,6 +1464,41 @@ end
 // engine's own invisible furniture; see scan_keep.
 #define ART_INVISIBLE       (21)
 
+/*
+ * Which MISC objects are exit grids: the engine's own test, by proto number,
+ * and the only one it uses. Every "Exit Grid" in 671 logged sightings fell in
+ * this range, and the Scroll Blocker that sat beside them in the same list is
+ * 0x0500000C, outside it.
+ *
+ * Nothing else in the MISC list is a thing a player sees. Scroll Blockers stop
+ * the view scrolling past the edge of the map and are drawn with art of their
+ * own rather than the blank placeholder, which is the only reason they got
+ * past the furniture filter -- 4,337 times in one session's log -- and into
+ * both the scanner and the hex readout.
+ */
+#define EXIT_PID_FIRST      (0x05000010)
+#define EXIT_PID_LAST       (0x05000017)
+
+/*
+ * Where an exit grid leads, read off the object. Measured on all 48 grids of
+ * the Klamath map Torr stands on: +0x3C held 9 (kladwtwn in maps.txt), +0x40
+ * hex 19850, +0x44 elevation 0, identical on every one.
+ *
+ * Map -1 and -2 leave the area. The engine's transition (0x4835F8) sends -1 to
+ * 0x4C4850 and -2 to 0x4BFE0C, the town map and the world map in that order.
+ * Not yet seen on a live grid, so a wrong reading here names the wrong map;
+ * it cannot do anything to the game.
+ */
+#define OBJ_EXIT_MAP        (0x3C)
+#define OBJ_EXIT_ELEV       (0x44)
+#define EXIT_TO_TOWNMAP     (-1)
+#define EXIT_TO_WORLDMAP    (-2)
+
+// How close two grids to the same place must be to count as one exit. Grids
+// along a border sit one to three hexes apart, often in two staggered rows; a
+// second way to the same place elsewhere on the map is dozens of hexes away.
+#define EXIT_STRIP_GAP      (4)
+
 procedure scan_list_type(variable cat) begin
    if (cat == SCAN_CRITTERS) then return LIST_CRITTERS;
    if (cat == SCAN_ITEMS)    then return LIST_GROUNDITEMS;
@@ -1131,20 +1556,22 @@ procedure scan_keep(variable obj) begin
    end
 
    /*
-    * Every MISC object considered, logged once per press with what identifies
-    * it. The exits list is the one category whose contents have never been
-    * measured here, and the filter it deserves is a fact about the engine's
-    * proto numbering that this session cannot check.
+    * Exits are kept wherever they are on this level, on screen or not.
     *
-    * So it ships reporting all of them, grouped by the game's own names, which
-    * is honest and immediately useful -- an exit grid is named and the player
-    * can step to it -- and this line is what the next session tightens it
-    * from. It is the same route the art filter itself came by: 81,000 logged
-    * objects, then a rule.
+    * Everything else must be on screen, and rightly: what is off it is not
+    * something a sighted player knows about either. An exit is the exception
+    * because a sighted player DOES know -- local maps have no fog, so they
+    * scroll the view to the edge and see the shimmering border there. Holding
+    * exits to the on-screen test is what had people wandering a map looking
+    * for the way out of it.
+    *
+    * Only real exit grids, by proto number. The MISC list also holds the
+    * Scroll Blockers, which no player sees.
     */
    if (g_scan_cat == SCAN_EXITS) then begin
-      debug_msg("WORLD:miscobj pid=" + obj_pid(obj) + " fid=" + obj_art_fid(obj)
-         + " nm=" + obj_name(obj) + "|");
+      if (is_exit_grid(obj) and elevation(obj) == elevation(dude_obj)) then
+         g_hascritter := 1;
+      return;
    end
 
    if (not obj_on_screen(obj)) then return;
@@ -1155,10 +1582,8 @@ procedure scan_keep(variable obj) begin
     * in the wrong procedure rather than merely too strict.
     *
     * Its reasoning was about combat -- "offering one as a target wastes a
-    * turn" -- but nothing here targets anything. That decision belongs to
-    * force_action_cursor, which asks live_critter_at_cursor and still checks
-    * aliveness for itself, so dropping the dead a second time in this place
-    * bought no safety at all. What scan_keep governs is whether a thing can be
+    * turn" -- but nothing here targets anything, so dropping the dead in this
+    * place bought no safety at all. What scan_keep governs is whether a thing can be
     * FOUND, and a body is the one object a player most needs to find: it is
     * the only container the game makes where a critter used to be standing,
     * and the scanner is the only route to something you cannot see.
@@ -1184,6 +1609,73 @@ procedure scan_keep(variable obj) begin
 end
 
 /*
+ * exit_strips  --  one entry per way out, not one per hex of it.
+ *
+ * An exit is drawn as a border, and the border is a strip of grid objects, one
+ * per hex -- 48 of them on the Klamath map where this was measured. Offered one
+ * at a time, "next instance" would walk the player hex by hex along a single
+ * edge of the map.
+ *
+ * So grids are joined into strips: same destination (the label says where to)
+ * and within EXIT_STRIP_GAP of a grid already in the strip. Each strip keeps
+ * its nearest grid and drops the rest. The input is sorted nearest first, so
+ * the lowest index in a strip IS its nearest member, and labelling every grid
+ * with the lowest index it is connected to finds both the strips and their
+ * representatives in one go.
+ *
+ * Two separate ways to the same place stay two entries: those are a real
+ * choice the player has, and they are nowhere near each other.
+ *
+ * Compacts the three arrays in place and leaves the new count in g_strips.
+ */
+procedure exit_strips(variable cands, variable dists, variable names, variable types, variable n) begin
+   variable strip, changed, i, j, k;
+
+   strip := temp_array(n + 1, 0);
+   i := 0;
+   while (i < n) do begin
+      strip[i] := i;
+      i := i + 1;
+   end
+
+   changed := 1;
+   while (changed) do begin
+      changed := 0;
+      i := 0;
+      while (i < n) do begin
+         j := i + 1;
+         while (j < n) do begin
+            if (strip[i] != strip[j]) then begin
+               if (types[i] == types[j]
+                   and tile_distance(tile_num(cands[i]), tile_num(cands[j]))
+                       <= EXIT_STRIP_GAP) then begin
+                  if (strip[i] < strip[j]) then strip[j] := strip[i];
+                  else strip[i] := strip[j];
+                  changed := 1;
+               end
+            end
+            j := j + 1;
+         end
+         i := i + 1;
+      end
+   end
+
+   k := 0;
+   i := 0;
+   while (i < n) do begin
+      if (strip[i] == i) then begin
+         cands[k] := cands[i];
+         dists[k] := dists[i];
+         names[k] := names[i];
+         types[k] := types[i];
+         k := k + 1;
+      end
+      i := i + 1;
+   end
+   g_strips := k;
+end
+
+/*
  * scan_do  --  collect, group, select, and either report or jump.
  *
  * Three levels, because a category can hold dozens of one thing and stepping
@@ -1202,7 +1694,7 @@ end
  */
 procedure scan_do(variable level, variable dojump) begin
    variable objs, total, i, j, k, obj, here, n, cands, dists, names;
-   variable best, bestd, tmp, ntypes, seen, typename, isnew, ninst, chosen;
+   variable best, bestd, tmp, ntypes, typename, ninst, chosen, types, ids, t;
 
    here := tile_num(dude_obj);
    objs := list_as_array(scan_list_type(g_scan_cat));
@@ -1258,54 +1750,56 @@ procedure scan_do(variable level, variable dojump) begin
       i := i + 1;
    end
 
-   // How many distinct types, counting each name the first time it appears.
+   /*
+    * **Each name becomes a number once, and everything after compares numbers.**
+    *
+    * Grouping used to compare names pairwise -- every object against every one
+    * before it, twice over, then twice more against the chosen type -- which on
+    * a busy map is tens of thousands of string operations a keypress. The
+    * engine counts references to a script string in sixteen bits, and somewhere
+    * in that churn a count was being bumped and never dropped: one session it
+    * passed 32767, wrapped negative, and the game's log filled with 655,000
+    * "String ref went negative" lines from that keypress on -- the press itself,
+    * one step past "Bar" in the scenery list, printed nothing at all.
+    *
+    * A map from name to number does it in one lookup an object. The list is
+    * already nearest first, so numbering in first-seen order is numbering the
+    * types nearest first, which is the order they are offered in.
+    */
+   types := temp_array(total + 1, 0);
+   ids := temp_array(-1, 0);
    ntypes := 0;
    i := 0;
    while (i < n) do begin
-      isnew := 1;
-      j := 0;
-      while (j < i) do begin
-         if (string_compare(names[j], names[i])) then begin
-            isnew := 0;
-            j := i;
-         end
-         j := j + 1;
+      tmp := names[i];
+      t := ids[tmp];
+      if (t == 0) then begin
+         ntypes := ntypes + 1;
+         t := ntypes;
+         ids[tmp] := t;
       end
-      if (isnew) then ntypes := ntypes + 1;
+      types[i] := t - 1;
       i := i + 1;
+   end
+
+   if (g_scan_cat == SCAN_EXITS) then begin
+      call exit_strips(cands, dists, names, types, n);
+      n := g_strips;
    end
 
    if (g_scan_type >= ntypes) then g_scan_type := ntypes - 1;
    if (g_scan_type < 0) then g_scan_type := ntypes - 1;
 
-   // Name of the selected type.
-   seen := -1;
+   // The selected type's name, and how many of it there are. A type's first
+   // member is its nearest, so it is where the name is read from.
    typename := "";
-   i := 0;
-   while (i < n) do begin
-      isnew := 1;
-      j := 0;
-      while (j < i) do begin
-         if (string_compare(names[j], names[i])) then begin
-            isnew := 0;
-            j := i;
-         end
-         j := j + 1;
-      end
-      if (isnew) then begin
-         seen := seen + 1;
-         if (seen == g_scan_type) then begin
-            typename := names[i];
-            i := n;
-         end
-      end
-      i := i + 1;
-   end
-
    ninst := 0;
    i := 0;
    while (i < n) do begin
-      if (string_compare(names[i], typename)) then ninst := ninst + 1;
+      if (types[i] == g_scan_type) then begin
+         if (ninst == 0) then typename := names[i];
+         ninst := ninst + 1;
+      end
       i := i + 1;
    end
    if (g_scan_inst >= ninst) then g_scan_inst := ninst - 1;
@@ -1315,7 +1809,7 @@ procedure scan_do(variable level, variable dojump) begin
    chosen := 0;
    i := 0;
    while (i < n) do begin
-      if (string_compare(names[i], typename)) then begin
+      if (types[i] == g_scan_type) then begin
          k := k + 1;
          if (k == g_scan_inst) then begin
             chosen := i;
@@ -1382,8 +1876,8 @@ end
  *
  * This is the choice a sighted player makes by looking at what they are
  * pointing at, and every part of it is something they told us: which skill,
- * which hex. Numpad 0 remains the explicit reset, and is the only thing that
- * disarms a skill.
+ * which hex. Changing the cursor by hand -- M or the right click -- disarms a
+ * skill; see the watch in `start`.
  */
 /*
  * on_useskill  --  HOOK_USESKILLON, fired when a skill is applied to something.
@@ -1431,6 +1925,20 @@ end
  * All five values are the engine's own. Nothing here is computed, which matters
  * because armour class in particular has modifiers this mod knows nothing about.
  */
+procedure report_light begin
+   variable elev, amb, lit;
+   elev := elevation(dude_obj);
+   if (g_cursor < 0 or g_cursor >= 40000 or elev < 0 or elev > 2) then return;
+   amb := read_int(LIGHT_AMBIENT);
+   lit := read_int(LIGHT_TILES + elev * LIGHT_ELEV_BYTES + g_cursor * 4);
+   // Logged raw as well: whether the hex is lit by something of its own is
+   // worth saying, and is only visible before the ambient floor is applied.
+   debug_msg("WORLD:light " + lit + "|" + amb + "|"
+      + (g_cursor == tile_num(dude_obj)) + "|"
+      + read_int(dude_obj + OBJ_LIGHT) + "|"
+      + tile_distance(tile_num(dude_obj), g_cursor) + "|");
+end
+
 procedure report_status begin
    /*
     * Level and experience ride along on the same line.
@@ -1459,6 +1967,136 @@ procedure report_status begin
 end
 
 /*
+ * poll_ammo  --  say when a gun GAINS rounds, and only then.
+ *
+ * **Watching the count beats watching the key**, and that is the whole design.
+ * A weapon can be reloaded three ways -- sfall's reload key, the engine's own
+ * reload mode on the weapon slot, and dragging ammunition onto the gun in the
+ * inventory -- and the mod would have to know about each of them separately to
+ * report any of them. It does not have to know about any of them to notice that
+ * the number went up. This is the same rule the barter screen already follows:
+ * what happened is read out of the engine rather than assumed from the input
+ * that was sent.
+ *
+ * It also means the mod never claims a reload that did not happen. Press the
+ * key with no ammunition of the right kind and nothing is said, because nothing
+ * changed -- which is precisely the case a sighted player diagnoses by watching
+ * the green bar not move.
+ *
+ * **Only upwards.** Going down is firing, and a player who just fired knows
+ * they fired; announcing it would put a number on top of the engine's own
+ * account of the shot. That was offered as a feature and turned down flat, and
+ * rightly: the useful half of this is the half you cannot otherwise verify.
+ *
+ * Swapping weapons resets the memory rather than reporting a change, since the
+ * count belongs to the gun and not to the player.
+ */
+procedure poll_ammo begin
+   variable item, now;
+
+   item := critter_inven_obj(dude_obj, 2 - active_hand);
+   if (not item or (obj_item_subtype(item) != item_type_weapon)) then begin
+      g_ammogun := 0;
+      g_ammo := -1;
+      return;
+   end
+
+   now := get_weapon_ammo_count(item);
+   if (item != g_ammogun) then begin
+      // A different gun. Take a reading and say nothing: the number changed
+      // because the weapon did, which is not a reload.
+      g_ammogun := item;
+      g_ammo := now;
+      return;
+   end
+
+   if (now > g_ammo and g_ammo >= 0) then begin
+      debug_msg("WORLD:ammo " + now + "|"
+         + get_proto_data(obj_pid(item), PROTO_WP_MAG_SIZE) + "|");
+   end
+   g_ammo := now;
+end
+
+/*
+ * report_weapon  --  the gun, in the engine's numbers and the engine's words.
+ *
+ * Everything a sighted player reads off the interface bar without thinking:
+ * what is in the active hand, how many rounds are in it, what those rounds are,
+ * which firing modes the thing has and what each costs. None of it was
+ * reachable, and a first gun is exactly the point where that stops being a
+ * missing convenience and starts being a weapon you cannot tell is empty.
+ *
+ * **Nothing here is calculated and nothing is named in English.** The count
+ * comes from get_weapon_ammo_count, the capacity and the costs come out of the
+ * proto, and the ammo's NAME comes from the game's own message file --
+ * get_proto_data for the text id, message_str_game for the string. A hardcoded
+ * "10mm JHP" would be wrong in every translation the moment somebody played
+ * this in German, and the mod already refuses to name body parts for that
+ * reason.
+ *
+ * **The active hand, not the right hand**, for the reason report_active learned
+ * the hard way: critter_inven_obj answers for whichever hand you name, so
+ * asking for the wrong one describes an item the bar is not showing. The other
+ * hand is reported alongside, so "it is in your other hand" is sayable.
+ *
+ * `get_attack_type` is the one field here that is not yet understood. sfall
+ * lists the opcode and documents nothing about it, and the reason it is emitted
+ * raw -- rather than turned into a mode name -- is that this line is also the
+ * experiment that says what it means. Read the log next to a gun whose mode has
+ * just been changed, and it either tracks or it does not.
+ */
+procedure report_weapon begin
+   variable item, other, pid, ammo, cap, ammopid, ammoname, weapon;
+
+   item  := critter_inven_obj(dude_obj, 2 - active_hand);
+   other := critter_inven_obj(dude_obj, 1 + active_hand);
+
+   if (not item) then begin
+      debug_msg("WORLD:weapon " + active_hand + "|||0|0||0|0|0|0|"
+         + get_attack_type + "|0|0|"
+         + (obj_name(other) if other else "") + "|");
+      return;
+   end
+
+   pid := obj_pid(item);
+   weapon := (obj_item_subtype(item) == item_type_weapon);
+
+   /*
+    * Only ask a weapon about its ammunition. get_weapon_ammo_count on a rock
+    * is a question with no answer, and a zero that came from asking the wrong
+    * question reads exactly like a zero that means "empty" -- which on this of
+    * all readouts is the one confusion worth spending four lines to avoid.
+    */
+   ammo := 0;
+   cap := 0;
+   ammopid := 0;
+   ammoname := "";
+   if (weapon) then begin
+      ammo := get_weapon_ammo_count(item);
+      cap := get_proto_data(pid, PROTO_WP_MAG_SIZE);
+      ammopid := get_weapon_ammo_pid(item);
+      if (ammopid > 0) then
+         ammoname := message_str_game(GAME_MSG_PRO_ITEM,
+            get_proto_data(ammopid, PROTO_TEXTID));
+   end
+
+   debug_msg("WORLD:weapon " + active_hand + "|"
+      + obj_name(item) + "|"
+      + weapon + "|"
+      + ammo + "|"
+      + cap + "|"
+      + ammoname + "|"
+      + weapon_attack_mode1(pid) + "|"
+      + get_proto_data(pid, PROTO_WP_APCOST_1) + "|"
+      + weapon_attack_mode2(pid) + "|"
+      + get_proto_data(pid, PROTO_WP_APCOST_2) + "|"
+      + get_attack_type + "|"
+      + get_proto_data(pid, PROTO_WP_BURST) + "|"
+      + get_proto_data(pid, PROTO_WP_MIN_ST) + "|"
+      + (obj_name(other) if other else "") + "|");
+end
+
+/*
  * The action menu, built here rather than driven over there.
  *
  * Fallout shows a sighted player a strip of icons when they hold the button on
@@ -1483,7 +2121,48 @@ end
  * hook can swallow a key.
  */
 
+/*
+ * part_name  --  a body part in combat.msg's words, as the called-shot window
+ * labels it.
+ *
+ * Numbered by the critter's ART ALIAS, not its kill type -- combat.msg says so
+ * itself ("Hit Locations (by art_num alias)"): humans from 1110, cattle from
+ * 1150, robots from 1170. The window's own lookup is 0x0042612C, 1000 + 10 *
+ * alias + part, and the alias is one read out of the table art_alias_num
+ * (0x00419998) indexes. Kill type was the first guess and it named every
+ * part of every critter "Error": Sulik as much as the rats.
+ *
+ * The entries are written to finish a sentence -- "the head", "the left
+ * hindleg" -- so the article comes off for a list.
+ */
+procedure part_name(variable critter, variable loc) begin
+   variable alias, name;
+   alias := read_int(read_int(ART_ALIASES) + 4 * (obj_art_fid(critter) bwand 0xFFF));
+   name := message_str_game(GAME_MSG_COMBAT, 1000 + 10 * alias + loc);
+   if (strlen(name) > 4) then begin
+      if (substr(name, 0, 4) == "the ") then name := substr(name, 4, strlen(name) - 4);
+   end
+   return name;
+end
+
 procedure menu_label(variable code) begin
+   variable loc, name;
+   if (code >= MENU_AIM) then begin
+      /*
+       * The body part in combat.msg's words, which are the ones the
+       * called-shot window prints: 1000 + 10 per kind of critter, so an ant's
+       * parts are an ant's. The chance is the engine's own to-hit sum for that
+       * part with the selected attack -- the number drawn beside it.
+       */
+      loc := code - MENU_AIM;
+      name := part_name(g_menu_target, loc);
+      return name + ", " + call_offset_r4(F_TO_HIT, dude_obj, g_menu_target,
+         loc, g_bar_mode) + "%";
+   end
+   if (code >= MENU_SKILL) then
+      return mstr_skill(100 + code - MENU_SKILL) + ", "
+         + has_skill(dude_obj, code - MENU_SKILL) + "%";
+   if (code == ACT_ATTACK)    then return "attack it";
    if (code == ACT_USE)       then return "use it";
    if (code == ACT_LOOK)      then return "look at it";
    if (code == ACT_INVENTORY) then return "use an item on it";
@@ -1524,7 +2203,7 @@ end
  * be sending a second, untranslated copy of something it already has.
  */
 procedure report_sheet begin
-   variable i, out;
+   variable i, out, nm, n;
 
    debug_msg("CHAR:stats " + get_critter_stat(dude_obj, STAT_st)
       + "|" + get_critter_stat(dude_obj, STAT_pe)
@@ -1566,6 +2245,80 @@ procedure report_sheet begin
    end
    debug_msg(out);
 
+   debug_msg("CHAR:pc " + get_pc_stat(PCSTAT_level)
+      + "|" + get_pc_stat(PCSTAT_experience)
+      + "|" + get_pc_stat(PCSTAT_unspent_skill_points) + "|");
+
+   /*
+    * The Kills folder draws a count beside every name, and keeps the name and
+    * not the count -- so a player could hear that they had killed geckos and
+    * not how many. Every kind with a count, named as proto.msg names it, which
+    * is what the folder's own title begins with; the Python side matches on
+    * that, so the engine's sort order is its own business.
+    *
+    * Read until proto.msg runs out of names rather than to a fixed nineteen:
+    * a mod that adds kinds of creature adds their names too.
+    */
+   out := "CHAR:kills ";
+   i := 0;
+   while (i < KILL_TYPES_MAX) do begin
+      nm := message_str_game(GAME_MSG_PROTO, MSG_KILL_NAMES + i);
+      if (nm == "" or nm == "Error") then begin
+         i := KILL_TYPES_MAX;
+      end else begin
+         n := get_kill_counter(i);
+         if (n > 0) then out := out + nm + "|" + n + "|";
+         i := i + 1;
+      end
+   end
+   debug_msg(out);
+
+   call sheet_sig;
+end
+
+/*
+ * sheet_sig  --  the skills and the points left, as one string in g_sheet_sig.
+ */
+procedure sheet_sig begin
+   variable i, out;
+   out := "";
+   i := 0;
+   while (i < 18) do begin
+      out := out + has_skill(dude_obj, i) + "|";
+      i := i + 1;
+   end
+   g_sheet_sig := out + get_pc_stat(PCSTAT_unspent_skill_points);
+end
+
+/*
+ * poll_sheet  --  spending skill points, while the sheet is open.
+ *
+ * report_sheet runs once, on the way in, and was right to: nothing else on the
+ * sheet moves while you look at it. Skill points do. Raising Small Guns changed
+ * the number on screen and the mod went on reading the one from the moment the
+ * sheet opened -- and never said how many points were left to spend, which is
+ * the whole question while spending them.
+ *
+ * A few times a second is plenty for a key press, and the comparison is one
+ * string, so nothing is sent unless something moved.
+ */
+procedure poll_sheet begin
+   variable before, i, out;
+   g_sheet_tick := g_sheet_tick + 1;
+   if (g_sheet_tick < 5) then return;
+   g_sheet_tick := 0;
+
+   before := g_sheet_sig;
+   call sheet_sig;
+   if (g_sheet_sig == before) then return;
+
+   out := "CHAR:skills ";
+   i := 0;
+   while (i < 18) do begin
+      out := out + has_skill(dude_obj, i) + "|";
+      i := i + 1;
+   end
+   debug_msg(out);
    debug_msg("CHAR:pc " + get_pc_stat(PCSTAT_level)
       + "|" + get_pc_stat(PCSTAT_experience)
       + "|" + get_pc_stat(PCSTAT_unspent_skill_points) + "|");
@@ -1652,6 +2405,30 @@ procedure report_active begin
 
    item  := critter_inven_obj(dude_obj, 2 - active_hand);
    other := critter_inven_obj(dude_obj, 1 + active_hand);
+   /*
+    * With the engine's own functions available, U asks what to use the item
+    * ON -- the things on the look hex, yourself included -- and uses it the
+    * way the action menu's "use an item on it" does: F_USE_ITEM_ON, walking
+    * over and paying the action points. No item slot, no crosshair, and no
+    * pointer landing on whatever is drawn in front of the target.
+    *
+    * A weapon still goes the old way. The slot attacks with it, and "attack
+    * it" is the action menu's; using a spear "on" a rat is not an attack.
+    */
+   if (item and g_unsafe > 0 and obj_item_subtype(item) != item_type_weapon) then begin
+      call pick_collect;
+      if (g_pick_count <= 0) then begin
+         debug_msg("WORLD:pick none|");
+         return;
+      end
+      g_pick_use := item;
+      g_pick := 1;
+      g_pick_index := 0;
+      call pick_label(g_pick_objs[0]);
+      debug_msg("WORLD:pick use|" + obj_name(item) + "|" + g_label + "|1|"
+         + g_pick_count + "|");
+      return;
+   end
    if (not item) then begin
       if (other) then begin
          debug_msg("WORLD:useactive empty|0|" + obj_name(other) + "|");
@@ -1803,6 +2580,7 @@ procedure pick_open begin
 end
 
 procedure pick_close begin
+   g_pick_use := 0;
    g_pick := 0;
    g_pick_index := 0;
    g_pick_count := 0;
@@ -1825,12 +2603,23 @@ procedure pick_step(variable delta) begin
 end
 
 procedure pick_choose begin
-   variable obj;
+   variable obj, item;
 
    obj := g_pick_objs[g_pick_index];
+   item := g_pick_use;
    call pick_close;
    if (not obj) then begin
       debug_msg("WORLD:pick gone|");
+      return;
+   end
+   // U's list: the target is the whole question, so it goes straight to the
+   // engine rather than through the action menu.
+   if (item) then begin
+      debug_msg("WORLD:useitem try " + obj_name(item) + "|" + obj_name(obj) + "|");
+      g_do_what := ACT_INVENTORY;
+      g_do_item := item;
+      g_do_target := obj;
+      g_do_wait := PENDING_TICKS;
       return;
    end
    g_menu_target := obj;
@@ -1846,10 +2635,12 @@ end
  * exists to remove. So the two cannot both be had.
  *
  * What is offered instead is what the mod can actually do, which is a shorter
- * and more honest list than the icons were. Use and use-an-item-on go straight
- * through use_obj and use_obj_on_obj with the handle, no pointer anywhere. Look
- * and talk still hand back to the Python side to drive the engine's own menu,
- * so they keep working exactly as before.
+ * and more honest list than the icons were. With unsafe scripting every entry
+ * goes straight to the engine's own action function -- see engine_act -- and
+ * without it use and use-an-item-on go through use_obj and use_obj_on_obj,
+ * while look and talk hand back to the Python side to drive the engine's menu.
+ * Skills and attacks have no route but the engine's, so they are only offered
+ * with it.
  *
  * An action the engine will not perform is not hidden here; it is offered, and
  * the engine refuses it in its own words through the display window, which the
@@ -1869,22 +2660,25 @@ procedure actions_open begin
       if (not is_critter_dead(g_menu_target)) then alive := 1;
    end
 
+   g_menu_sub := 0;
    if (g_menu_target == dude_obj) then begin
       // Using an item on yourself is the whole reason you are in the list.
       // Use and look both need the pointer put on you, which cannot be done.
-      set_array(g_menu_codes, g_menu_count, ACT_INVENTORY);
-      g_menu_count := g_menu_count + 1;
+      call menu_add(ACT_INVENTORY);
+      // First Aid and Doctor on yourself, which the Skilldex does with a
+      // click on your own sprite.
+      if (g_unsafe > 0) then call menu_add(ACT_USESKILL);
    end else begin
-      if (alive) then begin
-         set_array(g_menu_codes, g_menu_count, ACT_TALK);
-         g_menu_count := g_menu_count + 1;
-      end
-      set_array(g_menu_codes, g_menu_count, ACT_USE);
-      g_menu_count := g_menu_count + 1;
-      set_array(g_menu_codes, g_menu_count, ACT_INVENTORY);
-      g_menu_count := g_menu_count + 1;
-      set_array(g_menu_codes, g_menu_count, ACT_LOOK);
-      g_menu_count := g_menu_count + 1;
+      if (alive) then call menu_add(ACT_TALK);
+      call menu_add(ACT_USE);
+      call menu_add(ACT_INVENTORY);
+      // Both of these go straight to the engine, so neither is offered
+      // without it.
+      if (g_unsafe > 0) then call menu_add(ACT_USESKILL);
+      call menu_add(ACT_LOOK);
+      // Last, so it is never the entry under your finger by accident: it is
+      // the one choice here that cannot be taken back.
+      if (alive and g_unsafe > 0) then call menu_add(ACT_ATTACK);
    end
 
    g_menu := 1;
@@ -1894,7 +2688,95 @@ procedure actions_open begin
       + g_menu_count + "|" + menu_label(g_menu_codes[0]) + "|1|");
 end
 
+procedure menu_add(variable code) begin
+   set_array(g_menu_codes, g_menu_count, code);
+   g_menu_count := g_menu_count + 1;
+end
+
+/*
+ * The skills the Skilldex can point at something, in its order -- Lockpick,
+ * Steal, Traps, First Aid, Doctor, Science, Repair -- numbered as its own
+ * dispatch numbers them (a jump table at 0x0044BF88). Sneak is the Skilldex's
+ * first row and is not here: it is a switch you flip, not something you do to
+ * a thing.
+ */
+procedure menu_open_skills begin
+   g_menu_count := 0;
+   call menu_add(MENU_SKILL + 9);
+   call menu_add(MENU_SKILL + 10);
+   call menu_add(MENU_SKILL + 11);
+   call menu_add(MENU_SKILL + 6);
+   call menu_add(MENU_SKILL + 7);
+   call menu_add(MENU_SKILL + 12);
+   call menu_add(MENU_SKILL + 13);
+   g_menu_sub := ACT_USESKILL;
+   g_menu_index := 0;
+   debug_msg("WORLD:menu sub skill|" + g_menu_count + "|"
+      + menu_label(g_menu_codes[0]) + "|");
+end
+
+/*
+ * The called-shot window's eight body parts, as a list. Head first and down
+ * the body, which is the order a person names them in; the window itself
+ * puts them in two columns, one per side.
+ */
+procedure menu_open_aim begin
+   g_menu_count := 0;
+   call menu_add(MENU_AIM + 0);   // head
+   call menu_add(MENU_AIM + 6);   // eyes
+   call menu_add(MENU_AIM + 3);   // torso
+   call menu_add(MENU_AIM + 7);   // groin
+   call menu_add(MENU_AIM + 1);   // left arm
+   call menu_add(MENU_AIM + 2);   // right arm
+   call menu_add(MENU_AIM + 5);   // left leg
+   call menu_add(MENU_AIM + 4);   // right leg
+   g_menu_sub := ACT_ATTACK;
+   g_menu_index := 0;
+   debug_msg("WORLD:menu sub aim|" + g_menu_count + "|"
+      + menu_label(g_menu_codes[0]) + "|");
+end
+
+/*
+ * bar_attack  --  the attack the interface bar has selected.
+ *
+ * What N cycles and B swaps. Sets g_bar_mode (a hit mode, -1 if the button is
+ * on Use or Reload) and g_bar_aim, and answers whether there is an attack.
+ */
+procedure bar_attack begin
+   variable base, act;
+   g_bar_mode := -1;
+   g_bar_aim := 0;
+   base := BAR_ITEMS + read_int(BAR_HAND) * 24;
+   act := read_int(base + 0x10);
+   if (act == 1 or act == BAR_ACT_PRIMARY_AIM) then
+      g_bar_mode := read_int(base + 8);
+   else if (act == BAR_ACT_SECONDARY or act == BAR_ACT_SECONDARY_AIM) then
+      g_bar_mode := read_int(base + 0xC);
+   if (act == BAR_ACT_PRIMARY_AIM or act == BAR_ACT_SECONDARY_AIM) then
+      g_bar_aim := 1;
+   return (g_bar_mode >= 0);
+end
+
+/*
+ * attack_now  --  "attack it", the way a click with the crosshair does it.
+ *
+ * Except in the one case F_ATTACK_THIS would open the called-shot window under
+ * this script: a fight on, an aimed mode, a shot the engine would allow. The
+ * menu sends that case to the body-part list before it is ever queued, so it
+ * only reaches here if N was pressed in the moment between.
+ */
+procedure attack_now(variable target) begin
+   if ((read_int(COMBAT_STATE) bwand 1) and bar_attack and g_bar_aim) then begin
+      if (call_offset_r4(F_BAD_SHOT, dude_obj, target, g_bar_mode, 1) == 0) then begin
+         debug_msg("WORLD:attack aimnow|");
+         return;
+      end
+   end
+   call_offset_v1(F_ATTACK_THIS, target);
+end
+
 procedure menu_close begin
+   g_menu_sub := 0;
    g_menu := 0;
    g_menu_index := 0;
    g_menu_count := 0;
@@ -1931,6 +2813,53 @@ end
  * So the menu only queues, and this runs a few polls later with the keypress
  * long finished.
  */
+/*
+ * engine_act  --  one action menu choice, done the way the engine does it.
+ *
+ * Mirrors the menu's own dispatch case for case, including Use choosing its
+ * function by what the target is: scenery is used, a critter -- which the
+ * menu only offers Use on when it is a body -- is looted, and anything else is
+ * picked up, which for a container means opened.
+ */
+procedure engine_act(variable what, variable target, variable item) begin
+   variable t;
+   if (what == ACT_USE) then begin
+      t := obj_type(target);
+      if (t == OBJ_TYPE_SCENERY) then
+         call_offset_v2(F_USE_OBJECT, dude_obj, target);
+      else if (t == OBJ_TYPE_CRITTER) then
+         call_offset_v2(F_LOOT_BODY, dude_obj, target);
+      else
+         call_offset_v2(F_GET_OBJECT, dude_obj, target);
+   end else if (what == ACT_INVENTORY) then begin
+      call_offset_v3(F_USE_ITEM_ON, dude_obj, target, item);
+   end else if (what == ACT_TALK) then begin
+      call_offset_v2(F_TALK_TO, dude_obj, target);
+   end else if (what == ACT_LOOK) then begin
+      if (call_offset_r2(F_EXAMINE, dude_obj, target) == -1) then
+         call_offset_v2(F_LOOK_AT, dude_obj, target);
+   end else if (what == ACT_ATTACK) then begin
+      call attack_now(target);
+   end else if (what >= MENU_AIM) then begin
+      /*
+       * Checked again, because the menu was a moment ago: the mode can have
+       * been changed, the turn can have ended, the target can have moved out
+       * of range. Bit 2 of the combat state is the player's turn taking input
+       * (set at 0x00422AC4) -- the same gate F_ATTACK_THIS opens with, and the
+       * only thing stopping an attack being made in somebody else's turn.
+       * Anything wrong goes to the engine's own attack, which says what in the
+       * game's words and opens nothing.
+       */
+      if (bar_attack and g_bar_aim and (read_int(COMBAT_STATE) bwand 2)
+       and call_offset_r4(F_BAD_SHOT, dude_obj, target, g_bar_mode, 1) == 0) then
+         call_offset_v4(F_COMBAT_ATTACK, dude_obj, target, g_bar_mode, what - MENU_AIM);
+      else
+         call attack_now(target);
+   end else if (what >= MENU_SKILL) then begin
+      call_offset_v3(F_USE_SKILL_ON, dude_obj, target, what - MENU_SKILL);
+   end
+end
+
 procedure run_pending begin
    variable what, item, target;
 
@@ -1952,6 +2881,21 @@ procedure run_pending begin
       return;
    end
 
+   if (g_unsafe > 0) then begin
+      // An attack waits for the last one to finish playing. A click cannot
+      // land while the player is still swinging -- the engine is not taking
+      // input -- but this is not a click, and nothing else would stop it.
+      if ((what == ACT_ATTACK or what >= MENU_AIM) and anim_busy(dude_obj)) then begin
+         g_do_what := what;
+         g_do_target := target;
+         g_do_wait := 1;
+         return;
+      end
+      call engine_act(what, target, item);
+      debug_msg("WORLD:pending engine " + what + " mode=" + get_game_mode + "|");
+      return;
+   end
+
    set_self(dude_obj);
    set_self(dude_obj);
    if (what == ACT_USE) then begin
@@ -1968,7 +2912,34 @@ procedure menu_do begin
 
    code := g_menu_codes[g_menu_index];
    target := g_menu_target;
+
+   // The two entries that open a second list rather than doing something.
+   if (code == ACT_USESKILL and g_unsafe > 0 and target) then begin
+      call menu_open_skills;
+      return;
+   end
+   if (code == ACT_ATTACK and target) then begin
+      if ((read_int(COMBAT_STATE) bwand 1) and bar_attack and g_bar_aim) then begin
+         if (call_offset_r4(F_BAD_SHOT, dude_obj, target, g_bar_mode, 1) == 0) then begin
+            call menu_open_aim;
+            return;
+         end
+      end
+   end
    call menu_close;
+
+   // An attack, a skill, or a body part: all straight to the engine.
+   if (code == ACT_ATTACK or code >= MENU_SKILL) then begin
+      if (not target) then begin
+         debug_msg("WORLD:menu gone|");
+         return;
+      end
+      g_do_what := code;
+      g_do_item := 0;
+      g_do_target := target;
+      g_do_wait := PENDING_TICKS;
+      return;
+   end
 
    if (not target) then begin
       debug_msg("WORLD:menu gone|");
@@ -2069,8 +3040,22 @@ procedure menu_do begin
     * Hence the hand-off: the object is named so the other side can point at
     * the same thing rather than at whatever is now under the cursor.
     */
-   if (code == ACT_TALK or code == ACT_LOOK) then begin
-      debug_msg("WORLD:menudo " + code + "|" + obj_name(target) + "|");
+   /*
+    * Straight to the engine: no pointer, so nothing drawn in front of the
+    * target can get the look or the conversation instead.
+    *
+    * There used to be a second route for when the engine's functions were
+    * off, handing these back to the Python side to work the engine's own
+    * menu with the pointer -- seconds of aiming, and beaten by anything drawn
+    * over the target. The installer always turns the functions on, so that
+    * route only ever ran on a broken install, where it was the slow way to
+    * the same failure. Without them these say so, like every other entry.
+    */
+   if ((code == ACT_TALK or code == ACT_LOOK) and g_unsafe > 0) then begin
+      g_do_what := code;
+      g_do_item := 0;
+      g_do_target := target;
+      g_do_wait := PENDING_TICKS;
       return;
    end
 
@@ -2082,6 +3067,11 @@ end
 procedure obj_is_real(variable obj) begin
    if (not obj) then return 0;
    if (obj_type(obj) == OBJ_TYPE_SPATIAL) then return 0;
+   // Nothing in the MISC list is a thing to point at or act on. Scroll
+   // Blockers are not seen at all, and an exit grid is not an object to a
+   // player but ground to walk onto -- the readout names it separately, so a
+   // click on it walks there rather than hunting for a sprite.
+   if (obj_type(obj) == OBJ_TYPE_MISC) then return 0;
    if (not obj_is_visible_flag(obj)) then return 0;
    // Critters are exempt: a critter's fid encodes animation state rather than
    // a scenery art index, so the comparison would be meaningless for them.
@@ -2091,8 +3081,43 @@ procedure obj_is_real(variable obj) begin
    return 1;
 end
 
+/*
+ * click_pick  --  what a click right here would actually act on.
+ *
+ * **Sulik, in the Klamath bar, is why.** Standing beside him, every click and
+ * every "talk to it" went to the bar counter. The aim was right: the pointer
+ * was on Sulik's hex, and prepare_cursor said Sulik. But prepare_cursor asks
+ * the engine for CRITTERS first, deliberately -- an enemy standing in scenery
+ * must still be found -- and that is not the question the click asks.
+ *
+ * With any cursor but the crosshair, the engine picks what is DRAWN ON TOP at
+ * the pixel, of any type (gameMouseGetObjectUnderCursor with type -1). The bar
+ * is drawn over Sulik's legs, so the click hit the bar, and the aimer -- told
+ * "Sulik" -- had no reason to move the pointer up to his head, which is what a
+ * sighted player does without thinking. Holding the button for the action
+ * menu asks the same any-type question, so the menu came up for the bar, had
+ * no Talk in it, and that is how "talk to it" ended in the inventory.
+ *
+ * obj_under_cursor(0, 1) is that same call. Reporting its answer lets the
+ * aimer keep walking the pointer up the sprite until the engine agrees the
+ * click is on Sulik. The crosshair is left alone: targeting picks critters
+ * only, so there the critter-first answer IS the click's answer.
+ */
+procedure click_pick begin
+   variable hit;
+   g_pickname := "";
+   g_pickflat := 0;
+   g_picktile := -1;
+   hit := obj_under_cursor(0, 1);
+   if (not obj_is_real(hit)) then return;
+   call obj_label(hit);
+   g_pickname := g_label;
+   g_picktile := tile_num(hit);
+   if ((get_flags(hit) bwand FLAG_FLAT) != 0) then g_pickflat := 1;
+end
+
 procedure prepare_cursor begin
-   variable want, ou, ouname, ouflat, iscritter, isitem, isbody;
+   variable want, ou, ouname, ouflat, outile, iscritter, isitem, isbody;
 
    // Decide from what is UNDER THE POINTER, not from what is on the look hex.
    // Those are not the same thing: the pointer is walked up an object's sprite
@@ -2107,6 +3132,33 @@ procedure prepare_cursor begin
    ou := obj_under_cursor(1, 0);
    if (not ou) then begin
       ou := obj_under_cursor(0, 0);
+   end
+
+   /*
+    * **You are excluded from both of those, and that is why you cannot use a
+    * stimpak on yourself.**
+    *
+    * sfall's second argument is `includeDude`, and passing false "will ignore
+    * dude_obj". Both calls above pass 0, so pointing at your own hex finds no
+    * critter, falls through to the second call, and comes back with whatever
+    * is standing behind you. Caught in a live log with an item armed and the
+    * pointer squarely on the player:
+    *
+    *     WORLD:oudbg ... ty=3 ... nm=Wooden Wall|
+    *     WORLD:prepare 3|Wooden Wall|17846|17846|0|
+    *
+    * Cursor mode 3 is "item ready", so the item WAS armed and the aim WAS on
+    * the right hex. The click used Healing Powder on a wall.
+    *
+    * Asked again, and only on your own hex. Including yourself everywhere
+    * would change what is under the pointer on every neighbouring tile your
+    * sprite overlaps, and the cursor rules below -- walk, interact, attack --
+    * are tuned against the answers they get now. This is the one hex where the
+    * current answer is known to be wrong.
+    */
+   if (g_cursor == tile_num(dude_obj)) then begin
+      variable me := obj_under_cursor(1, 1);
+      if (me == dude_obj) then ou := me;
    end
 
    // Log what the engine handed back BEFORE filtering, so that the next thing
@@ -2125,12 +3177,14 @@ procedure prepare_cursor begin
 
    ouname := "";
    ouflat := 0;
+   outile := -1;
    iscritter := 0;
    isitem := 0;
    isbody := 0;
    if (ou) then begin
       call obj_label(ou);
       ouname := g_label;
+      outile := tile_num(ou);
       /*
        * Is this thing drawn flat on the floor?
        *
@@ -2177,11 +3231,45 @@ procedure prepare_cursor begin
        * trying to loot.
        */
       if (obj_type(ou) == OBJ_TYPE_CRITTER) then begin
-         if (is_critter_dead(ou)) then isbody := 1;
+         /*
+          * You are a critter, and you are not a target. Now that the pointer
+          * can find you at all, the rule below would read "living critter" and
+          * choose the targeting cursor in a fight -- so pointing at yourself
+          * would arm an attack on yourself. Left as neither critter nor body,
+          * your own hex falls through to the movement rule further down, which
+          * is what it did before you could be found and is still right.
+          */
+         if (ou == dude_obj) then begin
+            // nothing: neither a target nor a container
+         end
+         else if (is_critter_dead(ou)) then isbody := 1;
          else iscritter := 1;
       end else if (obj_type(ou) == OBJ_TYPE_ITEM) then begin
          isitem := 1;
       end
+   end
+
+   /*
+    * An armed ITEM outranks every guess below, and is not merely preferred --
+    * it is left alone.
+    *
+    * The reload key arms the item and hands over the crosshair, which is the
+    * player saying what a click means as plainly as the Skilldex does. Every
+    * rule under this line is an inference from what happens to be under the
+    * pointer, and any one of them calling set_cursor_mode would put the
+    * crosshair down and lose the item the player had just picked up.
+    *
+    * So this reports and returns without setting anything, rather than setting
+    * the mode back to the value it already holds. Re-arming a mode is not the
+    * same as never having disturbed it, and the difference is an item.
+    */
+
+   if (get_cursor_mode == CURSOR_USE_ITEM) then begin
+      call click_pick;
+      debug_msg("WORLD:prepare " + CURSOR_USE_ITEM + "|" + g_pickname + "|"
+         + tile_under_cursor + "|" + g_cursor + "|" + g_pickflat + "|"
+         + g_picktile + "|");
+      return;
    end
 
    if (g_armedskill > 0) then begin
@@ -2241,8 +3329,27 @@ procedure prepare_cursor begin
    g_playercursor := want;
    g_restore_ticks := 0;
    g_lastcursormode := get_cursor_mode;
+
+   // Report what the click will act on. The crosshair picks critters only,
+   // and walking ignores what is drawn over the tile; every other cursor
+   // takes whatever is on top. See click_pick.
+   if (want != CURSOR_TARGETING and want != CURSOR_MOVEMENT) then begin
+      call click_pick;
+      ouname := g_pickname;
+      ouflat := g_pickflat;
+      outile := g_picktile;
+   end
+   /*
+    * The last field is the hex the named object STANDS on, which is not the
+    * hex under the pointer. A critter behind a bar is only clickable up at
+    * its head, over the hex behind it, and the aimer threw that answer away
+    * for being on the wrong hex -- Sajag, seven times in one session. With the
+    * object's own hex it can tell "the right thing, reached from above" from
+    * "something else entirely".
+    */
    debug_msg("WORLD:prepare " + want + "|" + ouname + "|"
-      + tile_under_cursor + "|" + g_cursor + "|" + ouflat + "|");
+      + tile_under_cursor + "|" + g_cursor + "|" + ouflat + "|"
+      + outile + "|");
 end
 
 /*
@@ -2264,8 +3371,8 @@ end
  * without either being translated first.
  *
  * There is no "north", and saying so would be inventing a direction the grid
- * does not have -- the same reason step_north has to alternate NE and NW to
- * fake one. Six real answers beat eight tidy ones that do not correspond to
+ * does not have -- a hex grid's up is NE and NW by turns, which is no
+ * direction at all. Six real answers beat eight tidy ones that do not correspond to
  * anything a critter can actually be turned to.
  */
 procedure facing_name(variable rot) begin
@@ -2278,8 +3385,52 @@ procedure facing_name(variable rot) begin
    return "";
 end
 
+procedure is_exit_grid(variable obj) begin
+   variable pid;
+   if (not obj) then return 0;
+   if (obj_type(obj) != OBJ_TYPE_MISC) then return 0;
+   pid := obj_pid(obj);
+   if (pid < EXIT_PID_FIRST or pid > EXIT_PID_LAST) then return 0;
+   return 1;
+end
+
+/*
+ * exit_label  --  where an exit grid leads, in the game's own words.
+ *
+ * "Exit Grid" is the proto's name and says nothing a player can use. The map
+ * names are the game's: map.msg numbers them 200 + map * 3 + elevation, which
+ * is how entry 227 came to read "Downtown" for map 9. "Exit to" is the mod's,
+ * scaffolding like a bearing, and goes with the rest of the mod's own words
+ * when those move to a locale file.
+ */
+procedure exit_label(variable obj) begin
+   variable map, elev, nm;
+   map := read_int(obj + OBJ_EXIT_MAP);
+   elev := read_int(obj + OBJ_EXIT_ELEV);
+   if (map == EXIT_TO_WORLDMAP) then begin
+      g_label := "Exit to the world map";
+      return;
+   end
+   if (map == EXIT_TO_TOWNMAP) then begin
+      g_label := "Exit to the town map";
+      return;
+   end
+   nm := "";
+   if (map >= 0 and elev >= 0 and elev <= 2) then
+      nm := message_str_game(GAME_MSG_MAP, 200 + map * 3 + elev);
+   if (nm == "" or nm == "Error") then begin
+      g_label := "Exit";
+   end else begin
+      g_label := "Exit to " + nm;
+   end
+end
+
 procedure obj_label(variable obj) begin
    variable face;
+   if (is_exit_grid(obj)) then begin
+      call exit_label(obj);
+      return;
+   end
    g_label := obj_name(obj);
    if (obj_type(obj) == OBJ_TYPE_CRITTER) then begin
       // A body is a container, and this is the word that says so. Without it
@@ -2317,144 +3468,6 @@ procedure obj_label(variable obj) begin
    end
 end
 
-procedure live_critter_at_cursor begin
-   variable objs, total, i, obj;
-   /*
-    * Both answers are cleared HERE, at the top, rather than left to the caller.
-    *
-    * This procedure used to clear g_hascritter on its LAST line instead --
-    * after the loop that sets it -- so it discarded its own finding every time
-    * and the flag read false no matter who was standing on the hex. It sat
-    * directly beneath the free_array note, which is what let a live assignment
-    * pass for part of the cleanup.
-    *
-    * force_action_cursor is the only caller and its entire decision hangs on
-    * that flag, so the targeting cursor could never be selected: numpad 0 in a
-    * fight always chose movement, and a click meant as an attack was issued as
-    * an order to walk -- which is the precise failure the cursor logic exists
-    * to prevent, left in place by the line that was supposed to enforce it.
-    */
-   g_hascritter := 0;
-   g_hasobject := 0;
-   objs := tile_get_objs(g_cursor, elevation(dude_obj));
-   total := 0;
-   if (objs) then begin
-      total := len_array(objs);
-   end
-   i := 0;
-   while (i < total) do begin
-      obj := objs[i];
-      if (obj and obj != dude_obj) then begin
-         if (obj_type(obj) == OBJ_TYPE_CRITTER) then begin
-            // Corpses share a hex with the living, because a dead critter
-            // stops blocking its tile. Offering a body as an attack target
-            // would waste a turn's action points on nothing.
-            if (not is_critter_dead(obj)) then begin
-               g_hascritter := 1;
-            end
-         end else if (obj_type(obj) != OBJ_TYPE_SPATIAL) then begin
-            // Something you could act on -- a door, a container, scenery.
-            // The engine's invisible furniture is drawn with the blank
-            // placeholder art and is not a thing anyone can touch.
-            if ((obj_art_fid(obj) bwand 0xFFF) != ART_INVISIBLE) then begin
-               g_hasobject := 1;
-            end
-         end
-      end
-      i := i + 1;
-   end
-   // No free_array: tile_get_objs returns a temporary array, auto-deleted at
-   // end of frame. Freeing it by hand is a double free and crashes the engine.
-end
-
-/*
- * force_action_cursor  --  set the cursor to match what the look hex holds.
- *
- * Fallout decides what a left click does from the cursor mode, so a blind
- * player needs that mode set deliberately rather than toggled blindly with
- * right-click. The script picks it, because the script is what knows both
- * whether combat is running and what is standing on the selected hex.
- *
- * In combat, with a living critter on the look hex, that means the targeting
- * cursor: a click attacks. Otherwise the movement cursor: a click walks. This
- * is the same decision a sighted player makes by looking at what they are
- * pointing at, and it keeps one key -- "do the obvious thing with the hex I
- * have chosen" -- instead of making the player track cursor state themselves.
- *
- * There is no ambiguity to worry about: a living critter blocks its hex, so
- * "walk there" was never available for the hexes this targets.
- */
-procedure force_action_cursor begin
-   variable before, want;
-
-   g_hascritter := 0;
-   if (combat_is_initialized) then begin
-      call live_critter_at_cursor;
-   end
-
-   if (g_hascritter) then begin
-      want := CURSOR_TARGETING;
-   end else begin
-      want := CURSOR_MOVEMENT;
-   end
-
-   g_armedskill := 0;   // the explicit reset: numpad 0 disarms a skill
-   before := get_cursor_mode;
-   set_cursor_mode(want);
-   g_playercursor := want;
-   g_restore_ticks := 0;
-   g_lastcursormode := get_cursor_mode;
-
-   // Always answer, but do not give the same long answer twice. Silence is the
-   // one response a blind player cannot act on -- it reads exactly like the key
-   // never arrived, which is how this key got written off as broken. But the
-   // full "movement cursor, a click walks you there" on every press is its own
-   // problem: pressed twice to be sure, it just repeats itself. So a press that
-   // changed nothing gets a short acknowledgement instead.
-   if (before == g_lastcursormode) then begin
-      debug_msg("WORLD:cursorok " + g_lastcursormode);
-   end else begin
-      debug_msg("WORLD:cursormode " + g_lastcursormode);
-   end
-end
-
-/*
- * step_north / step_south  --  the directions a hex grid does not have.
- *
- * There is no north. The two upward neighbours are NE and NW, mirror images
- * about the vertical, so going "up" means alternating them -- and which one you
- * need next depends on the row's parity. Doing that by hand is what makes
- * tracing a wall drift: pressing NE and W alternately very nearly cancels, so
- * some pairs climb and some do not, and after a few you are several hexes off
- * the wall without having noticed.
- *
- * g_ndrift remembers which way the staircase currently leans and takes the
- * step that cancels it, so repeated presses trace a straight line up the screen
- * and every second one returns to the starting column.
- *
- * Nothing here is a liberty: each press is one ordinary hex step. It is the
- * choice between two legal steps that a sighted player makes by eye.
- */
-procedure step_north begin
-   if (g_ndrift > 0) then begin
-      g_ndrift := g_ndrift - 1;
-      call step_cursor(DIR_NW);
-   end else begin
-      g_ndrift := g_ndrift + 1;
-      call step_cursor(DIR_NE);
-   end
-end
-
-procedure step_south begin
-   if (g_ndrift > 0) then begin
-      g_ndrift := g_ndrift - 1;
-      call step_cursor(DIR_SW);
-   end else begin
-      g_ndrift := g_ndrift + 1;
-      call step_cursor(DIR_SE);
-   end
-end
-
 procedure snap_to_dude begin
    g_cursor := tile_num(dude_obj);
    g_usercursor := -1;
@@ -2465,6 +3478,7 @@ end
 
 procedure describe_cursor begin
    variable elev, here, dist, objs, total, count, names, i, obj, nm, ty, face;
+   variable exitname, roof;
 
    elev := elevation(dude_obj);
    here := tile_num(dude_obj);
@@ -2478,6 +3492,7 @@ procedure describe_cursor begin
 
    count := 0;
    names := "";
+   exitname := "";
    i := 0;
    while (i < total) do begin
       obj := objs[i];
@@ -2515,6 +3530,25 @@ procedure describe_cursor begin
             face := facing_name(obj_get_rot(dude_obj));
             if (face != "") then names := names + ", facing " + face;
             count := count + 1;
+
+         /*
+          * MISC objects are never among the names. A Scroll Blocker is not
+          * there to a player at all. An exit grid is, but as ground rather
+          * than a thing: it goes in a field of its own, because the click
+          * machinery aims at every NAME the readout lists, and no pointer can
+          * be confirmed over "Exit to Downtown" -- naming it would turn a walk
+          * onto the exit into "cannot point at that".
+          *
+          * Ahead of the furniture filter, which would otherwise drop the grids
+          * drawn with the blank placeholder and keep the rest.
+          */
+         end else if (ty == OBJ_TYPE_MISC) then begin
+            if (exitname == "") then begin
+               if (is_exit_grid(obj)) then begin
+                  call exit_label(obj);
+                  exitname := g_label;
+               end
+            end
 
          // Filter out the engine's invisible furniture. A live map is carpeted
          // in "Scroll Blocker", "Block Hex Auto Inviso" and unnamed spatial
@@ -2612,7 +3646,22 @@ procedure describe_cursor begin
       + " blocked=" + (obj_blocking_tile(g_cursor, elev, BLOCKING_TYPE_BLOCK) != 0)
       + "|");
 
-   debug_msg("WORLD:hex " + g_cursor + " dist " + dist + " : " + names + "|");
+   /*
+    * Under a roof or not. Fallout keeps a roof tile over each square of the
+    * map in the high half of the square's word, and hides it while you stand
+    * under it (bit 0x1000) -- hidden or shown, it is still a roof. Art index 1
+    * is the blank, so anything past it is a roof (0x004B2221, which draws
+    * them, tests exactly that). Its own field, after the names, because every
+    * name is something a click aims at.
+    */
+   roof := "";
+   if ((get_tile_roof_fid(g_cursor, elev) bwand 0xFFF) > 1) then roof := "roof|";
+   if (exitname != "") then begin
+      debug_msg("WORLD:hex " + g_cursor + " dist " + dist + " : " + names
+         + "|exit:" + exitname + "|" + roof);
+   end else begin
+      debug_msg("WORLD:hex " + g_cursor + " dist " + dist + " : " + names + "|" + roof);
+   end
 
    // Reading the world moves the cursor. Several of the engine's query
    // functions decide what a click here would do and leave that decision
@@ -2628,4 +3677,336 @@ procedure describe_cursor begin
    // player set the movement cursor, aiming replaced it, and the click then did
    // nothing at all.
    g_restore_ticks := 8;
+end
+
+/*
+ * The way there: Shift and slash says it, Control and slash walks it.
+ *
+ * **Why the game's own walk falls short.** Its pathfinder (0x00415F0C) gives
+ * up after expanding 2000 hexes (0x0041617B) -- not a length limit, a search
+ * limit -- so a destination round a few corners is "no path" even when the way
+ * is plain, and a click on it walks nowhere, or part of the way. A sighted
+ * player clicks closer and closer, a corner at a time. That is the wandering
+ * this replaces.
+ *
+ * So the whole route is found here, breadth first over the engine's own
+ * blocking test, a slice per poll so the game never stalls, and then walked a
+ * leg at a time -- each leg short enough that the engine's own walk always
+ * finds it. The engine still takes every step; this only decides where to.
+ *
+ * What the search goes through:
+ *  - critters, because they move; the walk deals with one that does not.
+ *  - doors, because they open; the walk stops in front of a closed one and
+ *    puts the look cursor on it. Opening is the player's to do: it can be
+ *    locked, trapped, or somebody's front door.
+ * If the hex itself is taken -- a locker, a person -- the way ends beside it.
+ */
+
+procedure route_is_door(variable b) begin
+   if (not b) then return 0;
+   if (obj_type(b) != OBJ_TYPE_SCENERY) then return 0;
+   return obj_is_openable(b);
+end
+
+procedure route_open(variable t) begin
+   variable b;
+   b := obj_blocking_tile(t, g_rt_elev, BLOCKING_TYPE_BLOCK);
+   if (not b) then return 1;
+   if (b == dude_obj) then return 1;
+   if (obj_type(b) == OBJ_TYPE_CRITTER) then return 1;
+   if (route_is_door(b)) then return 1;
+   return 0;
+end
+
+procedure route_free begin
+   if (g_rt_seen) then free_array(g_rt_seen);
+   if (g_rt_queue) then free_array(g_rt_queue);
+   g_rt_seen := 0;
+   g_rt_queue := 0;
+end
+
+procedure route_end(variable why) begin
+   call route_free;
+   if (g_rt_path) then free_array(g_rt_path);
+   g_rt_path := 0;
+   g_rt_len := 0;
+   g_rt_state := ROUTE_IDLE;
+   g_rt_quiet := 0;
+   // The legs are one journey: the ordinary "moved so many hexes" would only
+   // describe the last of them.
+   g_moving := 0;
+   g_stillticks := 0;
+   debug_msg("WORLD:route end|" + why + "|");
+end
+
+procedure route_begin(variable walk) begin
+   g_rt_quiet := 0;
+   if (g_rt_state != ROUTE_IDLE) then begin
+      // Either key again is "stop".
+      call route_end("cancel");
+      return;
+   end
+   if (walk and (read_int(COMBAT_STATE) bwand 1)) then begin
+      debug_msg("WORLD:route combat|");
+      return;
+   end
+   call route_search_from(g_cursor, walk);
+end
+
+procedure route_search_from(variable goal, variable walk) begin
+   variable b;
+   g_rt_from := tile_num(dude_obj);
+   g_rt_elev := elevation(dude_obj);
+   g_rt_goal := goal;
+   g_rt_walk := walk;
+   if (g_rt_goal == g_rt_from) then begin
+      debug_msg("WORLD:route here|");
+      return;
+   end
+   b := obj_blocking_tile(g_rt_goal, g_rt_elev, BLOCKING_TYPE_BLOCK);
+   g_rt_goalblock := (b != 0 and b != dude_obj);
+   call route_free;
+   g_rt_seen := create_array(ROUTE_TILES, 0);
+   g_rt_queue := create_array(ROUTE_TILES, 0);
+   set_array(g_rt_seen, g_rt_from, ROUTE_SEEN_START);
+   set_array(g_rt_queue, 0, g_rt_from);
+   g_rt_head := 0;
+   g_rt_tail := 1;
+   g_rt_state := ROUTE_SEARCH;
+   debug_msg("WORLD:route search|" + g_rt_goal + "|");
+end
+
+procedure route_search_step begin
+   variable n, t, k, dir, first, nt, found;
+   found := -1;
+   n := 0;
+   while (n < ROUTE_BATCH and g_rt_head < g_rt_tail and found < 0) do begin
+      t := get_array(g_rt_queue, g_rt_head);
+      g_rt_head := g_rt_head + 1;
+      n := n + 1;
+      if (t == g_rt_goal
+          or (g_rt_goalblock and tile_distance(t, g_rt_goal) == 1)) then begin
+         found := t;
+      end else begin
+         // Carrying on the way it came first, so that of the many equally
+         // short ways the one taken runs straight where it can, and says well.
+         first := get_array(g_rt_seen, t) - 1;
+         if (first > 5) then first := 0;
+         k := 0;
+         while (k < 6) do begin
+            dir := (first + k) % 6;
+            nt := tile_num_in_direction(t, dir, 1);
+            if (nt >= 0 and nt < ROUTE_TILES) then begin
+               if (get_array(g_rt_seen, nt) == 0) then begin
+                  if (route_open(nt)) then begin
+                     set_array(g_rt_seen, nt, dir + 1);
+                     set_array(g_rt_queue, g_rt_tail, nt);
+                     g_rt_tail := g_rt_tail + 1;
+                  end else begin
+                     set_array(g_rt_seen, nt, ROUTE_SEEN_SHUT);
+                  end
+               end
+            end
+            k := k + 1;
+         end
+      end
+   end
+   if (found >= 0) then begin
+      call route_found(found);
+   end else if (g_rt_head >= g_rt_tail) then begin
+      debug_msg("WORLD:route none|" + tile_distance(g_rt_from, g_rt_goal) + "|");
+      call route_free;
+      g_rt_state := ROUTE_IDLE;
+   end
+end
+
+// The direction from one hex to its neighbour, or -1.
+procedure route_dir(variable a, variable b) begin
+   variable d;
+   d := 0;
+   while (d < 6) do begin
+      if (tile_num_in_direction(a, d, 1) == b) then return d;
+      d := d + 1;
+   end
+   return -1;
+end
+
+procedure route_found(variable last) begin
+   variable len, cur, d, i, rle, runs, rundir, runlen, doors, b;
+   len := 0;
+   cur := last;
+   while (cur != g_rt_from) do begin
+      d := get_array(g_rt_seen, cur) - 1;
+      cur := tile_num_in_direction(cur, (d + 3) % 6, 1);
+      len := len + 1;
+   end
+   if (g_rt_path) then free_array(g_rt_path);
+   g_rt_path := create_array(len, 0);
+   cur := last;
+   i := len - 1;
+   while (cur != g_rt_from) do begin
+      set_array(g_rt_path, i, cur);
+      d := get_array(g_rt_seen, cur) - 1;
+      cur := tile_num_in_direction(cur, (d + 3) % 6, 1);
+      i := i - 1;
+   end
+   g_rt_len := len;
+   call route_free;
+
+   // The turns, as runs of one direction: "1*6,0*10," is east six, then north
+   // east ten. Worked out front to back, from the tiles just laid down.
+   rle := "";
+   runs := 0;
+   rundir := -1;
+   runlen := 0;
+   doors := 0;
+   cur := g_rt_from;
+   i := 0;
+   while (i < len) do begin
+      d := route_dir(cur, get_array(g_rt_path, i));
+      if (d == rundir) then begin
+         runlen := runlen + 1;
+      end else begin
+         if (rundir >= 0) then begin
+            if (runs < ROUTE_RUNS) then rle := rle + rundir + "*" + runlen + ",";
+            runs := runs + 1;
+         end
+         rundir := d;
+         runlen := 1;
+      end
+      cur := get_array(g_rt_path, i);
+      b := obj_blocking_tile(cur, g_rt_elev, BLOCKING_TYPE_BLOCK);
+      if (route_is_door(b)) then doors := doors + 1;
+      i := i + 1;
+   end
+   if (rundir >= 0) then begin
+      if (runs < ROUTE_RUNS) then rle := rle + rundir + "*" + runlen + ",";
+      runs := runs + 1;
+   end
+   // 2 for a walk found again on the way, which is not news.
+   debug_msg("WORLD:route way|" + (g_rt_walk + g_rt_quiet) + "|" + len + "|"
+      + tile_distance(g_rt_from, g_rt_goal) + "|" + doors + "|" + runs + "|"
+      + rle + "|");
+
+   if (g_rt_walk) then begin
+      g_rt_state := ROUTE_WALK;
+      g_rt_stalls := 0;
+      g_rt_lastdude := -1;
+      g_rt_settle := 0;
+   end else begin
+      call route_end("said");
+   end
+end
+
+// Where on the route you stand: the furthest index holding your hex, -1 at the
+// start, -2 off it altogether.
+procedure route_where(variable here) begin
+   variable i;
+   i := g_rt_len - 1;
+   while (i >= 0) do begin
+      if (get_array(g_rt_path, i) == here) then return i;
+      i := i - 1;
+   end
+   if (here == g_rt_from) then return -1;
+   return -2;
+end
+
+procedure route_leg begin
+   variable here, at, last, k, t, b, run;
+   here := tile_num(dude_obj);
+   at := route_where(here);
+   if (at == g_rt_len - 1) then begin
+      call route_end("arrived");
+      return;
+   end
+   if (at == -2) then begin
+      // The engine took its own way round and left the route. Find it again
+      // from here; the goal has not moved. Quietly: it is the same journey.
+      if (g_rt_path) then free_array(g_rt_path);
+      g_rt_path := 0;
+      g_rt_quiet := 1;
+      call route_search_from(g_rt_goal, 1);
+      return;
+   end
+   last := at + ROUTE_LEG;
+   if (last > g_rt_len - 1) then last := g_rt_len - 1;
+   k := at + 1;
+   while (k <= last) do begin
+      t := get_array(g_rt_path, k);
+      b := obj_blocking_tile(t, g_rt_elev, BLOCKING_TYPE_BLOCK);
+      if (b and b != dude_obj) then begin
+         if (k == at + 1) then begin
+            if (route_is_door(b)) then begin
+               // Right in front of it. The look cursor goes onto the door, so
+               // numpad plus or the action menu is the next thing to press.
+               g_cursor := t;
+               g_usercursor := -1;
+               call recenter_view;
+               debug_msg("WORLD:route door|" + obj_name(b) + "|");
+               call route_end("door");
+               // And read it, which is also what numpad plus aims by.
+               call describe_cursor;
+               return;
+            end
+            if (obj_type(b) == OBJ_TYPE_CRITTER) then begin
+               // Someone standing in the way. They may move; give them a few
+               // legs' worth of time before saying so.
+               g_rt_stalls := g_rt_stalls + 1;
+               if (g_rt_stalls >= ROUTE_STALLS) then begin
+                  debug_msg("WORLD:route blocked|" + obj_name(b) + "|");
+                  call route_end("blocked");
+                  return;
+               end
+               g_rt_settle := ROUTE_SETTLE * 3;
+               return;
+            end
+            debug_msg("WORLD:route blocked|" + obj_name(b) + "|");
+            call route_end("blocked");
+            return;
+         end
+         last := k - 1;
+         k := g_rt_len;   // stop looking
+      end
+      k := k + 1;
+   end
+   if (here == g_rt_lastdude) then begin
+      g_rt_stalls := g_rt_stalls + 1;
+      if (g_rt_stalls >= ROUTE_STALLS) then begin
+         call route_end("stuck");
+         return;
+      end
+   end else begin
+      g_rt_stalls := 0;
+   end
+   g_rt_lastdude := here;
+   run := 0;
+   if (read_int(RUN_PREF) and not using_skill(dude_obj, SKILL_SNEAK)) then run := 1;
+   animate_move_obj_to_tile(dude_obj, get_array(g_rt_path, last), run);
+   g_rt_settle := ROUTE_SETTLE;
+end
+
+// Once a poll, from poll_state.
+procedure route_tick(variable m) begin
+   if (g_rt_state == ROUTE_IDLE) then return;
+   if (m bwand MAP_HIDDEN) then begin
+      call route_end("screen");
+      return;
+   end
+   if (g_rt_state == ROUTE_SEARCH) then begin
+      call route_search_step;
+      return;
+   end
+   if (read_int(COMBAT_STATE) bwand 1) then begin
+      call route_end("combat");
+      return;
+   end
+   if (anim_busy(dude_obj)) then begin
+      g_rt_settle := ROUTE_SETTLE;
+      return;
+   end
+   if (g_rt_settle > 0) then begin
+      g_rt_settle := g_rt_settle - 1;
+      return;
+   end
+   call route_leg;
 end

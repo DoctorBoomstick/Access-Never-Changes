@@ -46,6 +46,8 @@ from typing import List, NamedTuple, Optional, Tuple
 
 from ..memory.process import Process
 from . import worldmap
+from ..i18n import tr
+from .. import words
 
 # Numpad to a step, as the keys are laid out. Two of these -- north and south --
 # are the ones the hex grid could not offer.
@@ -55,14 +57,6 @@ STEPS = {
     "sw": (-1, 1), "s": (0, 1), "se": (1, 1),
 }
 
-# Eight points, because the grid has eight neighbours. The hex scanner has six
-# and they are the engine's own rotations; these are ours, for the same reason
-# the category words are: the game has no word for "north east of you" on the
-# world map because it never needs to say one.
-BEARINGS = ["north", "north east", "east", "south east",
-            "south", "south west", "west", "north west"]
-
-
 def bearing(dx: int, dy: int) -> str:
     """Which way `dx, dy` points, to the nearest eighth.
 
@@ -70,23 +64,20 @@ def bearing(dx: int, dy: int) -> str:
     than computed with atan2 so that the eight exact directions -- which is
     what stepping the cursor produces -- are exact rather than rounded.
     """
-    if dx == 0 and dy == 0:
-        return ""
-    if dx == 0:
-        return "south" if dy > 0 else "north"
-    if dy == 0:
-        return "east" if dx > 0 else "west"
-    # Off the axes, and the diagonals are only named when the two components
-    # are close enough for the diagonal to be the honest answer. Two squares
-    # east and nine south is south, not south east.
+    # Eight points, because the grid has eight neighbours. The hex scanner has
+    # six and they are the engine's own rotations; these are ours, for the
+    # same reason the category words are: the game has no word for "north
+    # east of you" on the world map because it never needs to say one.
+    #
+    # Off the axes, the diagonals are only named when the two components are
+    # close enough for the diagonal to be the honest answer. Two squares east
+    # and nine south is south, not south east.
     ax, ay = abs(dx), abs(dy)
-    ns = "south" if dy > 0 else "north"
-    ew = "east" if dx > 0 else "west"
     if ax * 2 < ay:
-        return ns
-    if ay * 2 < ax:
-        return ew
-    return "{} {}".format(ns, ew)
+        dx = 0
+    elif ay * 2 < ax:
+        dy = 0
+    return words.compass(dx, dy)
 
 
 def steps_away(dx: int, dy: int) -> int:
@@ -103,10 +94,13 @@ def steps_away(dx: int, dy: int) -> int:
 def _distance(dx: int, dy: int) -> str:
     n = steps_away(dx, dy)
     if n == 0:
-        return "here"
-    way = bearing(dx, dy)
-    unit = "square" if n == 1 else "squares"
-    return "{} {} {}".format(way, n, unit).strip()
+        return tr("worldmap.here", "here")
+    if n == 1:
+        distance = tr("worldmap.one_square", "1 square")
+    else:
+        distance = tr("worldmap.squares", "{count} squares", count=n)
+    return tr("worldmap.where", "{direction} {distance}",
+              direction=bearing(dx, dy), distance=distance).strip()
 
 
 def _sentence(parts: List[str]) -> str:
@@ -148,8 +142,9 @@ class Reading(NamedTuple):
         parts: List[str] = []
         if self.area is not None:
             parts.append(self.area.name)
-        parts.append(self.terrain if self.seen and self.terrain else "unexplored")
-        parts.append("you are here" if self.on_player
+        parts.append(self.terrain if self.seen and self.terrain
+                     else tr("worldmap.unexplored", "unexplored"))
+        parts.append(tr("worldmap.you_are_here", "you are here") if self.on_player
                      else _distance(self.dx, self.dy))
         return _sentence(parts)
 
@@ -165,20 +160,24 @@ class Reading(NamedTuple):
         parts: List[str] = []
         if self.area is not None:
             parts.append("{}, {}".format(
-                self.area.name, worldmap.STATE_WORDS.get(self.area.state, "")))
+                self.area.name, worldmap.state_word(self.area.state)))
             ways = [e.name for e in self.area.ways_in if e.name]
             if ways:
-                parts.append("{} way{} in: {}".format(
-                    len(ways), "" if len(ways) == 1 else "s", ", ".join(ways)))
+                if len(ways) == 1:
+                    parts.append(tr("worldmap.one_way_in", "1 way in: {ways}",
+                                    ways=ways[0]))
+                else:
+                    parts.append(tr("worldmap.ways_in", "{count} ways in: {ways}",
+                                    count=len(ways), ways=", ".join(ways)))
         if not self.seen:
-            parts.append("unexplored")
+            parts.append(tr("worldmap.unexplored", "unexplored"))
         else:
-            parts.append(self.terrain or "unknown ground")
+            parts.append(self.terrain or tr("worldmap.unknown_ground", "unknown ground"))
             if self.state == worldmap.KNOWN:
-                parts.append("seen but not travelled")
-        parts.append("you are here" if self.on_player
+                parts.append(tr("worldmap.seen", "seen but not travelled"))
+        parts.append(tr("worldmap.you_are_here", "you are here") if self.on_player
                      else _distance(self.dx, self.dy))
-        parts.append("square {}, {}".format(self.x, self.y))
+        parts.append(tr("worldmap.square", "square {x}, {y}", x=self.x, y=self.y))
         return _sentence(parts)
 
 
@@ -236,13 +235,13 @@ class WorldCursor:
         is there.
         """
         if not self.ensure(proc):
-            return False, "The world map is not open."
+            return False, tr("worldmap.closed", "The world map is not open.")
         shape = worldmap.layout(proc)
         if shape is None:
-            return False, "Cannot read the world map."
+            return False, tr("worldmap.unreadable", "Cannot read the world map.")
         nx, ny = self.x + dx, self.y + dy
         if not shape.contains(nx, ny):
-            return False, "Edge of the map."
+            return False, tr("worldmap.edge", "Edge of the map.")
         self.x, self.y = nx, ny
         return True, ""
 
@@ -311,7 +310,7 @@ class WorldCursor:
         """
         found = self.places(proc)
         if not found:
-            return "No places on the map yet."
+            return tr("worldmap.no_places", "No places on the map yet.")
         if self._scanned:
             self.scan_index = (self.scan_index + delta) % len(found)
         else:
@@ -323,9 +322,9 @@ class WorldCursor:
         sx, sy = area.subtile
         self._last = _sentence([
             "{}, {}".format(area.name,
-                            worldmap.STATE_WORDS.get(area.state, "")),
+                            worldmap.state_word(area.state)),
             _distance(sx - here[0], sy - here[1]),
-            "{} of {}".format(self.scan_index + 1, len(found)),
+            words.of(self.scan_index + 1, len(found)),
         ])
         return self._last
 
@@ -339,7 +338,7 @@ class WorldCursor:
         """
         found = self.places(proc)
         if not found:
-            return "No places on the map yet."
+            return tr("worldmap.no_places", "No places on the map yet.")
         if not 0 <= self.scan_index < len(found):
             self.scan_index = 0
         self.goto(*found[self.scan_index].subtile)

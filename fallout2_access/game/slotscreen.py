@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import os
 from typing import List, Optional
+from ..i18n import tr
 
 # The screen is recognised by its own window being OPEN, not by a flag.
 #
@@ -491,7 +492,7 @@ def describe(number: int, taken: bool, description: str = "") -> str:
     wrong sentence this mod could produce.
     """
     if not taken:
-        return "Slot {}, empty.".format(number)
+        return tr("slots.empty", "Slot {slot}, empty.", slot=number)
     if not description:
-        return "Slot {}, a saved game.".format(number)
-    return "Slot {}, {}.".format(number, description)
+        return tr("slots.unnamed", "Slot {slot}, a saved game.", slot=number)
+    return tr("slots.named", "Slot {slot}, {name}.", slot=number, name=description)

@@ -52,6 +52,29 @@ class TestWorldLog(unittest.TestCase):
         self.f.write("WORLD:hex 25911 dist 1 : Giant Ant|sequencing attack...")
         self.assertEqual(self.f.log.last_hex.contents, "Giant Ant")
 
+    def test_an_exit_is_said_instead_of_empty(self):
+        """The hex is not empty, it is the way out."""
+        self.f.write("WORLD:hex 19850 dist 3 : empty|exit:Exit to Downtown|")
+        self.assertEqual(self.f.log.last_hex.exit, "Exit to Downtown")
+        self.assertEqual(self.f.log.last_hex.announce(),
+                         "Exit to Downtown, 3 hexes")
+
+    def test_an_exit_follows_whatever_else_is_there(self):
+        self.f.write("WORLD:hex 19850 dist 0 : you|exit:Exit to Downtown|")
+        self.assertEqual(self.f.log.last_hex.announce("Tara"),
+                         "Tara, Exit to Downtown")
+
+    def test_an_exit_is_not_something_to_aim_at(self):
+        """Every name is something a click hunts for under the pointer, and no
+        pointer is ever confirmed over "Exit to Downtown". Walking onto an exit
+        would have become "cannot point at that"."""
+        self.f.write("WORLD:hex 19850 dist 3 : empty|exit:Exit to Downtown|")
+        self.assertEqual(self.f.log.last_hex.names(), [])
+
+    def test_engine_noise_is_never_an_exit(self):
+        self.f.write("WORLD:hex 25911 dist 1 : Giant Ant|sequencing attack|")
+        self.assertEqual(self.f.log.last_hex.exit, "")
+
     def test_cursorok_reports_the_mode_too(self):
         """Only parsing `cursormode` left the mode unknown exactly when nothing
         had changed -- which is the common case, and the one the click path
@@ -161,6 +184,182 @@ class TestWorldLog(unittest.TestCase):
         ticks, _w = self._walked("WORLD:dudename Tara|")
         self.assertEqual(ticks, 0)
 
+
+
+class TestWeaponLine(unittest.TestCase):
+    """What is in your hand, and whether it is loaded.
+
+    The interface bar shows a sighted player the weapon, a green bar for the
+    rounds left in it, the firing mode and what that mode costs. All four were
+    unreachable, which is a missing convenience right up until you have a gun,
+    and then it is a weapon you cannot tell is empty.
+    """
+
+    LOADED = ("WORLD:weapon 1|Pipe Rifle|1|6|10|10mm JHP|6|5|0|0|0|0|4|"
+              "Sharpened Spear|")
+
+    def test_the_gun_its_load_and_its_ammunition(self):
+        said = worldlog.weapon_line(self.LOADED)
+        self.assertIn("Pipe Rifle", said)
+        self.assertIn("6 of 10", said)
+        self.assertIn("10mm JHP", said)
+
+    def test_an_empty_gun_says_empty_rather_than_nought(self):
+        """"0 of 10" is a sentence the listener has to finish, and the moment
+        it matters is the moment something is biting them."""
+        said = worldlog.weapon_line(
+            "WORLD:weapon 1|Pipe Rifle|1|0|10|10mm JHP|6|5|6|6|0|0|4||")
+        self.assertIn("empty", said)
+        self.assertNotIn("0 of 10", said)
+
+    def test_the_firing_mode_and_what_it_costs(self):
+        said = worldlog.weapon_line(
+            "WORLD:weapon 1|SMG|1|30|30|10mm AP|6|5|7|6|0|10|4||")
+        self.assertIn("Single shot, 5 AP", said)
+        self.assertIn("Burst of 10, 6 AP", said)
+
+    def test_one_mode_twice_is_said_once(self):
+        """Plenty of weapons carry the same number in both slots, and "single
+        shot, then single shot" is noise on a readout that has to be quick."""
+        said = worldlog.weapon_line(
+            "WORLD:weapon 1|Pipe Rifle|1|6|10|10mm JHP|6|5|6|5|0|0|4||")
+        self.assertEqual(said.count("Single shot"), 1)
+
+    def test_the_same_mode_at_a_different_cost_is_two_answers(self):
+        """A cheaper and a dearer way to use the same weapon are two choices,
+        not one said twice -- dropping the second would hide the option."""
+        said = worldlog.weapon_line(
+            "WORLD:weapon 1|Pipe Rifle|1|6|10|10mm JHP|6|5|6|6|0|0|4||")
+        self.assertEqual(said.count("Single shot"), 2)
+        self.assertIn("5 AP", said)
+        self.assertIn("6 AP", said)
+
+    def test_a_melee_weapon_has_no_ammunition_to_report(self):
+        said = worldlog.weapon_line(
+            "WORLD:weapon 0|Sharpened Spear|1|0|0||4|4|5|5|0|0|5||")
+        self.assertNotIn("empty", said)
+        self.assertNotIn(" of ", said)
+        self.assertIn("Thrust, 4 AP", said)
+        self.assertIn("Throw, 5 AP", said)
+
+    def test_minimum_strength_is_left_to_the_weapons_own_description(self):
+        """It is printed in the examine text, which the mod already reads
+        aloud. A readout meant to be pressed mid-fight should not repeat what
+        the description says at length."""
+        self.assertNotIn("strength", worldlog.weapon_line(self.LOADED))
+
+    def test_something_that_is_not_a_weapon_still_gets_an_answer(self):
+        """The key means "what is in my hand". Answering only for guns would
+        leave it silent exactly when the player has picked up something they
+        cannot identify."""
+        said = worldlog.weapon_line(
+            "WORLD:weapon 1|Healing Powder|0|0|0||0|0|0|0|0|0|0||")
+        self.assertIn("Healing Powder", said)
+        self.assertIn("Not a weapon", said)
+
+    def test_an_empty_active_hand_names_the_other_one(self):
+        """"Your hands are empty" would be wrong, and unhelpful, in the common
+        case of simply not having swapped hands."""
+        said = worldlog.weapon_line(
+            "WORLD:weapon 0||0|0|0||0|0|0|0|0|0|0|Pipe Rifle|")
+        self.assertIn("Pipe Rifle", said)
+        self.assertIn("other", said)
+        self.assertIn("b", said)
+
+    def test_both_hands_empty(self):
+        said = worldlog.weapon_line("WORLD:weapon 0||0|0|0||0|0|0|0|0|0|0||")
+        self.assertEqual(said, "Both hands empty.")
+
+    def test_an_unparsable_line_is_not_spoken(self):
+        self.assertIsNone(worldlog.weapon_line("WORLD:weapon garbage"))
+        self.assertIsNone(worldlog.weapon_line("WORLD:status 48|48|8|10|8|1|"))
+
+
+class TestAimingAtYourself(unittest.TestCase):
+    """Using a stimpak on yourself used it on the wall behind you.
+
+    Your own hex reports "you", which means "nothing here to point at" -- right
+    for every ordinary click, since what you want is the ground you are standing
+    on. But the aim then settles on the hex centre, which is your feet, and
+    Fallout picks what a click hits by the sprite over that pixel. Measured
+    live: the engine said "Wooden Wall" at the centre and "Tara" fifty-six
+    pixels higher.
+    """
+
+    from fallout2_access.game import screens as _screens
+
+    def _here(self, contents="you, facing north east", distance=0):
+        return worldlog.HexReading(tile=18046, distance=distance,
+                                   contents=contents)
+
+    def test_an_armed_item_points_at_you(self):
+        self.assertEqual(
+            worldlog.aim_at_yourself(self._here(),
+                                     self._screens.CURSOR_USE_ITEM, "Tara"),
+            ["Tara"])
+
+    def test_an_armed_skill_points_at_you(self):
+        """First Aid on yourself is the common case, and it had the same
+        failure for the same reason."""
+        first_aid = sorted(self._screens.SKILL_CURSORS)[0]
+        self.assertEqual(
+            worldlog.aim_at_yourself(self._here(), first_aid, "Tara"),
+            ["Tara"])
+
+    def test_an_ordinary_click_still_means_the_ground(self):
+        """Standing still and clicking your own hex is not a request to point
+        at your own body."""
+        self.assertIsNone(worldlog.aim_at_yourself(
+            self._here(), self._screens.CURSOR_MOVEMENT, "Tara"))
+
+    def test_another_hex_is_not_you(self):
+        self.assertIsNone(worldlog.aim_at_yourself(
+            self._here(distance=3), self._screens.CURSOR_USE_ITEM, "Tara"))
+
+    def test_something_named_on_your_hex_still_wins(self):
+        """A stimpak lying at your feet is a thing the readout named, and the
+        aimer should go on hunting for that rather than for you."""
+        self.assertIsNone(worldlog.aim_at_yourself(
+            self._here(contents="you, Stimpak"),
+            self._screens.CURSOR_USE_ITEM, "Tara"))
+
+    def test_no_name_yet_means_no_hunt(self):
+        """The name arrives on a map change. Before it does there is nothing to
+        ask the engine to confirm, and hunting for None would refuse the click
+        with a sentence about pointing at nothing."""
+        self.assertIsNone(worldlog.aim_at_yourself(
+            self._here(), self._screens.CURSOR_USE_ITEM, None))
+
+    def test_no_reading_at_all(self):
+        self.assertIsNone(worldlog.aim_at_yourself(
+            None, self._screens.CURSOR_USE_ITEM, "Tara"))
+
+
+class TestAmmoLine(unittest.TestCase):
+    """A reload, noticed by the count going up rather than by a key going down.
+
+    The forum thread that started this is the specification: the poster had
+    reloaded successfully three times and could not tell, because the only
+    feedback Fallout gives is a green bar refilling and the mode snapping back
+    to the first one.
+    """
+
+    def test_a_reload_is_reported_with_the_new_load(self):
+        said = worldlog.ammo_line("WORLD:ammo 10|10|")
+        self.assertIn("Reloaded", said)
+        self.assertIn("10 of 10", said)
+
+    def test_a_partial_reload_says_what_actually_went_in(self):
+        """Reload tops a gun up with the ammunition already in it, so a
+        half-filled magazine is a real outcome and not a failure."""
+        self.assertIn("4 of 10", worldlog.ammo_line("WORLD:ammo 4|10|"))
+
+    def test_a_gun_with_no_stated_capacity_still_reports(self):
+        self.assertIn("Reloaded. 1.", worldlog.ammo_line("WORLD:ammo 1|0|"))
+
+    def test_an_unparsable_line_is_not_spoken(self):
+        self.assertIsNone(worldlog.ammo_line("WORLD:ammo garbage"))
+        self.assertIsNone(worldlog.ammo_line("WORLD:status 48|48|8|10|8|1|"))
 
 
 class TestStatusLine(unittest.TestCase):
@@ -578,6 +777,112 @@ class TestWhoYouAreAndWhichWayYouFace(unittest.TestCase):
         self.f.truncate()
         self.f.log.poll()
         self.assertIsNone(self.f.log.player_name)
+
+
+
+
+class TestRoofs(unittest.TestCase):
+    def setUp(self):
+        self.f = LogFixture()
+
+    def test_a_roof_is_said_after_what_is_there(self):
+        self.f.write("WORLD:hex 19850 dist 3 : Locker|roof|")
+        self.assertTrue(self.f.log.last_hex.roofed)
+        self.assertEqual(self.f.log.last_hex.announce(), "Locker, roofed, 3 hexes")
+
+    def test_empty_and_roofed(self):
+        self.f.write("WORLD:hex 19850 dist 1 : empty|roof|")
+        self.assertEqual(self.f.log.last_hex.announce(), "empty, roofed, 1 hex")
+
+    def test_with_an_exit(self):
+        self.f.write("WORLD:hex 19850 dist 0 : you|exit:Exit to Downtown|roof|")
+        self.assertEqual(self.f.log.last_hex.announce("Tara"),
+                         "Tara, Exit to Downtown, roofed")
+
+    def test_roofed_is_not_something_to_aim_at(self):
+        self.f.write("WORLD:hex 19850 dist 3 : Locker|roof|")
+        self.assertEqual(self.f.log.last_hex.names(), ["Locker"])
+
+    def test_no_roof(self):
+        self.f.write("WORLD:hex 19850 dist 3 : Locker|")
+        self.assertFalse(self.f.log.last_hex.roofed)
+        self.assertEqual(self.f.log.last_hex.announce(), "Locker, 3 hexes")
+
+
+class TestLight(unittest.TestCase):
+    def test_daylight(self):
+        self.assertEqual(worldlog.light_line("WORLD:light 0|65536|0|0|2|"),
+                         "100 percent light, bright.")
+
+    def test_the_bands_are_the_engines(self):
+        # At or below each limit, as determine_to_hit compares.
+        self.assertIn("very dark: minus 40",
+                      worldlog.light_line("WORLD:light 0|26214|0|0|2|"))
+        self.assertIn("dark: minus 25",
+                      worldlog.light_line("WORLD:light 0|26215|0|0|2|"))
+        self.assertIn("dim: minus 10",
+                      worldlog.light_line("WORLD:light 0|52428|0|0|2|"))
+        self.assertIn("bright",
+                      worldlog.light_line("WORLD:light 0|52429|0|0|2|"))
+
+    def test_a_flare_lights_the_hex(self):
+        said = worldlog.light_line("WORLD:light 60000|16384|0|0|4|")
+        self.assertEqual(said, "92 percent light, bright, lit from nearby.")
+
+    def test_your_own_glow_does_not_count_on_your_own_hex(self):
+        said = worldlog.light_line("WORLD:light 30000|16384|1|20000|0|")
+        # 30000 - 20000 = 10000, below ambient, so ambient it is.
+        self.assertTrue(said.startswith("25 percent light, very dark"))
+        self.assertNotIn("nearby", said)
+
+
+
+
+class TestRoute(unittest.TestCase):
+    def test_the_way_is_said(self):
+        said = worldlog.route_line("WORLD:route way|0|16|12|0|2|1*6,0*10,|")
+        self.assertEqual(said, "16 steps, 12 hexes straight. East 6, north east 10.")
+
+    def test_a_zigzag_up_the_screen_is_north(self):
+        runs = "0*1,5*1,0*1,5*1,1*3,"
+        said = worldlog.route_line("WORLD:route way|0|7|5|0|5|" + runs + "|")
+        self.assertEqual(said, "7 steps, 5 hexes straight. North 4, east 3.")
+
+    def test_two_turns_are_not_a_zigzag(self):
+        self.assertEqual(worldlog.route_turns([(0, 5), (5, 1)]),
+                         [("north east", 5), ("north west", 1)])
+
+    def test_doors_on_the_way(self):
+        said = worldlog.route_line("WORLD:route way|0|3|3|1|1|1*3,|")
+        self.assertTrue(said.endswith("Through 1 door."))
+
+    def test_a_long_way_is_cut_short(self):
+        runs = ",".join("{}*2".format(d) for d in (1, 2, 1, 2, 1, 2, 1, 2)) + ","
+        said = worldlog.route_line("WORLD:route way|0|16|9|0|8|" + runs + "|")
+        self.assertTrue(said.endswith(", and on."))
+
+    def test_walking(self):
+        self.assertEqual(worldlog.route_line("WORLD:route way|1|31|12|0|4|1*31,|"),
+                         "Walking there, 31 steps.")
+
+    def test_finding_it_again_on_the_way_is_not_news(self):
+        self.assertIsNone(worldlog.route_line("WORLD:route way|2|31|12|0|4|1*31,|"))
+        self.assertIsNone(worldlog.route_line("WORLD:route search|17488|"))
+
+    def test_how_it_ended(self):
+        self.assertEqual(worldlog.route_line("WORLD:route end|arrived|"), "Arrived.")
+        self.assertEqual(worldlog.route_line("WORLD:route end|cancel|"), "Stopped.")
+        # Said on their own lines, or by the screen that opened.
+        self.assertIsNone(worldlog.route_line("WORLD:route end|door|"))
+        self.assertIsNone(worldlog.route_line("WORLD:route end|screen|"))
+
+    def test_a_door(self):
+        self.assertEqual(worldlog.route_line("WORLD:route door|Door|"),
+                         "Stopped at Door. The look cursor is on it.")
+
+    def test_unreachable(self):
+        self.assertEqual(worldlog.route_line("WORLD:route none|14|"),
+                         "No way there from here.")
 
 
 if __name__ == "__main__":

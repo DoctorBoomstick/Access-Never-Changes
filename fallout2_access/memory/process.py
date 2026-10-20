@@ -30,6 +30,8 @@ TH32CS_SNAPMODULE32 = 0x00000010
 
 PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
+PROCESS_VM_WRITE = 0x0020
+PROCESS_VM_OPERATION = 0x0008
 
 MEM_COMMIT = 0x1000
 
@@ -224,6 +226,9 @@ class Process:
         if self._handle:
             kernel32.CloseHandle(self._handle)
             self._handle = None
+        if getattr(self, "_write_handle", None):
+            kernel32.CloseHandle(self._write_handle)
+            self._write_handle = None
 
     def __enter__(self) -> "Process":
         return self
@@ -479,6 +484,32 @@ class Process:
             out.extend(got)
             pos += want
         return bytes(out)
+
+    # -- writes -------------------------------------------------------------
+    #
+    # **One customer, deliberately.** Everything else in the mod changes the
+    # game by pressing its keys and clicking its buttons, so the engine's own
+    # rules apply. The preferences screen is the exception: its sliders and
+    # knobs are mouse drags with no keys at all, while the values they set are
+    # plain working copies the screen keeps until Done saves and applies them
+    # (game/prefs.py). Writing those is setting the slider, with the screen's
+    # own Done and Cancel still deciding whether it sticks.
+    #
+    # A second handle, opened on first use, so a mod that never writes never
+    # holds write access to the game.
+
+    def write(self, addr: int, data: bytes) -> bool:
+        if getattr(self, "_write_handle", None) is None:
+            self._write_handle = kernel32.OpenProcess(
+                PROCESS_VM_WRITE | PROCESS_VM_OPERATION, False, self.pid)
+            if not self._write_handle:
+                self._write_handle = None
+                return False
+        done = ctypes.c_size_t(0)
+        ok = kernel32.WriteProcessMemory(
+            self._write_handle, ctypes.c_void_p(addr), data, len(data),
+            ctypes.byref(done))
+        return bool(ok) and done.value == len(data)
 
     def read_i32(self, addr: int) -> Optional[int]:
         raw = self.read(addr, 4)

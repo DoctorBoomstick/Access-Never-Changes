@@ -17,6 +17,8 @@ from typing import Dict, List, NamedTuple, Optional
 
 from ..memory.process import Process
 from ..msg.memlist import read_message_list
+from ..i18n import tr
+from .. import words
 
 NAME_ADDR = 0x0056D75C      # char buffer holding the shown character's name
 COUNTER_ADDR = 0x0051E2E0   # increments per Left/Right; character = value % 3
@@ -40,7 +42,7 @@ class PremadeInfo(NamedTuple):
     traits: List[str]
 
     def announce(self) -> str:
-        return "{}. {} of {}.".format(self.name, self.slot + 1, PREMADE_COUNT)
+        return "{}. {}.".format(self.name, words.of(self.slot + 1, PREMADE_COUNT))
 
     def full(self, stat_names: List[str]) -> str:
         bits = [self.name]
@@ -51,9 +53,11 @@ class PremadeInfo(NamedTuple):
                 )
             )
         if self.tags:
-            bits.append("Tagged skills: " + ", ".join(self.tags))
+            bits.append(tr("premade.tags", "Tagged skills: {skills}",
+                           skills=", ".join(self.tags)))
         if self.traits:
-            bits.append("Traits: " + ", ".join(self.traits))
+            bits.append(tr("premade.traits", "Traits: {traits}",
+                           traits=", ".join(self.traits)))
         return ". ".join(bits) + "."
 
 

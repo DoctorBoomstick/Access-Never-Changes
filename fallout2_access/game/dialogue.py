@@ -45,6 +45,8 @@ from __future__ import annotations
 
 import struct
 from typing import List, NamedTuple, Optional
+from ..i18n import tr
+from .. import words
 
 # -- where the engine keeps it -----------------------------------------------
 
@@ -156,20 +158,22 @@ class Dialogue:
 
 # -- putting it into words ---------------------------------------------------
 
-HINT = "Press the reply's number to answer."
+def hint_text() -> str:
+    return tr("dialogue.hint", "Enter says the reply you are on, or press its number.")
 
 
 def say_options(options: List[str]) -> str:
     """The replies on offer, numbered by the key that chooses them."""
     if not options:
-        return "No replies offered."
-    said = ["{} replies.".format(len(options)) if len(options) != 1
-            else "One reply."]
+        return tr("dialogue.no_replies", "No replies offered.")
+    said = [tr("dialogue.replies", "{count} replies.", count=len(options))
+            if len(options) != 1 else tr("dialogue.one_reply", "One reply.")]
     for index, text in enumerate(options):
         if not text:
             # Numbered anyway. Silence where a reply should be is a fact about
             # the screen worth stating -- and the number still works.
-            said.append("{}, unreadable.".format(index + 1))
+            said.append(tr("dialogue.unreadable_numbered", "{number}, unreadable.",
+                           number=index + 1))
             continue
         said.append("{}, {}".format(index + 1, text.rstrip(".") + "."))
     return " ".join(said)
@@ -183,10 +187,10 @@ def say_option(index: int, options: List[str]) -> str:
     a reply and then wants to say it needs to know which digit that is.
     """
     if not options:
-        return "No replies offered."
+        return tr("dialogue.no_replies", "No replies offered.")
     index = max(0, min(index, len(options) - 1))
-    return "{} of {}. {}".format(index + 1, len(options),
-                                 options[index] or "Unreadable.")
+    return "{}. {}".format(words.of(index + 1, len(options)),
+                           options[index] or tr("dialogue.unreadable", "Unreadable."))
 
 
 def say_reading(reading: Reading, opening: bool = False,
@@ -198,10 +202,10 @@ def say_reading(reading: Reading, opening: bool = False,
     """
     parts: List[str] = []
     if opening:
-        parts.append("Conversation.")
+        parts.append(tr("dialogue.opening", "Conversation."))
     if reading.reply:
         parts.append(reading.reply.rstrip(".") + ".")
     parts.append(say_options(reading.options))
     if hint:
-        parts.append(HINT)
+        parts.append(hint_text())
     return " ".join(p for p in parts if p)

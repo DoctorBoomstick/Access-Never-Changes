@@ -1,6 +1,6 @@
 """Fallout 2 screen reader accessibility layer.
 
-Architecture (see HARNESS.md):
+Architecture (see docs/DEVELOPING.md):
     memory/   attach to the game, read its memory, locate symbols
     offsets/  signature table -- data, not code
     msg/      DAT2 reader -> the game's own .msg strings

@@ -13,6 +13,7 @@ scripts/*.preprocessed.ssl
 
 # Logs pulled from a game install while debugging
 debug.log
+f2access.log
 sfall-log.txt
 
 # Never commit game data
@@ -22,3 +23,11 @@ sfall-log.txt
 
 # The Fallout 2 folder this machine plays -- see install.py
 .game-path
+
+# Freezing and the installer (installer/freeze.py, installer/*.iss)
+dist/
+.pyinstaller/
+
+# A developer's own settings and logs at the repo root
+/access.ini
+/install.log

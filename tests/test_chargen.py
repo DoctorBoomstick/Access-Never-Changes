@@ -187,17 +187,88 @@ class TestInGameSections(unittest.TestCase):
         for index, pos in ((7, 0), (8, 1), (9, 2)):
             self.assertEqual(chargen._SECTION_OF[index], ("identity", pos))
 
-    def test_the_perks_karma_kills_box(self):
-        """71 Perks, 48 Karma, 46 Kills -- read off the trait pointer while
-        stepping those very indices."""
-        for index in (46, 47, 48, 54, 71, 135):
-            self.assertEqual(chargen._SECTION_OF[index][0], "record")
+    def test_the_folder_box_is_one_run_of_rows(self):
+        """The rows this file used to call 46, 48 and 71 were info CARDS, not
+        rows -- which is why the karma folder read "Item 152"."""
+        self.assertEqual(chargen._SECTION_OF[10], ("folder", 0))
+        self.assertEqual(chargen._SECTION_OF[42], ("folder", 32))
 
-    def test_the_creation_sections_are_untouched(self):
+    def test_every_box_is_where_the_tab_handler_says(self):
         self.assertEqual(chargen._SECTION_OF[0], ("special", 0))
-        self.assertEqual(chargen._SECTION_OF[10], ("condition", 0))
-        self.assertEqual(chargen._SECTION_OF[28], ("skill", 0))
-        self.assertEqual(chargen._SECTION_OF[94], ("trait", 13))
+        self.assertEqual(chargen._SECTION_OF[43], ("condition", 0))
+        self.assertEqual(chargen._SECTION_OF[51], ("derived", 0))
+        self.assertEqual(chargen._SECTION_OF[61], ("skill", 0))
+        self.assertEqual(chargen._SECTION_OF[79], ("points", 0))
+        self.assertEqual(chargen._SECTION_OF[95], ("trait", 13))
+
+    def test_race_and_style(self):
+        """sfall's appearance mod numbers its buttons from 0x500."""
+        self.assertEqual(chargen._SECTION_OF[1281], ("appearance", 0))
+        self.assertEqual(chargen._SECTION_OF[1282], ("appearance", 1))
+
+
+class _Sheet:
+    ready = True
+    unspent = 12
+
+    def __init__(self, kills=()):
+        self.kills = list(kills)
+
+
+class _Folder(chargen.CharGen):
+    """A folder row, with the engine's pointers and card made up."""
+
+    def __init__(self, label, folder, card=0, towns=(), kills=()):
+        self._msg_cache = {}
+        self._rep_heading = None
+        self._towns = list(towns)
+        self._lbl, self._fold, self._card = label, folder, card
+        self.sheet = _Sheet(kills)
+
+    def _label_text(self, addr, limit=96):
+        return self._lbl
+
+    def _ptr_text(self, addr, limit=400):
+        return "about it"
+
+    def folder(self):
+        return self._fold
+
+    def card(self):
+        return self._card
+
+
+class TestFolderRows(unittest.TestCase):
+
+    def test_a_kill_row_gets_its_count(self):
+        """The count is drawn beside the name and kept nowhere."""
+        gen = _Folder("Geckos Kills", chargen.FOLDER_KILLS,
+                      kills=[("Geckos", 12), ("Giant Ants", 3)])
+        self.assertEqual(gen._folder_row(10, 0).announce(), "Geckos Kills, 12")
+
+    def test_a_town_is_named_from_its_place_under_the_heading(self):
+        """The engine keeps "Accepted" and throws "Klamath" away."""
+        gen = _Folder("Reputation", chargen.FOLDER_KARMA,
+                      card=chargen.REP_HEADING_CARD,
+                      towns=["Arroyo", "Klamath"])
+        gen._folder_row(12, 2)
+        gen._lbl, gen._card = "Accepted", 0x89
+        self.assertEqual(gen._folder_row(14, 4).announce(), "Klamath: Accepted")
+
+    def test_a_town_before_the_heading_is_seen_says_only_its_standing(self):
+        gen = _Folder("Accepted", chargen.FOLDER_KARMA, card=0x89,
+                      towns=["Arroyo", "Klamath"])
+        self.assertEqual(gen._folder_row(14, 4).announce(), "Accepted")
+
+    def test_a_perk_reads_as_itself(self):
+        gen = _Folder("Gifted", chargen.FOLDER_PERKS, card=70)
+        item = gen._folder_row(11, 1)
+        self.assertEqual(item.announce(), "Gifted")
+        self.assertEqual(item.description, "about it")
+
+    def test_no_label_says_which_line(self):
+        gen = _Folder(None, chargen.FOLDER_PERKS)
+        self.assertEqual(gen._folder_row(12, 2).announce(), "Line 3")
 
 
 class TestLabelText(unittest.TestCase):
@@ -294,3 +365,156 @@ class TestModifiedStatsAreNotAnnounced(unittest.TestCase):
         said = _Gen().current().announce()
         self.assertEqual(said, "Perception, 6, Good")
         self.assertNotIn("8", said, "the base value is not on the screen")
+
+
+class _Said:
+    def __init__(self):
+        self.said = []
+
+    def answer(self, text):
+        self.said.append(text)
+
+
+class _Live(chargen.CharGen):
+    """An editor whose row, folder, card and label are set by the test."""
+
+    def __init__(self):
+        self._msg_cache = {}
+        self._rep_heading = None
+        self._towns = []
+        self.sheet = None
+        self.sel, self.fold, self.crd, self.lbl = 0, 0, 0, "Strength"
+
+    def selection(self): return self.sel
+    def folder(self): return self.fold
+    def card(self): return self.crd
+    def special(self): return [5] * 7
+    def char_points(self): return 0
+    def tags(self): return []
+    def traits(self): return []
+    def name(self): return None
+    def dialog(self): return None
+    def age(self): return 25
+    def sex(self): return 0
+    def skills(self): return []
+    def _label_text(self, addr, limit=96): return self.lbl
+    def _ptr_text(self, addr, limit=400): return self.lbl
+
+    def current(self):
+        if self.sel >= 10:
+            return self._folder_row(self.sel, self.sel - 10)
+        return chargen.EditorItem(self.sel, "special", self.sel, "Strength",
+                                  "5", None)
+
+
+class TestSettling(unittest.TestCase):
+    """A folder row's words arrive a frame after the row moves."""
+
+    def setUp(self):
+        self.gen = _Live()
+        self.w = CharGenWatcher(self.gen)
+        self.ann = _Said()
+        self.w.enter(self.ann)
+        self.ann.said.clear()
+
+    def test_the_stale_label_is_never_spoken(self):
+        self.gen.sel, self.gen.lbl = 10, "Kills"      # last row's leftover
+        self.w.poll(self.ann)
+        self.assertEqual(self.ann.said, [])
+        self.gen.lbl, self.gen.crd = "Gifted", 70     # the redraw lands
+        self.w.poll(self.ann)
+        self.assertEqual(self.ann.said, [])
+        self.w.poll(self.ann)                         # and holds
+        self.assertEqual(self.ann.said, ["Gifted"])
+
+    def test_tab_between_folders_is_movement(self):
+        """Tab inside the box switches folder and leaves the row alone."""
+        self.gen.sel, self.gen.lbl, self.gen.crd = 10, "Optional Traits", 54
+        for _ in range(3):
+            self.w.poll(self.ann)
+        self.ann.said.clear()
+        self.gen.fold, self.gen.lbl, self.gen.crd = 1, "Karma", 152
+        for _ in range(3):
+            self.w.poll(self.ann)
+        self.assertEqual(self.ann.said, ["Karma"])
+
+
+class _Refusing(chargen.CharGen):
+    """On Small Guns, with editor.msg's three refusals loaded."""
+
+    def __init__(self, value):
+        self._msg_cache = {chargen.MSG_EDITOR: {
+            132: "At maximum level.", 133: "Unable to increment it.",
+            134: "At minimum level.", 135: "Unable to decrement it.",
+            136: "Not enough skill points available."}}
+        self.sheet = None
+        self._value = value
+
+    def current(self):
+        return chargen.EditorItem(61, "skill", 0, "Small Guns", None, None)
+
+    def skills(self):
+        return [self._value] + [0] * 17
+
+
+class TestRefusals(unittest.TestCase):
+    """The box the engine opens when a skill will go no further."""
+
+    def test_lowering_past_the_floor(self):
+        self.assertEqual(_Refusing(55).adjust_refused(-1),
+                         "Small Guns: At minimum level. Unable to decrement it.")
+
+    def test_raising_without_points(self):
+        self.assertEqual(_Refusing(55).adjust_refused(1),
+                         "Not enough skill points available.")
+
+    def test_raising_past_the_ceiling(self):
+        self.assertEqual(_Refusing(300).adjust_refused(1),
+                         "Small Guns: At maximum level. Unable to increment it.")
+
+
+from fallout2_access.game import perkpick
+
+
+class _PerkWatcher(CharGenWatcher):
+    """The watcher, with the perk window's reading set by the test."""
+
+    perk = None
+
+    def _perk(self):
+        return self.perk
+
+
+class TestPickAPerk(unittest.TestCase):
+    """The window every perk goes through, which used to say nothing."""
+
+    def setUp(self):
+        self.gen = _Live()
+        self.gen._msg_cache = {chargen.MSG_EDITOR: {152: "PICK A PERK"}}
+        self.w = _PerkWatcher(self.gen)
+        self.ann = _Said()
+        self.w.enter(self.ann)
+        self.ann.said.clear()
+
+    def test_opening_it_says_what_it_is_and_what_is_lit(self):
+        self.w.perk = perkpick.PerkChoice(0, 14, 0, "Awareness")
+        self.w.poll(self.ann)
+        self.assertEqual(self.ann.said, [
+            "Pick a perk. 14 to choose from. Awareness. 1 of 14. Enter takes "
+            "it, Escape leaves it for later."])
+
+    def test_moving_reads_the_next_one(self):
+        self.w.perk = perkpick.PerkChoice(0, 14, 0, "Awareness")
+        self.w.poll(self.ann)
+        self.ann.said.clear()
+        self.w.perk = perkpick.PerkChoice(1, 14, 2, "Bonus HtH Damage")
+        self.w.poll(self.ann)
+        self.assertEqual(self.ann.said, ["Bonus HtH Damage. 2 of 14."])
+
+    def test_the_sheet_underneath_is_not_read_while_it_is_up(self):
+        self.w.perk = perkpick.PerkChoice(0, 14, 0, "Awareness")
+        self.w.poll(self.ann)
+        self.ann.said.clear()
+        self.gen.sel = 3
+        self.w.poll(self.ann)
+        self.assertEqual(self.ann.said, [])

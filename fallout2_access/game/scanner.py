@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import re
 from typing import List, Optional
+from ..i18n import tr
+from .. import words
 
 _ENTRY = re.compile(
     r"SCAN:entry (\d+)\|(\d+)\|(\d+)\|([^|]*)\|(\d+)\|(\d+)\|(\d+)\|(-?\d+)\|(\d+)\|"
@@ -36,37 +38,37 @@ _JUMP = re.compile(r"SCAN:jump (\d+)\|")
 # holds the exit grids and nothing else a player has business with -- see
 # SCAN_EXITS in gl_world.ssl for why they are worth a category rather than a
 # line in "scenery". "Exits" is the mod's word, like the other three.
-CATEGORIES = ["critters", "items", "scenery", "exits"]
+def categories() -> List[str]:
+    return [tr("scan.critters", "critters"), tr("scan.items", "items"),
+            tr("scan.scenery", "scenery"), tr("scan.exits", "exits")]
 
 # What changed, which decides how much needs saying.
 LEVEL_INSTANCE = 0
 LEVEL_TYPE = 1
 LEVEL_CATEGORY = 2
 
-# tile_num_in_direction's 0-5, measured against the live engine rather than
-# taken from a table: from tile 17488 the offsets were NE -1, E +199, SE +200,
-# SW +201, W +1, NW -200.
-DIRECTIONS = ["north east", "east", "south east", "south west", "west", "north west"]
-
-
 def category_name(index: int) -> str:
-    if 0 <= index < len(CATEGORIES):
-        return CATEGORIES[index]
-    return "category {}".format(index)
+    names = categories()
+    if 0 <= index < len(names):
+        return names[index]
+    return tr("scan.category", "category {number}", number=index)
 
 
 def direction_name(rotation: int) -> str:
-    if 0 <= rotation < len(DIRECTIONS):
-        return DIRECTIONS[rotation]
-    return ""
+    """tile_num_in_direction's 0-5, measured against the live engine rather
+    than taken from a table: from tile 17488 the offsets were NE -1, E +199,
+    SE +200, SW +201, W +1, NW -200."""
+    return words.direction(rotation)
 
 
 def _where(distance: int, rotation: int) -> str:
     if distance == 0:
-        return "here"
+        return tr("scan.here", "here")
     bearing = direction_name(rotation)
-    unit = "hex" if distance == 1 else "hexes"
-    return "{} {} {}".format(bearing, distance, unit).strip()
+    if not bearing:
+        return words.hexes(distance)
+    return tr("scan.where", "{direction} {distance}", direction=bearing,
+              distance=words.hexes(distance))
 
 
 class Scanner:
@@ -85,7 +87,8 @@ class Scanner:
         m = _NONE.match(line)
         if m:
             self.last = None
-            return ["No {} in sight.".format(category_name(int(m.group(1))))]
+            return [tr("scan.none", "No {category} in sight.",
+                       category=category_name(int(m.group(1))))]
         if _JUMP.match(line):
             # The hex readout that follows says what is there, in the game's own
             # words. Saying it twice helps nobody.
@@ -107,7 +110,7 @@ class Scanner:
 
         if level == LEVEL_INSTANCE:
             # Already know what it is; the question is which one and where.
-            text = "{}, {} of {}.".format(where, instance + 1, instance_total)
+            text = "{}, {}.".format(where, words.of(instance + 1, instance_total))
             text = "{}, {}".format(name, text) if instance_total == 1 else text
 
         else:
@@ -115,10 +118,11 @@ class Scanner:
             # nearest one is. The count is the useful part -- it tells you
             # whether shift-bracket is worth pressing at all.
             if instance_total > 1:
-                text = "{}, {}, nearest {}.".format(name, instance_total, where)
+                text = tr("scan.type_many", "{name}, {count}, nearest {where}.",
+                          name=name, count=instance_total, where=where)
             else:
                 text = "{}, {}.".format(name, where)
-            text += " {} of {}.".format(type_index + 1, type_total)
+            text += " {}.".format(words.of(type_index + 1, type_total))
             if level == LEVEL_CATEGORY:
                 text = "{}. {}".format(category_name(category).capitalize(), text)
 

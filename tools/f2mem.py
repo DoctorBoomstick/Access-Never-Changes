@@ -9,7 +9,7 @@ Run it with the game already running:
 
     python tools/f2mem.py
 
-Then `help`. See HARNESS.md for the recipes.
+Then `help`. docs/DEVELOPING.md describes the method.
 """
 
 from __future__ import annotations

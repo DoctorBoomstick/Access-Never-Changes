@@ -56,7 +56,55 @@
 #define SIDE_MINE           (0)
 #define SIDE_THEIRS         (1)
 #define SIDE_WORN           (2)
-#define SIDES               (3)
+
+/*
+ * Dropping, done the way the engine's own Drop icon does it.
+ *
+ * The inventory's item menu (hold the button on an item: Look, Use, Drop,
+ * Unload) handles Drop at 0x004736E8, and these are the calls it makes, read
+ * out of that handler. There is no gesture to send instead: a release over the
+ * character figure -- what the mod used to try -- only takes things out of a
+ * bag opened inside the inventory (the hit test at 0x00471443 is gated on that
+ * stack being open), and at the top level puts the item straight back.
+ */
+#define F_OBJ_DROP          (0x0049B8B0)  // (critter, item): one unit to the ground
+#define F_ITEM_ADD_FORCE    (0x004772B8)  // (critter, item, count)
+#define F_ITEM_REMOVE_MULT  (0x00477490)  // (critter, item, count)
+#define F_CAPS_SET_AMOUNT   (0x0047A8D8)  // (money, amount)
+#define F_TAKE_OFF_ARMOR    (0x004715F8)  // (critter, armour, 0)
+#define F_INVEN_CURSOR      (0x00470BCC)  // (1): the window's own cursor back
+#define F_DRAW_BODY         (0x00471D5C)  // the figure and both hands
+#define F_DRAW_INVENTORY    (0x0046FDF4)  // (scroll, -1, window type)
+#define INVEN_DUDE          (0x0059E86C)  // whose inventory the window shows
+// While the window is open the engine holds the worn items in these, out of
+// the inventory list, and puts them back when it closes.
+#define WORN_ARMOR_VAR      (0x0059E954)
+#define WORN_LEFT_VAR       (0x0059E958)
+#define WORN_RIGHT_VAR      (0x0059E968)
+#define INVEN_STACK_DEPTH   (0x0059E96C)  // bags opened inside the inventory
+#define INVEN_SCROLL        (0x0059E844)  // one scroll offset per depth
+#define EXPLOSIVE_DROPPED   (0x005190E0)  // set when an armed charge is dropped
+#define PID_MONEY_          (41)
+#define PID_DYNAMITE_LIVE   (206)
+#define PID_PLASTIC_LIVE    (209)
+/*
+ * The barter window has FOUR item lists, not two, and the two in the middle
+ * are the whole point of it: what you are offering, and what you are asking
+ * for. Nothing could see them before, which is why barter read out both
+ * inventories perfectly and was still unplayable -- you could hear what was
+ * for sale and never find out what you had put on the table.
+ *
+ * They are not inventories of anybody. The engine builds two temporary objects
+ * when the screen opens, moves items into them, and destroys them afterwards,
+ * so there is no critter to ask and no address that stays put between one
+ * barter and the next. What there is, is sfall's barter-price hook: it runs
+ * inside the engine's own price calculation and is handed both tables as
+ * arguments. So they are caught there and remembered for as long as the screen
+ * is up. See on_barterprice.
+ */
+#define SIDE_MY_OFFER       (3)
+#define SIDE_THEIR_OFFER    (4)
+#define SIDES               (5)
 
 // Worn and wielded slots, in the order the window draws them down the middle.
 #define WORN_SLOTS          (3)
@@ -66,10 +114,24 @@ variable g_side := SIDE_MINE;
 variable g_index := 0;
 variable g_label := "";
 variable g_count := 0;
+// Rounds in an ammunition stack, all boxes counted; -1 for anything else.
+variable g_rounds := -1;
 variable g_item := 0;
 variable g_other := 0;
 variable g_imenu := 0;
 variable g_imenu_index := 0;
+// "Drop how many?", asked by this script. See drop_ask.
+variable g_dropask := 0;
+variable g_dropn := 0;
+variable g_dropmax := 0;
+variable g_droptyped := 0;
+variable g_dropitem := 0;
+variable g_dropowner := 0;
+// The two barter tables, as handed over by HOOK_BARTERPRICE. Zero whenever the
+// barter screen is not up, which is what makes the two extra sides disappear
+// from an ordinary inventory or a corpse.
+variable g_myoffer := 0;
+variable g_theiroffer := 0;
 
 /*
  * KEY_SWALLOW  --  how to actually take a key away from the engine.
@@ -118,9 +180,16 @@ procedure describe_item;
 procedure describe_side;
 procedure announce_open;
 procedure summarise;
+procedure drop_item;
+procedure drop_now(variable owner, variable item, variable n);
+procedure drop_ask_key(variable key);
+procedure drop_ask_report;
+procedure stack_quantity(variable owner, variable item);
+procedure inven_redraw;
 procedure step_item(variable delta);
 procedure step_side(variable delta);
 procedure other_obj;
+procedure on_barterprice;
 
 /*
  * start  --  init once, then poll.
@@ -136,6 +205,7 @@ procedure start begin
       set_global_script_type(1);
       set_global_script_repeat(2);   // ~30 polls/sec; only watching a mode flag
       register_hook_proc(HOOK_KEYPRESS, on_key);
+      register_hook_proc(HOOK_BARTERPRICE, on_barterprice);
       debug_msg("INVEN:ready" + SEP);
    end else begin
       call poll_inven;
@@ -168,6 +238,18 @@ procedure poll_inven begin
       call announce_open;
       call describe_side;
    end else if (was) then begin
+      /*
+       * The engine destroys the two barter tables when the screen closes, so
+       * holding on to the pointers would leave two sides pointing at freed
+       * memory -- and this script has hard-crashed the game twice already by
+       * handing the engine an object it did not expect.
+       */
+      g_myoffer := 0;
+      g_theiroffer := 0;
+      // A count being asked for dies with the window, and so does its item.
+      g_dropask := 0;
+      g_dropitem := 0;
+      g_dropowner := 0;
       debug_msg("INVEN:close" + SEP);
    end
 end
@@ -195,6 +277,8 @@ procedure side_owner(variable side) begin
       call load_other;
       return g_other;
    end
+   if (side == SIDE_MY_OFFER) then return g_myoffer;
+   if (side == SIDE_THEIR_OFFER) then return g_theiroffer;
    return dude_obj;
 end
 
@@ -294,6 +378,7 @@ procedure describe_item begin
 
    g_label := "";
    g_count := 0;
+   g_rounds := -1;
    if (not g_item) then return;
 
    g_label := obj_name(g_item);
@@ -302,11 +387,37 @@ procedure describe_item begin
    if (owner and g_side != SIDE_WORN) then begin
       qty := obj_is_carrying_obj_pid(owner, obj_pid(g_item));
    end
+
+   /*
+    * Ammunition is BOXES and rounds, and each number on its own was a bug.
+    *
+    * The box count came first and read "10mm JHP" with no number -- one box
+    * of 23 rounds is a quantity of one, which the reader suppresses as noise.
+    * So the count was replaced by the charge field, OBJ_DATA_CUR_CHARGES, and
+    * that was wrong the other way: the charge field is the rounds in the TOP
+    * box only. Sajag had four full boxes of 10mm JHP, the line said "24", and
+    * the barter hook valued them at 300 -- four boxes at 75, which is what
+    * gave it away.
+    *
+    * So the count is the boxes again, because that is what the "Move Items"
+    * window counts and what a price is per; and the rounds go in a field of
+    * their own at the end of the line, as the full boxes plus the top one.
+    * obj_is_carrying_obj counts THIS stack rather than every stack with its
+    * pid, which is the number the move window will stop at.
+    */
+   g_rounds := -1;
+   if (obj_item_subtype(g_item) == item_type_ammo) then begin
+      if (owner and g_side != SIDE_WORN) then
+         qty := obj_is_carrying_obj(owner, g_item);
+      if (qty < 1) then qty := 1;
+      g_rounds := (qty - 1) * get_proto_data(obj_pid(g_item), PROTO_AM_PACK_SIZE)
+         + get_object_data(g_item, OBJ_DATA_CUR_CHARGES);
+   end
    g_count := qty;
 end
 
 procedure describe_side begin
-   variable total, slot, weight;
+   variable total, slot, weight, ammo, cap, cost;
 
    total := side_count(g_side);
    if (total <= 0) then begin
@@ -341,9 +452,48 @@ procedure describe_side begin
    //
    // Appended rather than inserted: the reader's pattern is not anchored at the
    // end, so an older reader still matches every field it already knew.
+   /*
+    * And, for a weapon, what is in it.
+    *
+    * A sighted player sees a green bar beside the weapon on the interface bar
+    * and nothing at all beside the ones in their pack -- so this is not
+    * reproducing something they have; it is answering the question they answer
+    * by picking the gun up and looking at the bar. With three guns in a pack,
+    * which one is loaded is otherwise a thing you find out by equipping each
+    * of them in turn.
+    *
+    * Only weapons are asked. get_weapon_ammo_count on a shovel is a question
+    * with no answer, and a zero that came from asking the wrong question reads
+    * exactly like a zero that means empty.
+    *
+    * Appended, like the pointer before it: the reader's pattern is not anchored
+    * at the end, so a game running last session's compiled script keeps working
+    * and simply says nothing about ammunition.
+    */
+   ammo := -1;
+   cap := 0;
+   if (g_item and (obj_item_subtype(g_item) == item_type_weapon)) then begin
+      ammo := get_weapon_ammo_count(g_item);
+      cap := get_proto_data(obj_pid(g_item), PROTO_WP_MAG_SIZE);
+   end
+
+   /*
+    * What one of it is worth, at face value.
+    *
+    * A sighted trader finds this out by dragging the thing onto the table and
+    * reading the total the engine prints there -- one drag and one glance.
+    * Here that was a drag, a wait for the number to be read out, and a drag
+    * back, so nobody did it, and the first anyone heard of a thing's value was
+    * after it had gone. The proto's cost is the figure the barter totals start
+    * from before either side's Barter skill is applied.
+    */
+   cost := -1;
+   if (g_item) then cost := proto_data(obj_pid(g_item), it_cost);
+
    debug_msg("INVEN:entry " + g_side + SEP + g_index + SEP + total
       + SEP + g_label + SEP + g_count + SEP + weight
-      + SEP + slot + SEP + g_item + SEP);
+      + SEP + slot + SEP + g_item
+      + SEP + ammo + SEP + cap + SEP + cost + SEP + g_rounds + SEP);
 end
 
 /*
@@ -391,6 +541,225 @@ end
  * directly, and adding up numbers the engine gave us is a different thing from
  * inventing a rule about how heavy something is.
  */
+/*
+ * drop_item  --  the selected item onto the ground, through the engine.
+ *
+ * Everything the engine's Drop does (0x004736E8), in its order:
+ *
+ *   a worn item is put back in the pack first, armour taken off properly,
+ *   because the open window keeps worn things out of the list;
+ *   a live charge sets the engine's flag and goes down as it is;
+ *   money is split so ONE pile holding the amount lands, not a coin apiece;
+ *   any other stack drops as many as were asked for, one engine call each,
+ *   finding the stack again every time -- taking a unit off a stack COPIES
+ *   the item for what is left (0x004774E5), so the next unit is a different
+ *   object at the same place in the list;
+ *   and the window is redrawn the way the engine redraws it after a drop.
+ *
+ * **How many is asked HERE, not in the engine's window.** Calling that window
+ * (0x0047688C) from this keypress hook ran a modal loop inside the hook, so the
+ * hook was entered again for every key typed into it while it was still
+ * running -- which corrupted it: counts were ignored, and sfall's read_int was
+ * handed address 1 and took the game down. So the count is this script's own
+ * small prompt, like the item menu: keys in, a number out, nothing modal.
+ */
+procedure drop_item begin
+   variable owner, item, pid, qty, var;
+
+   if (get_game_mode bwand (INTFACELOOT bwor BARTER bwor INTFACEUSE)) then begin
+      debug_msg("INVEN:dropnot here" + SEP);
+      return;
+   end
+   if (g_side != SIDE_MINE and g_side != SIDE_WORN) then begin
+      debug_msg("INVEN:dropnot here" + SEP);
+      return;
+   end
+   if (get_ini_setting("ddraw.ini|Debugging|AllowUnsafeScripting") <= 0) then begin
+      debug_msg("INVEN:dropnot unsafe" + SEP);
+      return;
+   end
+   item := g_item;
+   if (not item) then begin
+      debug_msg("INVEN:menu gone" + SEP);
+      return;
+   end
+   owner := read_int(INVEN_DUDE);
+   if (not owner) then owner := dude_obj;
+   pid := obj_pid(item);
+
+   if (g_side == SIDE_WORN) then begin
+      var := 0;
+      if (read_int(WORN_ARMOR_VAR) == item) then var := WORN_ARMOR_VAR;
+      else if (read_int(WORN_LEFT_VAR) == item) then var := WORN_LEFT_VAR;
+      else if (read_int(WORN_RIGHT_VAR) == item) then var := WORN_RIGHT_VAR;
+      if (not var) then begin
+         debug_msg("INVEN:dropnot failed" + SEP);
+         return;
+      end
+      if (var == WORN_ARMOR_VAR) then
+         call_offset_v3(F_TAKE_OFF_ARMOR, owner, item, 0);
+      call_offset_v3(F_ITEM_ADD_FORCE, owner, item, 1);
+      write_int(var, 0);
+      call drop_now(owner, item, 1);
+      return;
+   end
+
+   if (pid == PID_DYNAMITE_LIVE or pid == PID_PLASTIC_LIVE) then begin
+      write_int(EXPLOSIVE_DROPPED, 1);
+      call drop_now(owner, item, 1);
+      return;
+   end
+
+   qty := stack_quantity(owner, item);
+   if (qty <= 1) then begin
+      call drop_now(owner, item, 1);
+      return;
+   end
+   g_dropask := 1;
+   g_dropn := 1;
+   g_dropmax := qty;
+   g_droptyped := 0;
+   g_dropitem := item;
+   g_dropowner := owner;
+   debug_msg("INVEN:dropask" + SEP + obj_name(item) + SEP + g_dropn + SEP
+      + g_dropmax + SEP);
+end
+
+/*
+ * stack_quantity  --  how many are in THIS stack, from the engine's own list.
+ *
+ * The critter's inventory is at +0x2C: a count, then at +8 a list of
+ * (item, quantity) pairs -- the layout item_remove_mult walks (0x0047749F).
+ */
+procedure stack_quantity(variable owner, variable item) begin
+   variable inv, count, list, i;
+   inv := owner + 0x2C;
+   count := read_int(inv);
+   list := read_int(inv + 8);
+   i := 0;
+   while (i < count and i < 250) do begin
+      if (read_int(list + 8 * i) == item) then return read_int(list + 8 * i + 4);
+      i := i + 1;
+   end
+   return 1;
+end
+
+procedure drop_ask_report begin
+   debug_msg("INVEN:dropcount" + SEP + g_dropn + SEP + g_dropmax + SEP);
+end
+
+/*
+ * drop_ask_key  --  one key while "drop how many?" is up.
+ *
+ * Up and Down (and Right and Left) one at a time, ten with Control; Home one,
+ * End all; the number row types it; Enter drops, Escape cancels. The same keys
+ * the engine's own "Move Items" window answers to, so nothing new to learn.
+ */
+procedure drop_ask_key(variable key) begin
+   variable step, d;
+
+   step := 1;
+   if (key_pressed(DIK_LCONTROL) or key_pressed(DIK_RCONTROL)) then step := 10;
+
+   if (key == DIK_ESCAPE) then begin
+      g_dropask := 0;
+      debug_msg("INVEN:dropnot cancel" + SEP);
+      return;
+   end
+   if (key == DIK_RETURN) then begin
+      g_dropask := 0;
+      call drop_now(g_dropowner, g_dropitem, g_dropn);
+      return;
+   end
+
+   d := -1;
+   if (key >= DIK_1 and key <= DIK_9) then d := key - DIK_1 + 1;
+   else if (key == DIK_0) then d := 0;
+   if (d >= 0) then begin
+      g_droptyped := g_droptyped * 10 + d;
+      if (g_droptyped > g_dropmax) then g_droptyped := g_dropmax;
+      if (g_droptyped >= 1) then g_dropn := g_droptyped;
+      call drop_ask_report;
+      return;
+   end
+
+   g_droptyped := 0;
+   if (key == DIK_UP or key == DIK_RIGHT) then g_dropn := g_dropn + step;
+   else if (key == DIK_DOWN or key == DIK_LEFT) then g_dropn := g_dropn - step;
+   else if (key == DIK_HOME) then g_dropn := 1;
+   else if (key == DIK_END) then g_dropn := g_dropmax;
+   else return;
+   if (g_dropn > g_dropmax) then g_dropn := g_dropmax;
+   if (g_dropn < 1) then g_dropn := 1;
+   call drop_ask_report;
+end
+
+/*
+ * drop_now  --  drop `n` of `item`, the engine's way. See drop_item.
+ */
+procedure drop_now(variable owner, variable item, variable n) begin
+   variable pid, i, again, name, ok, dropped;
+
+   pid := obj_pid(item);
+   name := obj_name(item);
+   ok := 1;
+   dropped := n;
+
+   if (pid == PID_MONEY_) then begin
+      if (n == 1) then begin
+         call_offset_v2(F_CAPS_SET_AMOUNT, item, 1);
+         call_offset_v2(F_OBJ_DROP, owner, item);
+      end else begin
+         if (call_offset_r3(F_ITEM_REMOVE_MULT, owner, item, n - 1) != 0) then begin
+            ok := 0;
+         end else begin
+            again := inven_ptr(owner, g_index);
+            if (again and obj_pid(again) == PID_MONEY_) then begin
+               call_offset_v2(F_CAPS_SET_AMOUNT, again, n);
+               call_offset_v2(F_OBJ_DROP, owner, again);
+            end else begin
+               // Put back what was taken rather than lose it.
+               call_offset_v3(F_ITEM_ADD_FORCE, owner, item, n - 1);
+               ok := 0;
+            end
+         end
+      end
+   end else begin
+      i := 0;
+      while (i < n) do begin
+         again := item;
+         if (g_side != SIDE_WORN) then begin
+            again := inven_ptr(owner, g_index);
+            // The stack ran out, or something else is in its place now.
+            if (not again or obj_pid(again) != pid) then begin
+               dropped := i;
+               i := n;
+               again := 0;
+            end
+         end
+         if (again) then call_offset_v2(F_OBJ_DROP, owner, again);
+         i := i + 1;
+      end
+   end
+
+   call inven_redraw;
+   // What is left, and what is under the cursor now -- then the verdict last,
+   // so that is what is heard.
+   call summarise;
+   call describe_side;
+   if (ok and dropped > 0) then
+      debug_msg("INVEN:dropped" + SEP + name + SEP + dropped + SEP);
+   else
+      debug_msg("INVEN:dropnot failed" + SEP);
+end
+
+procedure inven_redraw begin
+   call_offset_v1(F_INVEN_CURSOR, 1);
+   call_offset_v0(F_DRAW_BODY);
+   call_offset_v3(F_DRAW_INVENTORY,
+      read_int(INVEN_SCROLL + 4 * read_int(INVEN_STACK_DEPTH)), -1, 0);
+end
+
 procedure summarise begin
    variable i, total, carried, item;
 
@@ -441,6 +810,16 @@ end
 procedure side_usable(variable side) begin
    if (side == SIDE_WORN) then return 1;
    if (side == SIDE_MINE) then return 1;
+   /*
+    * The two offer tables exist only during a barter, and only once the price
+    * hook has run and handed them over -- which it does on the way in, before
+    * the player can press anything. Testing the pointer rather than the game
+    * mode means a table that was never delivered is skipped rather than walked
+    * into, and stepping through the lists cannot land on a list that is not
+    * there.
+    */
+   if (side == SIDE_MY_OFFER) then return (g_myoffer != 0);
+   if (side == SIDE_THEIR_OFFER) then return (g_theiroffer != 0);
    call load_other;
    if (g_other) then return 1;
    return 0;
@@ -491,10 +870,12 @@ end
  * it is up. The ACTIONS belong to the Python side, which can drive the pointer,
  * so Enter writes a line for it to act on rather than doing the work here.
  */
-#define IMENU_COUNT     (3)
-#define IMENU_USE       (0)
-#define IMENU_DROP      (1)
-#define IMENU_LOOK      (2)
+// "Use it" was here, and all it could do was say to put the item in a hand
+// first -- the item slot it clicks acts on the active hand only. The U key on
+// the map does that job from the hand itself (owner, 0.2.40).
+#define IMENU_COUNT     (2)
+#define IMENU_DROP      (0)
+#define IMENU_LOOK      (1)
 
 procedure worn_slot(variable index) begin
    // The middle column, in the order this script reports it: armour, then the
@@ -506,7 +887,6 @@ procedure worn_slot(variable index) begin
 end
 
 procedure imenu_label(variable which) begin
-   if (which == IMENU_USE)  then return "use it";
    if (which == IMENU_DROP) then return "drop it";
    if (which == IMENU_LOOK) then return "look at it";
    return "action " + which;
@@ -568,6 +948,10 @@ procedure imenu_do begin
     * because the list cursor can be moved between opening the menu and
     * choosing from it.
     */
+   if (which == IMENU_DROP) then begin
+      call drop_item;
+      return;
+   end
    if (which == IMENU_LOOK) then begin
       debug_msg("INVEN:look" + SEP + g_label + SEP
          + proto_data(obj_pid(g_item), it_description) + SEP);
@@ -623,6 +1007,12 @@ procedure on_key begin
     * The item menu owns the keyboard while it is up, and these keys must be
     * SWALLOWED or the inventory window acts on them underneath the menu.
     */
+   if (g_dropask) then begin
+      if (pressed) then call drop_ask_key(key);
+      set_sfall_return(KEY_SWALLOW);
+      return;
+   end
+
    if (g_imenu) then begin
       if (key == DIK_UP) then begin
          if (pressed) then call imenu_step(-1);
@@ -645,6 +1035,20 @@ procedure on_key begin
          set_sfall_return(KEY_SWALLOW);
          return;
       end
+   end
+
+   /*
+    * Enter moves the selected item: once to pick it up, once where it goes.
+    *
+    * It was numpad plus, which is the mouse button on the map and nowhere
+    * else now (fallout2_access/controls.py). Taken here rather than by the
+    * Python side because only this script knows whether its item menu is up,
+    * and Enter there means "do the menu entry" -- that case returned above.
+    */
+   if (key == DIK_RETURN) then begin
+      if (pressed) then debug_msg("INVEN:enter" + SEP);
+      set_sfall_return(KEY_SWALLOW);
+      return;
    end
 
    /*
@@ -750,4 +1154,98 @@ procedure on_key begin
    // Swallowed: the arrows are ours while this window is up, and so is the
    // numpad 0 the mod presses itself.
    set_sfall_return(KEY_SWALLOW);
+end
+
+/*
+ * on_barterprice  --  report what the barter is worth, in the engine's numbers.
+ *
+ * The barter screen prints two totals: what the goods you are asking for come
+ * to, and what the goods you are offering come to. A sighted player watches
+ * those two numbers and adds items until they balance. They are the whole game
+ * of bartering, and they were the one thing this mod could not say.
+ *
+ * **They are not anywhere to be read.** That was established the expensive way:
+ * an item was moved into an offer table and every four-byte value in the
+ * executable's static data was compared before and after. Nothing held a price.
+ * The engine computes the totals inside the routine that draws them and keeps
+ * nothing, so there is no address to point at.
+ *
+ * Which leaves two options, and only one of them is honest. The formula is
+ * documented -- cost, doubled, scaled by the two barter skills -- and the mod
+ * could work the numbers out for itself. It does not, because a number this mod
+ * calculated is a number that can disagree with the one on screen, and a player
+ * who cannot see the screen would have no way to catch it. Every skill, perk,
+ * trait and content mod that touches a price would have to be reimplemented
+ * here and kept in step for ever.
+ *
+ * So the number is taken from the engine at the moment the engine works it out.
+ * sfall runs this hook inside that calculation and hands over its arguments,
+ * which include both totals. We read them and pass them on.
+ *
+ * **Nothing is returned, deliberately.** The hook exists so that a mod can
+ * CHANGE a price -- that is what ret0 and ret1 are for -- and setting either
+ * would make this mod an economy mod. Leaving both unset is what makes this a
+ * measurement rather than an intervention, and it is the same line the rest of
+ * the project draws: no hook that could change the outcome, even where the
+ * engine offers one.
+ *
+ * The hook fires twice on entering the screen, once for each side, and again
+ * after every change. That is fine -- the Python half reports a total only when
+ * it differs from the last one it heard.
+ */
+procedure on_barterprice begin
+   variable who, with_whom, base, caps, before_skill, offered, pressed, party;
+
+   who := get_sfall_arg;          // arg0  the critter doing the bartering
+   with_whom := get_sfall_arg;    // arg1  the critter being bartered with
+   base := get_sfall_arg;         // arg2  the value of the goods requested
+   g_theiroffer := get_sfall_arg; // arg3  the table of requested goods
+   caps := get_sfall_arg;         // arg4  actual caps in the barter stack
+   before_skill := get_sfall_arg; // arg5  value before skill modifications
+   g_myoffer := get_sfall_arg;    // arg6  the table of offered goods
+   offered := get_sfall_arg;      // arg7  total cost of what the player offers
+   pressed := get_sfall_arg;      // arg8  1 if the offers button was pressed
+   party := get_sfall_arg;        // arg9  1 if trading with a party member
+
+   /*
+    * Both sides on one line, so the Python half never has to pair up two
+    * reports that arrived separately. `base` is what the goods being bought
+    * come to after the barter skills are applied, which is the figure on
+    * screen; `before_skill` is the same goods at face value, and the gap
+    * between them is what the player's Barter skill is worth. A sighted player
+    * sees only the first, so the second is reported and not spoken.
+    */
+   debug_msg("INVEN:price " + base + SEP + offered + SEP + caps
+      + SEP + before_skill + SEP + pressed + SEP + party + SEP);
+
+   /*
+    * `pressed` is the reason this hook can report a trade at all.
+    *
+    * There is an "offer" control on the barter screen and it is not a button
+    * GNW knows about: the window's whole button list was read live and it
+    * holds four item panes, eight scroll arrows, two container-drill buttons
+    * and Talk. Every plausible key was tried against a staged trade -- m, o,
+    * Enter, space, b -- and the engine did nothing and said nothing. Whatever
+    * the control is, it is not reachable by the routes this mod can enumerate.
+    *
+    * sfall knows, though: it sets this argument when the offer is what caused
+    * the price to be recalculated. So the moment a player presses whatever it
+    * really is, this line says so -- which turns a hunt through a disassembly
+    * into one observation from someone who can see the screen.
+    */
+
+   /*
+    * The tables are the other half of what this hook is for, and the more
+    * important half. arg3 and arg6 are the two temporary objects the barter
+    * screen keeps its offers in, and this is the only place the engine ever
+    * names them -- there is no script function that asks for them and no
+    * address that survives a second barter. Catching them here is what turns
+    * the two middle panes from invisible into two more lists the numpad walks.
+    *
+    * Which is which is worth stating, because the names read backwards at
+    * first glance. arg3 is the "requested" goods -- what is being bought FROM
+    * the shopkeeper -- which is the pile on their side of the table. arg6 is
+    * "offered" -- what the player is putting up. Getting them the wrong way
+    * round would swap the two panes and describe every trade backwards.
+    */
 end

@@ -33,6 +33,7 @@ import os
 import re
 import time
 from typing import Dict, List, NamedTuple, Optional
+from ..i18n import tr
 
 # Where the engine keeps them, relative to the game folder. Slots are 1-indexed
 # on disk and in the interface, which is worth stating because sfall's own slot
@@ -94,8 +95,10 @@ class Slot(NamedTuple):
         description and the clock is what tells them apart.
         """
         if self.description:
-            return "Slot {}, {}.".format(self.number, self.description)
-        return "Slot {}, saved {}.".format(self.number, self.when())
+            return tr("slots.named", "Slot {slot}, {name}.", slot=self.number,
+                      name=self.description)
+        return tr("saves.saved_at", "Slot {slot}, saved {time}.",
+                  slot=self.number, time=self.when())
 
 
 class SaveWatcher:
@@ -155,12 +158,12 @@ class SaveWatcher:
         """What is saved, for reading out on the save or load screen."""
         slots = self.scan()
         if not slots:
-            return "No saved games."
-        return "{} saved {}. {}".format(
-            len(slots),
-            "game" if len(slots) == 1 else "games",
-            " ".join(s.announce() for s in slots),
-        )
+            return tr("saves.none", "No saved games.")
+        if len(slots) == 1:
+            head = tr("saves.one", "1 saved game.")
+        else:
+            head = tr("saves.many", "{count} saved games.", count=len(slots))
+        return "{} {}".format(head, " ".join(s.announce() for s in slots))
 
     # -- watching --------------------------------------------------------
 
@@ -187,9 +190,10 @@ class SaveWatcher:
             slot = current[number]
             before = self._known.get(number)
             if before is None:
-                said.append("Saved to slot {}.".format(number))
+                said.append(tr("saves.saved", "Saved to slot {slot}.", slot=number))
             elif slot.written > before:
-                said.append("Slot {} saved over.".format(number))
+                said.append(tr("saves.overwritten", "Slot {slot} saved over.",
+                               slot=number))
         self._known = {n: s.written for n, s in current.items()}
         return said
 

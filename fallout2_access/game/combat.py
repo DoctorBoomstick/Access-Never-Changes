@@ -20,7 +20,10 @@ recoverable, a wrong one told confidently is not.
 
 from __future__ import annotations
 
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional, Tuple
+
+from .worldlog import ap_cost, attack_mode
+from ..i18n import tr
 
 # HOOK_COMBATTURN arg0
 TURN_START = 1
@@ -43,15 +46,80 @@ DAM_ON_FIRE = 0x400
 # Only the effects a player would notice happening to them. The full DAM_ set
 # includes bookkeeping flags (DAM_PERFORM_REVERSE, DAM_BACKWASH) that describe
 # how the engine animates a hit, not anything that happened in the world.
-EFFECTS = [
-    (DAM_CRITICAL, "critical"),
-    # DAM_DEAD is deliberately absent: HOOK_ONDEATH always follows and reports
-    # the death by name, so including it here says the same thing twice.
-    (DAM_KNOCKED_OUT, "knocked out"),
-    (DAM_KNOCKED_DOWN, "knocked down"),
-    (DAM_BLIND, "blinded"),
-    (DAM_ON_FIRE, "on fire"),
-]
+def effects() -> List[Tuple[int, str]]:
+    return [
+        (DAM_CRITICAL, tr("combat.critical", "critical")),
+        # DAM_DEAD is deliberately absent: HOOK_ONDEATH always follows and
+        # reports the death by name, so including it here says the same thing
+        # twice.
+        (DAM_KNOCKED_OUT, tr("condition.knocked_out", "knocked out")),
+        (DAM_KNOCKED_DOWN, tr("condition.knocked_down", "knocked down")),
+        (DAM_BLIND, tr("condition.blinded", "blinded")),
+        (DAM_ON_FIRE, tr("combat.on_fire", "on fire")),
+    ]
+
+
+# Hit modes that are not "the weapon's first or second attack", from the
+# engine's HIT_MODE list. The unarmed specials are what the Unarmed skill and
+# level unlock in place of punch and kick. These words are the mod's: the bar
+# draws them as pictures and no message file the engine loads holds them --
+# the same search, and the same reasoning, as worldlog.ATTACK_MODES.
+def hit_mode(mode: int) -> Optional[str]:
+    return {
+        4: tr("attack.punch", "punch"), 5: tr("attack.kick", "kick"),
+        6: tr("attack.reload", "reload"), 7: tr("attack.reload", "reload"),
+        8: tr("attack.strong_punch", "strong punch"),
+        9: tr("attack.hammer_punch", "hammer punch"),
+        10: tr("attack.haymaker", "haymaker"), 11: tr("attack.jab", "jab"),
+        12: tr("attack.palm_strike", "palm strike"),
+        13: tr("attack.piercing_strike", "piercing strike"),
+        14: tr("attack.strong_kick", "strong kick"),
+        15: tr("attack.snap_kick", "snap kick"),
+        16: tr("attack.power_kick", "power kick"),
+        17: tr("attack.hip_kick", "hip kick"),
+        18: tr("attack.hook_kick", "hook kick"),
+        19: tr("attack.piercing_kick", "piercing kick"),
+    }.get(mode)
+
+# The interface bar's actions, at +0x10 in each item button.
+BAR_USE = 0
+BAR_RELOAD = 5
+
+def hand_name(hand: int) -> Optional[str]:
+    return {0: tr("combat.left_hand", "Left hand"),
+            1: tr("combat.right_hand", "Right hand")}.get(hand)
+
+
+def bar_words(f: List[str], last_hand: Optional[int] = None) -> Optional[str]:
+    """A COMBAT:bar line's fields as the sentence to say, or None.
+
+    What the attack button would do now: the item, the attack, whether it is
+    aimed, and what it costs. The hand is named only when it changed, which is
+    when B was pressed -- N on the same hand would otherwise say it every time.
+    """
+    if len(f) < 7:
+        return None
+    try:
+        hand, act, mode, aim, kind, ap = (int(x) for x in f[:6])
+    except ValueError:
+        return None
+    item = f[6].strip()
+    parts = [item or tr("combat.unarmed", "Unarmed")]
+    if act == BAR_USE:
+        parts.append(tr("combat.use", "use"))
+    else:
+        what = attack_mode(kind) if 0 <= mode <= 3 else hit_mode(mode)
+        if not what:
+            what = tr("combat.attack", "attack")
+        parts.append(what)
+        if aim:
+            parts.append(tr("combat.aimed", "aimed"))
+        if ap > 0:
+            parts.append(ap_cost(ap))
+    said = ", ".join(parts) + "."
+    if last_hand is not None and hand != last_hand and hand_name(hand):
+        said = "{}. {}".format(hand_name(hand), said)
+    return said
 
 
 class CombatState(NamedTuple):
@@ -61,9 +129,15 @@ class CombatState(NamedTuple):
     whose_turn: Optional[str]
 
 
-def _verb(subject: str, third: str, other: str) -> str:
-    """Agree the verb with the subject, since 'you' takes the plural form."""
-    return third if subject == "you" else other
+def _turn(who: str) -> str:
+    """Whose turn it is. "you" is the scripts' word for the player."""
+    if who == "you":
+        return tr("combat.your_turn", "Your turn.")
+    return tr("combat.turn", "{name}'s turn.", name=who)
+
+
+def _ap_of(ap: int, most: int) -> str:
+    return tr("combat.ap_of", "{ap} of {most} action points.", ap=ap, most=most)
 
 
 class CombatWatcher:
@@ -84,6 +158,13 @@ class CombatWatcher:
         # Turn order and action points stay ours, because the game never writes
         # those anywhere.
         self.narrate_damage = True
+        # The hand the last COMBAT:bar line was about.
+        self.bar_hand: Optional[int] = None
+        # The called-shot window's chances, as the to-hit hook heard them while
+        # it drew: body part -> (chance, the game's name for the part), and
+        # the critter they were worked out against.
+        self.aims = {}
+        self.aim_target: Optional[str] = None
 
     def reset(self) -> None:
         self.__init__()
@@ -93,16 +174,13 @@ class CombatWatcher:
 
     def summary(self) -> str:
         if not self.in_combat:
-            return "Not in combat."
+            return tr("combat.not_in_combat", "Not in combat.")
         parts = []
         if self.whose_turn:
-            parts.append(
-                "Your turn" if self.whose_turn == "you"
-                else "{}'s turn".format(self.whose_turn)
-            )
+            parts.append(_turn(self.whose_turn))
         if self.ap is not None and self.max_ap is not None:
-            parts.append("{} of {} action points".format(self.ap, self.max_ap))
-        return ". ".join(parts) + "." if parts else "In combat."
+            parts.append(_ap_of(self.ap, self.max_ap))
+        return " ".join(parts) if parts else tr("combat.in_combat", "In combat.")
 
     def handle(self, line: str) -> List[str]:
         """One COMBAT: line in, zero or more things to say out."""
@@ -122,6 +200,38 @@ class CombatWatcher:
             return self._death(fields)
         if head == "target":
             return self._target(fields)
+        if head == "bar":
+            return self._bar(fields)
+        if head == "aim":
+            return self._aim(fields)
+        return []
+
+    def _bar(self, f: List[str]) -> List[str]:
+        said = bar_words(f, self.bar_hand)
+        try:
+            self.bar_hand = int(f[0])
+        except (ValueError, IndexError):
+            pass
+        return [said] if said else []
+
+    def _aim(self, f: List[str]) -> List[str]:
+        """One body part's chance, as the called-shot window worked it out.
+
+        Silent: the window watcher reads these when the window is up. A new
+        target starts a fresh table, so a chance against one critter is never
+        read out over the window for another.
+        """
+        if len(f) < 4:
+            return []
+        try:
+            loc, chance = int(f[0]), int(f[1])
+        except ValueError:
+            return []
+        target = f[3].strip()
+        if target != self.aim_target:
+            self.aims = {}
+            self.aim_target = target
+        self.aims[loc] = (chance, f[2].strip())
         return []
 
     def _target(self, f: List[str]) -> List[str]:
@@ -157,7 +267,7 @@ class CombatWatcher:
             self.in_combat = False
             self.whose_turn = None
             self.ap = None
-            return ["Combat over."] if was else []
+            return [tr("combat.over", "Combat over.")] if was else []
 
         self.in_combat = True
         if event == TURN_START:
@@ -170,8 +280,8 @@ class CombatWatcher:
                 self.ap = None
                 # AP arrives on its own line moments later; announcing the turn
                 # without waiting keeps it responsive, and the AP line follows.
-                return ["Your turn."]
-            return ["{}'s turn.".format(who)] if who else []
+                return [_turn(who)]
+            return [_turn(who)] if who else []
         return []
 
     def _ap(self, f: List[str]) -> List[str]:
@@ -187,9 +297,9 @@ class CombatWatcher:
         # that only the remainder does -- "3 action points" every time you take
         # a step, with the maximum repeated each time, is unbearable.
         if first:
-            return ["{} of {} action points.".format(cur, mx)]
+            return [_ap_of(cur, mx)]
         if cur == 0:
-            return ["No action points left."]
+            return [tr("combat.no_ap", "No action points left.")]
         return ["{}.".format(cur)]
 
     def _damage(self, f: List[str]) -> List[str]:
@@ -210,15 +320,18 @@ class CombatWatcher:
         except ValueError:
             return []
 
-        effects = [name for bit, name in EFFECTS if flags & bit]
-        text = "{} {} {} for {}".format(
-            attacker.capitalize() if attacker == "you" else attacker,
-            _verb(attacker, "hit", "hits"),
-            target,
-            amount_n,
-        )
-        if effects:
-            text += ", " + ", ".join(effects)
+        hurt = [name for bit, name in effects() if flags & bit]
+        if attacker == "you":
+            text = tr("combat.you_hit", "You hit {target} for {damage}",
+                      target=target, damage=amount_n)
+        elif target == "you":
+            text = tr("combat.hits_you", "{attacker} hits you for {damage}",
+                      attacker=attacker, damage=amount_n)
+        else:
+            text = tr("combat.hits", "{attacker} hits {target} for {damage}",
+                      attacker=attacker, target=target, damage=amount_n)
+        if hurt:
+            text += ", " + ", ".join(hurt)
         return [text + "."]
 
     def _miss(self, f: List[str]) -> List[str]:
@@ -231,13 +344,15 @@ class CombatWatcher:
         except ValueError:
             return []
         attacker, target = f[1], f[2]
-        text = "{} {} {}".format(
-            attacker.capitalize() if attacker == "you" else attacker,
-            _verb(attacker, "miss", "misses"),
-            target,
-        )
+        if attacker == "you":
+            text = tr("combat.you_miss", "You miss {target}", target=target)
+        elif target == "you":
+            text = tr("combat.misses_you", "{attacker} misses you", attacker=attacker)
+        else:
+            text = tr("combat.misses", "{attacker} misses {target}",
+                      attacker=attacker, target=target)
         if result == ROLL_CRITICAL_MISS:
-            text += ", critical miss"
+            text += ", " + tr("combat.critical_miss", "critical miss")
         return [text + "."]
 
     def _death(self, f: List[str]) -> List[str]:
@@ -245,5 +360,5 @@ class CombatWatcher:
             return []
         who = f[0]
         if who == "you":
-            return ["You are dead."]
-        return ["{} dies.".format(who)]
+            return [tr("combat.you_die", "You are dead.")]
+        return [tr("combat.dies", "{name} dies.", name=who)]
