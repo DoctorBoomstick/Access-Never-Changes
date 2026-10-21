@@ -367,6 +367,36 @@ def launch_game(game: str):
         return None
 
 
+def hand_over_again_on_restart(launched, app, hand_over=None) -> threading.Thread:
+    """Hand the front over again if the game restarts itself before it opens.
+
+    sfall does that on a first launch where two high resolution patches meet:
+    it asks which to keep, and on Yes starts a new game and quits. That game is
+    sfall's, not ours, the Yes keypress has spent the right to the front this
+    program handed over, and so it came up behind everything with "Failure
+    initializing input devices" -- the very failure the hand-over exists for.
+    The installer now makes sfall's change itself, so this is for whatever it
+    could not: an exe it did not recognise, or Steam putting the old one back.
+
+    A thread waiting on the process, not the poll loop: the new game opens its
+    window within a second or two, and the loop looks only every two seconds
+    while nothing is connected. The game window is the test of "before it
+    opened" -- a game that had one and then ended was closed, not restarted.
+    """
+    hand_over = hand_over or let_the_game_come_to_the_front
+
+    def watch() -> None:
+        launched.wait()
+        if app.hwnd is None:
+            print("[launch] the game ended before opening; handing the front "
+                  "to whatever it started", flush=True)
+            hand_over()
+
+    thread = threading.Thread(target=watch, name="restart-watch", daemon=True)
+    thread.start()
+    return thread
+
+
 class StopWhenGameCloses:
     """True once the game this run was attached to has gone.
 
@@ -476,6 +506,7 @@ def main(argv=None) -> int:
             speaker.speak(tr("start.no_launch", "Access Never Changes could not start Fallout 2."))
             time.sleep(4)
             return 1
+        hand_over_again_on_restart(launched, app)
 
     exit_with_game = args.exit_with_game
     if exit_with_game is None:

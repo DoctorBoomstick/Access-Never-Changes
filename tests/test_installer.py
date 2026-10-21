@@ -144,6 +144,108 @@ class TestUninstall(_Dir):
         self.assertIn("DebugMode=0", read(self.ddraw))
 
 
+class TestMashExe(_Dir):
+    """The installer makes sfall's own hi-res change to fallout2.exe."""
+
+    def setUp(self):
+        super().setUp()
+        self.exe = os.path.join(self.root, "fallout2.exe")
+        self.hrp = bytes(range(256)) * 0x1000
+        plain = bytearray(self.hrp)
+        for offset, new in install.HRP_UNDO:
+            plain[offset:offset + len(new)] = new
+        self.plain = bytes(plain)
+        self.hashes = mock.patch.multiple(
+            install,
+            HRP_EXE_SHA256=install.hashlib.sha256(self.hrp).hexdigest(),
+            PLAIN_EXE_SHA256=install.hashlib.sha256(self.plain).hexdigest())
+        self.hashes.start()
+        self.quiet = mock.patch("builtins.print")
+        self.quiet.start()
+
+    def tearDown(self):
+        self.quiet.stop()
+        self.hashes.stop()
+        super().tearDown()
+
+    def exe_bytes(self):
+        with open(self.exe, "rb") as fh:
+            return fh.read()
+
+    def write_exe(self, data):
+        with open(self.exe, "wb") as fh:
+            fh.write(data)
+
+    def test_rpu_exe_is_switched_and_kept(self):
+        self.write_exe(self.hrp)
+        install.undo_mash_exe(self.root, check_only=False)
+        self.assertEqual(self.exe_bytes(), self.plain)
+        with open(self.exe + install.BACKUP_SUFFIX, "rb") as fh:
+            self.assertEqual(fh.read(), self.hrp)
+
+    def test_check_only_changes_nothing(self):
+        self.write_exe(self.hrp)
+        install.undo_mash_exe(self.root, check_only=True)
+        self.assertEqual(self.exe_bytes(), self.hrp)
+
+    def test_an_unknown_exe_is_left_alone(self):
+        self.write_exe(b"something else")
+        install.undo_mash_exe(self.root, check_only=False)
+        self.assertEqual(self.exe_bytes(), b"something else")
+        self.assertFalse(os.path.exists(self.exe + install.BACKUP_SUFFIX))
+
+    def test_uninstall_puts_it_back(self):
+        self.write_exe(self.hrp)
+        install.undo_mash_exe(self.root, check_only=False)
+        self.assertEqual(install.restore_mash_exe(self.root), 0)
+        self.assertEqual(self.exe_bytes(), self.hrp)
+        self.assertFalse(os.path.exists(self.exe + install.BACKUP_SUFFIX))
+
+    def test_uninstall_leaves_an_exe_changed_since(self):
+        self.write_exe(self.hrp)
+        install.undo_mash_exe(self.root, check_only=False)
+        self.write_exe(b"patched by something else")
+        install.restore_mash_exe(self.root)
+        self.assertEqual(self.exe_bytes(), b"patched by something else")
+
+
+# sfall's own rename of RPU's exe, where a machine has one: the real bytes
+# against the real hashes, which the fake exe above cannot check.
+_RPU_EXE = r"C:\Program Files (x86)\Steam\steamapps\common\Fallout 2\fallout2HR.exe"
+
+
+class TestRealMashExe(unittest.TestCase):
+    @unittest.skipUnless(os.path.exists(_RPU_EXE), "no RPU fallout2HR.exe here")
+    def test_the_bytes_give_the_plain_game(self):
+        with open(_RPU_EXE, "rb") as fh:
+            data = bytearray(fh.read())
+        if install.hashlib.sha256(data).hexdigest() != install.HRP_EXE_SHA256:
+            self.skipTest("fallout2HR.exe here is not RPU's")
+        for offset, new in install.HRP_UNDO:
+            data[offset:offset + len(new)] = new
+        self.assertEqual(install.hashlib.sha256(data).hexdigest(),
+                         install.PLAIN_EXE_SHA256)
+
+
+class TestHandOverOnRestart(unittest.TestCase):
+    class _Waits:
+        def wait(self):
+            return 0
+
+    def handed(self, hwnd):
+        app, calls = mock.Mock(hwnd=hwnd), []
+        with mock.patch("builtins.print"):
+            f2access.hand_over_again_on_restart(
+                self._Waits(), app, hand_over=lambda: calls.append(1)).join(2)
+        return bool(calls)
+
+    def test_a_game_gone_before_its_window_is_handed_over(self):
+        self.assertTrue(self.handed(None))
+
+    def test_a_game_that_was_played_and_closed_is_not(self):
+        self.assertFalse(self.handed(1234))
+
+
 class _App:
     def __init__(self):
         self.up = False

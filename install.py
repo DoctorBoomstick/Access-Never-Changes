@@ -22,6 +22,7 @@ wholesale; the backups are made either way.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import sys
@@ -166,6 +167,29 @@ SCRIPTS = ("gl_world.int", "gl_combat.int", "gl_inven.int", "gl_dialog.int")
 
 GAME_MARKERS = ("fallout2.exe", "master.dat")
 
+# **sfall's high resolution question, answered before it is asked.**
+#
+# The Restoration Project leaves fallout2.exe patched to load Mash's hi-res
+# patch (f2_res.dll). With HiResMode=1 set above, sfall finds both patches on
+# the first launch and asks which to keep. Yes -- the answer the mod needs --
+# makes sfall undo Mash's patch in fallout2.exe, start the game again and quit.
+# That second game is started by sfall, not by the launcher, so Windows keeps
+# it behind everything, and Fallout stops with "Failure initializing input
+# devices". The next launch works, which is a poor first impression to give.
+#
+# So the installer makes sfall's edit itself, and the question never comes up.
+# These are the bytes sfall 4.4.8 writes (read from its own code, and checked
+# against an exe it had patched): the call into f2_res.dll put back to the
+# instruction it replaced, and the f2_res.dll import cleared. Only an exe with
+# exactly RPU's hash is touched, and only a result with exactly the plain
+# game's hash -- the one the mod's addresses were measured on -- is kept.
+HRP_EXE_SHA256 = "048684f802b05859e2b160fa358be1b99075bf31b49a312a536645581aa16b5f"
+PLAIN_EXE_SHA256 = "581c09c20fee70edc09ec412ee034e62e89cdefa13092e534ddd17d23f8163cb"
+HRP_UNDO = (
+    (0xD4880, bytes.fromhex("c70588276b0000e74d00")),
+    (0xEE5C0, bytes(0x27)),
+)
+
 COMMON_LOCATIONS = [
     r"C:\Program Files (x86)\Steam\steamapps\common\Fallout 2",
     r"C:\Program Files\Steam\steamapps\common\Fallout 2",
@@ -265,6 +289,81 @@ def backup(path: str) -> str:
     return dest
 
 
+def sha256_of(path: str) -> str:
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def undo_mash_exe(game: str, check_only: bool) -> None:
+    """Make sfall's own change to fallout2.exe, so it does not ask on launch.
+
+    Never counted as a problem when it cannot be done: sfall then asks, as it
+    would have anyway, and the launcher hands the restarted game the front.
+    """
+    exe = os.path.join(game, "fallout2.exe")
+    try:
+        found = sha256_of(exe)
+    except OSError as exc:
+        print("  fallout2.exe: could not read it ({})".format(exc))
+        return
+    if found == PLAIN_EXE_SHA256:
+        print("  fallout2.exe: already uses sfall's high resolution patch")
+        return
+    if found != HRP_EXE_SHA256:
+        print("  fallout2.exe: not a version this installer knows; left as it "
+              "is, and sfall may ask about high resolution on the first launch")
+        return
+    if check_only:
+        print("  fallout2.exe: would switch it to sfall's high resolution patch")
+        return
+    data = bytearray(open(exe, "rb").read())
+    for offset, new in HRP_UNDO:
+        data[offset:offset + len(new)] = new
+    if hashlib.sha256(data).hexdigest() != PLAIN_EXE_SHA256:
+        print("  fallout2.exe: the change did not come out as expected; left "
+              "as it is")
+        return
+    try:
+        backup(exe)
+        # Written beside it and swapped in, so a failure halfway leaves the
+        # game's exe whole rather than half of one.
+        with open(exe + ".new", "wb") as fh:
+            fh.write(data)
+        os.replace(exe + ".new", exe)
+    except OSError as exc:
+        print("  fallout2.exe: could not write it ({}); sfall will ask about "
+              "high resolution on the first launch".format(exc))
+        return
+    print("  fallout2.exe: switched to sfall's high resolution patch "
+          "(original kept alongside it)")
+
+
+def restore_mash_exe(game: str) -> int:
+    """Put back the exe undo_mash_exe() changed. Returns problems found.
+
+    Needed because uninstalling puts HiResMode back to RPU's 0, which hands the
+    job to Mash's patch -- and an exe that no longer loads it would leave the
+    player with no high resolution patch at all. Only an exe still exactly as
+    the installer left it is replaced.
+    """
+    exe = os.path.join(game, "fallout2.exe")
+    saved = exe + BACKUP_SUFFIX
+    if not os.path.exists(saved):
+        return 0
+    try:
+        if (sha256_of(exe) == PLAIN_EXE_SHA256
+                and sha256_of(saved) == HRP_EXE_SHA256):
+            shutil.copy2(saved, exe)
+            print("  fallout2.exe: restored")
+        else:
+            print("  fallout2.exe: changed since install, left as it is")
+        os.remove(saved)
+    except OSError as exc:
+        print("  !! fallout2.exe: {}".format(exc))
+        return 1
+    return 0
+
+
 def install(game: str, check_only: bool, replace_config: bool) -> int:
     problems = 0
 
@@ -331,6 +430,8 @@ def install(game: str, check_only: bool, replace_config: bool) -> int:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(patched) + "\n")
             print("  {}: written (original kept alongside it)".format(filename))
+
+    undo_mash_exe(game, check_only)
 
     # -- stale copies --------------------------------------------------
     #
@@ -428,6 +529,8 @@ def uninstall(game: str) -> int:
         for change in changes:
             print("  {}: {}".format(filename, change))
         print("  {}: restored".format(filename))
+
+    problems += restore_mash_exe(game)
 
     print()
     if problems:
