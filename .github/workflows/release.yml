@@ -70,4 +70,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" (Get-Item dist\AccessNeverChanges-*-setup.exe).FullName --draft --title "Access Never Changes ${{ steps.version.outputs.version }}" --generate-notes
+          python tools/changelog.py --out dist\notes.md
+          if ($LASTEXITCODE -ne 0) { throw "write this version's notes in CHANGELOG.md first" }
+          gh release create "${{ github.ref_name }}" (Get-Item dist\AccessNeverChanges-*-setup.exe).FullName --draft --title "Access Never Changes ${{ steps.version.outputs.version }}" --notes-file dist\notes.md

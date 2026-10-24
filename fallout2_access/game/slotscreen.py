@@ -67,6 +67,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 from ..i18n import tr
+from .. import codepage
 
 # The screen is recognised by its own window being OPEN, not by a flag.
 #
@@ -293,7 +294,7 @@ class SlotScreen:
         def text(at: int) -> str:
             end = blob.find(b"\x00", at)
             raw = blob[at:end if end >= 0 else len(blob)]
-            return raw.decode("cp1252", "replace").strip()
+            return raw.decode(codepage.game(), "replace").strip()
 
         return text(OFF_CHARACTER), text(OFF_DESCRIPTION)
 

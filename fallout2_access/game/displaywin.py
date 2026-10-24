@@ -12,7 +12,7 @@ These are the real sentences, already written, already translated.
 
 **Layout**, established by planting a known string and looking at where it
 landed. Records are 256 bytes; the text starts at +8 and runs to a NUL; a
-leading byte with the high bit set is a colour code and not part of the message.
+leading bullet (0x95) marks the first line of a message and is not part of it.
 
 **Capacity: exactly 100 records**, measured against the live process. The beacon
 anchored at 0x7BCFC0 and the zeroed run ended at 0x7C33C0, which is anchor +
@@ -56,6 +56,11 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
+from .. import codepage
+
+# The byte the engine puts in front of the first line of each message.
+BULLET = 0x95
+
 RECORD = 0x100      # bytes per message record
 TEXT_OFFSET = 8     # message text begins here
 
@@ -80,10 +85,12 @@ def _record_parts(record: bytes) -> Tuple[bool, str]:
     if len(record) < TEXT_OFFSET + 1:
         return False, ""
     body = record[TEXT_OFFSET:]
-    # A leading high-bit byte is a colour code the engine prefixes to the first
-    # line of each message. It is formatting, not something anyone said -- but
-    # its *presence* is meaningful, so it is reported rather than just dropped.
-    head = bool(body and body[0] >= 0x80)
+    # The bullet (0x95) the engine prefixes to the first line of each message.
+    # It is formatting, not something anyone said -- but its *presence* is
+    # meaningful, so it is reported rather than just dropped. Only that byte:
+    # "any high bit" also took the first letter of every Russian line that
+    # began with a capital, and of a French one beginning with an accent.
+    head = bool(body and body[0] == BULLET)
     if head:
         body = body[1:]
     end = body.find(b"\x00")
@@ -92,7 +99,7 @@ def _record_parts(record: bytes) -> Tuple[bool, str]:
     if not body:
         return head, ""
     try:
-        text = body.decode("cp1252")
+        text = body.decode(codepage.game())
     except Exception:
         return head, ""
     text = text.strip()
@@ -124,7 +131,10 @@ def _readable(text: str) -> bool:
     # through a per-character test, so the length is a test too: the engine does
     # not write one-character messages, and every real line this mod has seen
     # runs to several words.
-    printable = sum(1 for c in text if 32 <= ord(c) < 127)
+    # In a Western game a real line is nearly all ASCII, and high bytes are
+    # what noise looks like. A Russian or Polish line is nearly all letters
+    # from above 127, and counting only ASCII threw every one of them away.
+    printable = sum(1 for c in text if codepage.text_char(c))
     return printable >= max(3, len(text) * 0.8)
 
 
@@ -208,13 +218,13 @@ class DisplayWindow:
                 # sit in front of the text, and BOTH candidate offsets parse the
                 # beacon correctly -- so the choice cannot be made by trying
                 # each and seeing which reads back. Look at the byte before the
-                # text instead: high bit set means a colour code is there and
+                # text instead: the bullet there means a colour code is and
                 # the record begins one earlier. Getting this wrong shifts every
                 # subsequent record by a byte, which goes unnoticed until a line
                 # arrives without a colour code and loses its first letter.
                 lead = TEXT_OFFSET
                 before = self.proc.read_chunked(addr - 1, 1) or b"\x00"
-                if before[0] >= 0x80:
+                if before[0] == BULLET:
                     lead = TEXT_OFFSET + 1
                 start = addr - lead
                 probe = self.proc.read_chunked(start, RECORD) or b""

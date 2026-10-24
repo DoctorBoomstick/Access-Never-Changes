@@ -30,6 +30,7 @@ from ..msg.memlist import read_message_list
 from . import appearance
 from ..i18n import tr
 from .. import words
+from .. import codepage
 
 # -- confirmed addresses -----------------------------------------------------
 
@@ -472,7 +473,7 @@ class CharGen:
         text = text.strip()
         if not text or len(text) > 48:
             return None
-        printable = sum(1 for ch in text if 32 <= ord(ch) < 127)
+        printable = sum(1 for ch in text if codepage.text_char(ch))
         if printable != len(text):
             return None
         # A label has letters in it. A run of punctuation does not.

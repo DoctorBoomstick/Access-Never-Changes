@@ -17,7 +17,7 @@ game: M given back to the engine, the dead no longer hidden, and which way a
 critter is looking said aloud.
 """
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 NAME = "Fat Man"
 
 

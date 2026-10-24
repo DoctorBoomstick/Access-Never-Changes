@@ -297,6 +297,16 @@ class TestLabelText(unittest.TestCase):
     def test_high_byte_rubbish_is_refused(self):
         self.assertIsNone(self.label("\xff\xfe\xd0\x19"))
 
+    def test_a_russian_label_is_kept_in_a_russian_game(self):
+        from fallout2_access import codepage
+
+        codepage.set_language("russian")
+        try:
+            self.assertEqual(self.label("Одарённый"), "Одарённый")
+            self.assertIsNone(self.label("\xff\xfe\xd0\x19"))
+        finally:
+            codepage.set_language("english")
+
     def test_punctuation_with_no_letters_is_refused(self):
         self.assertIsNone(self.label(">?@APP@"[0:0] + "@?><"))
 

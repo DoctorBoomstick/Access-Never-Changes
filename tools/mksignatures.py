@@ -169,8 +169,8 @@ REGISTRY = {
     # found: its ddraw.dll names the address where the engine only indexes it.
     "WM_WORLD_X":        (0x00672E0C, [("..game.worldmap", "WORLD_X")]),
     "WM_WORLD_Y":        (0x00672E10, [("..game.worldmap", "WORLD_Y")]),
-    "WM_DEST_X":         (0x00672E5C, [("..game.worldmap", "DEST_X")]),
-    "WM_DEST_Y":         (0x00672E60, [("..game.worldmap", "DEST_Y")]),
+    "WM_DEST_X":         (0x00672E20, [("..game.worldmap", "DEST_X")]),
+    "WM_DEST_Y":         (0x00672E24, [("..game.worldmap", "DEST_Y")]),
     "WM_CURRENT_AREA":   (0x00672E08, [("..game.worldmap", "CURRENT_AREA")]),
     "WM_TRAVELLING":     (0x00672E1C, [("..game.worldmap", "TRAVELLING")]),
     "WM_SCROLL_X":       (0x0051DE2C, [("..game.worldmap", "SCROLL_X")]),

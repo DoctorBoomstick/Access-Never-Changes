@@ -41,6 +41,19 @@ class TestWorldLog(unittest.TestCase):
         self.assertEqual(self.f.log.last_hex.contents, "you")
         self.assertEqual(self.f.log.last_hex.announce(), "you")
 
+    def test_a_russian_game_is_read_in_its_own_codepage(self):
+        """The scripts write the game's bytes; Russian ones are cp1251."""
+        from fallout2_access import codepage
+
+        codepage.set_language("russian")
+        try:
+            with open(self.f.path, "ab") as fh:
+                fh.write("WORLD:hex 17488 dist 0 : Куст|\n".encode("cp1251"))
+            self.f.log.poll()
+            self.assertEqual(self.f.log.last_hex.contents, "Куст")
+        finally:
+            codepage.set_language("english")
+
     def test_distance_is_pluralised(self):
         self.f.write("WORLD:hex 17687 dist 1 : empty|")
         self.assertEqual(self.f.log.last_hex.announce(), "empty, 1 hex")

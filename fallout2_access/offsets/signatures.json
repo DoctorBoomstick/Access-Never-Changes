@@ -748,18 +748,18 @@
       "pattern": "04 2E 67 00 89 0D ?? ?? ?? ?? 89 35 0C 2E 67 00"
     },
     "WM_DEST_X": {
-      "address": 6762076,
-      "operand_offset": 4,
+      "address": 6762016,
+      "operand_offset": 8,
       "owners": [
         [
           "..game.worldmap",
           "DEST_X"
         ]
       ],
-      "pattern": "67 00 89 15 ?? ?? ?? ?? 89 15 60 2E"
+      "pattern": "1C 2E 67 00 89 CB 89 0D ?? ?? ?? ?? 89 0D 24 2E 67 00 89 15"
     },
     "WM_DEST_Y": {
-      "address": 6762080,
+      "address": 6762020,
       "operand_offset": 4,
       "owners": [
         [
@@ -767,7 +767,7 @@
           "DEST_Y"
         ]
       ],
-      "pattern": "67 00 89 15 ?? ?? ?? ?? 89 15 64 2E"
+      "pattern": "67 00 89 0D ?? ?? ?? ?? 89 15 28 2E"
     },
     "WM_ENCOUNTER_ODDS": {
       "address": 6762424,

@@ -73,6 +73,7 @@ Source: "{#Frozen}\access.ini"; DestDir: "{app}"; Flags: onlyifdoesntexist
 Name: "{group}\Fallout 2 (Access Never Changes)"; Filename: "{app}\{#ExeName}"; Parameters: "--launch"; WorkingDir: "{app}"; Comment: "Start Fallout 2 with the screen reader mod"
 Name: "{group}\Access Never Changes, mod only"; Filename: "{app}\{#ExeName}"; WorkingDir: "{app}"; Comment: "Start the mod for a game you start yourself"
 Name: "{group}\Access Never Changes manual"; Filename: "{app}\manual.html"
+Name: "{group}\Access Never Changes changelog"; Filename: "{sys}\notepad.exe"; Parameters: """{app}\changelog.txt"""
 Name: "{group}\Access Never Changes settings"; Filename: "{sys}\notepad.exe"; Parameters: """{app}\access.ini"""
 Name: "{group}\Access Never Changes folder"; Filename: "{app}"
 Name: "{group}\Uninstall Access Never Changes"; Filename: "{uninstallexe}"

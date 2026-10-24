@@ -47,17 +47,18 @@ Edit `docs/manual.html`, then run `python tools/mkreadme.py`. It copies the manu
 ## Releasing
 
 1. Set the version in `fallout2_access/version.py`. The owner moves MAJOR and MINOR; PATCH moves with every change.
-2. Run the tests, `tools/mklang.py --check` and `tools/mkreadme.py --check`.
-3. Commit, push, then tag and push the tag: `git tag v1.0.1`, `git push origin v1.0.1`.
+2. Give the release its heading and date in `CHANGELOG.md`, and say what changed for players.
+3. Run the tests, `tools/mklang.py --check` and `tools/mkreadme.py --check`.
+4. Commit, push, then tag and push the tag: `git tag v1.0.1`, `git push origin v1.0.1`.
 
-The tag starts `.github/workflows/release.yml`: it runs the tests, freezes the program with PyInstaller (`installer/freeze.py`, one folder), checks the frozen program runs `install.py`, builds `installer/AccessNeverChanges.iss` with Inno Setup, and attaches `AccessNeverChanges-<version>-setup.exe` to a **draft** release. Read the draft over and publish it by hand. The workflow can also be run from the Actions tab without a tag; the installer is then a download on the run. It is built there because pip on the development machine cannot reach PyPI.
+The tag starts `.github/workflows/release.yml`: it runs the tests, freezes the program with PyInstaller (`installer/freeze.py`, one folder), checks the frozen program runs `install.py`, builds `installer/AccessNeverChanges.iss` with Inno Setup, and attaches `AccessNeverChanges-<version>-setup.exe` to a **draft** release. The draft's notes are this version's section of `CHANGELOG.md` (`tools/changelog.py`), and the run fails if that section is missing or empty. Read the draft over and publish it by hand. The workflow can also be run from the Actions tab without a tag; the installer is then a download on the run. It is built there because pip on the development machine cannot reach PyPI.
 
 What the installer does:
 
 - asks where Fallout 2 is, suggesting a copy from Steam's or GOG's registry entries, and refuses one without sfall and the Restoration Project (`mods\rpu.dat`), saying where to get them;
 - installs into `<Fallout 2>\Access Never Changes\`, which ordinary users can write to, so `access.ini` and `lang\` can be edited without admin;
 - runs `AccessNeverChanges.exe install "<game>"` (that is `install.py`), offering `install.log` if anything needs the player's attention;
-- adds shortcuts to the Start menu's Lights Not Included folder, each named for this mod because the folder is shared by the brand's games and mods, and the Windows 11 Start menu shows no folder inside a folder: Fallout 2 (Access Never Changes) for the game and mod together, then Access Never Changes mod only, manual, settings and folder, and Uninstall Access Never Changes. The desktop shortcut, if asked for, is also Fallout 2 (Access Never Changes).
+- adds shortcuts to the Start menu's Lights Not Included folder, each named for this mod because the folder is shared by the brand's games and mods, and the Windows 11 Start menu shows no folder inside a folder: Fallout 2 (Access Never Changes) for the game and mod together, then Access Never Changes mod only, manual, changelog, settings and folder, and Uninstall Access Never Changes. The desktop shortcut, if asked for, is also Fallout 2 (Access Never Changes).
 
 Uninstalling runs `AccessNeverChanges.exe uninstall`, which removes the scripts and sets back only the settings the mod changed, to the values in its backups.
 

@@ -531,7 +531,7 @@ class Process:
         """Read a 32-bit pointer out of the target."""
         return self.read_u32(addr)
 
-    def read_cstring(self, addr: int, max_len: int = 256, encoding: str = "cp1252") -> Optional[str]:
+    def read_cstring(self, addr: int, max_len: int = 256, encoding: Optional[str] = None) -> Optional[str]:
         """Read a NUL-terminated string, stopping safely at page boundaries.
 
         ReadProcessMemory fails for the *whole* range if any part of it is
@@ -541,7 +541,11 @@ class Process:
         produced unpredictable gaps all over the mod.
 
         So: read page by page, and stop as soon as the next page is unreadable.
+        The text is decoded in the game's codepage unless `encoding` says otherwise.
         """
+        if encoding is None:
+            from ..codepage import game
+            encoding = game()
         out = bytearray()
         pos = 0
         while pos < max_len:

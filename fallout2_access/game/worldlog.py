@@ -24,6 +24,7 @@ from . import charsheet, screens
 from ..i18n import tr
 from .. import words
 from .. import i18n
+from .. import codepage
 
 PREFIX = "WORLD:"
 # gl_combat.ssl writes on the same channel. Two scripts, one log file: they are
@@ -1038,7 +1039,7 @@ class WorldLog:
 
         out: List[str] = []
         try:
-            with open(self.path, "r", encoding="utf-8", errors="replace") as fh:
+            with open(self.path, "r", encoding=codepage.game(), errors="replace") as fh:
                 fh.seek(self._pos)
                 chunk = fh.read()
                 self._pos = fh.tell()

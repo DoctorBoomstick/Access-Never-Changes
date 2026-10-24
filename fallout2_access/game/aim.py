@@ -33,6 +33,7 @@ from typing import NamedTuple, Optional
 from ..input.send import guarded_tap, move_mouse_relative, park_pointer
 from . import worldlog
 from ..i18n import tr
+from .. import codepage
 
 # Fallout 2's tile numbering is row-major with 200 tiles to a row, so a tile
 # number splits into a row and a column that behave like coordinates. The screen
@@ -237,7 +238,7 @@ class Aimer:
         if self._pos is None or self._pos > size:
             self._pos = size
             return ""
-        with open(self.log_path, "r", encoding="utf-8", errors="replace") as fh:
+        with open(self.log_path, "r", encoding=codepage.game(), errors="replace") as fh:
             fh.seek(self._pos)
             chunk = fh.read()
             self._pos = fh.tell()

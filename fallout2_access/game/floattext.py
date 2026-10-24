@@ -70,13 +70,7 @@ MAX_PIXELS = 200_000
 FONT_FILES = {101: "font1.aaf", 103: "font3.aaf"}
 
 # Which single-byte codepage each translation's text and fonts are drawn in.
-# Anything not listed is Western European, which is what the game shipped in.
-CODECS = {
-    "russian": "cp1251",
-    "polish": "cp1250",
-    "czech": "cp1250",
-    "hungarian": "cp1250",
-}
+from ..codepage import CODECS  # noqa: F401  (appearance imports it from here)
 
 
 # -- the font ------------------------------------------------------------------

@@ -42,6 +42,7 @@ from typing import Optional, Tuple
 
 from ..input.send import guarded_tap, move_mouse_relative, require_focus
 from ..i18n import tr
+from .. import codepage
 
 # The engine's cursor position, x at the address and y four bytes later.
 # Confirmed live against the game's own report: the script asks sfall where the
@@ -216,7 +217,7 @@ class ScriptMouse:
         if self._pos is None or self._pos > size:
             self._pos = size
             return ""
-        with open(self.log_path, "r", encoding="utf-8", errors="replace") as fh:
+        with open(self.log_path, "r", encoding=codepage.game(), errors="replace") as fh:
             fh.seek(self._pos)
             chunk = fh.read()
             self._pos = fh.tell()

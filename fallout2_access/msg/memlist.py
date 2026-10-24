@@ -24,6 +24,7 @@ from __future__ import annotations
 import struct
 from typing import Dict, Iterator, List, NamedTuple, Optional, Sequence
 
+from .. import codepage
 from ..memory.process import Process, Region
 
 ITEM_SIZE = 16
@@ -75,10 +76,14 @@ def _printable(s: Optional[str]) -> bool:
     entries. Treating "" as invalid made the array walk stop at the first one,
     which truncated stat.msg to 39 of its 97 entries and left skill.msg with a
     wrong base address that matched no static global.
+
+    Letters above 127 are text in every language: this is what the engine
+    points to from a record already shaped like a message, and "Stärke" or
+    "Сила" refused here left the character sheet saying "Stat 0".
     """
     if s is None:
         return False
-    return all(32 <= ord(c) < 127 or c in "\t" for c in s)
+    return all(codepage.text_char(c, letters=True) or c == "\t" for c in s)
 
 
 class _Peek:

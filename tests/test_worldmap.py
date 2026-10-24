@@ -416,6 +416,40 @@ class TestTravelAnnouncements(unittest.TestCase):
         watcher.poll(ann)
         self.assertTrue(watcher._travelling)
 
+    def test_a_journey_ticks_once_per_new_square_and_says_nothing(self):
+        """Heard the way a walk is heard: a step on each square, no speech."""
+        mem = _world()
+        watcher = _watcher(mem)
+        ticks = []
+        watcher.ticker.step = lambda: ticks.append(1)
+        ann = _Ann()
+        watcher.enter(ann)
+        mem.set_i32(worldmap.TRAVELLING, 1)
+        mem.set_i32(worldmap.DEST_X, 373)
+        mem.set_i32(worldmap.DEST_Y, 122)
+        watcher.poll(ann)
+        ann.said.clear()
+        x = mem.read_i32(worldmap.WORLD_X)
+        for moved in (1, 2, worldmap.SUBTILE, worldmap.SUBTILE + 1,
+                      2 * worldmap.SUBTILE):
+            mem.set_i32(worldmap.WORLD_X, x + moved)
+            watcher.poll(ann)
+        self.assertEqual(len(ticks), 2)
+        self.assertEqual(ann.said, [])
+
+    def test_moving_the_cursor_makes_no_tick(self):
+        """The player moved it and knows it; the tick is for the marker."""
+        mem = _world()
+        watcher = _watcher(mem)
+        ticks = []
+        watcher.ticker.step = lambda: ticks.append(1)
+        ann = _Ann()
+        watcher.enter(ann)
+        ann.said.clear()
+        watcher.wm_e(ann)
+        self.assertTrue(ann.said)
+        self.assertEqual(ticks, [])
+
     def test_arriving_names_the_place(self):
         mem = _world()
         watcher = _watcher(mem)

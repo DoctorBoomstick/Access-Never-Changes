@@ -34,6 +34,7 @@ import re
 import time
 from typing import Dict, List, NamedTuple, Optional
 from ..i18n import tr
+from .. import codepage
 
 # Where the engine keeps them, relative to the game folder. Slots are 1-indexed
 # on disk and in the interface, which is worth stating because sfall's own slot
@@ -65,7 +66,7 @@ def _text_at(header: bytes, offset: int, limit: int = 32) -> str:
     if end >= 0:
         raw = raw[:end]
     try:
-        text = raw.decode("cp1252")
+        text = raw.decode(codepage.game())
     except Exception:
         return ""
     # Anything unprintable means the offset is wrong for this build, and a

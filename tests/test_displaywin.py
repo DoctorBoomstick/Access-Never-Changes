@@ -18,6 +18,7 @@ which one it is" is precisely the state the code was written to survive.
 
 import unittest
 
+from fallout2_access import codepage
 from fallout2_access.game.displaywin import (
     CAPACITY,
     RECORD,
@@ -125,6 +126,15 @@ class TestRecordText(unittest.TestCase):
     def test_mostly_high_bytes_are_not_a_message(self):
         self.assertEqual(
             _record_text(record(b"\x8a\x9e\x9f\xd0\xd8\xf0\xfe")), "")
+
+    def test_a_russian_sentence_arrives_in_russian(self):
+        """Every letter of it is above 127, and none of it is noise."""
+        text = "Вы видите: дверь."
+        codepage.set_language("russian")
+        try:
+            self.assertEqual(_record_text(record(text.encode("cp1251"))), text)
+        finally:
+            codepage.set_language("english")
 
 
 class RingTestCase(unittest.TestCase):

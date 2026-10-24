@@ -56,6 +56,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 from ..memory.process import Process
 from ..msg.memlist import read_message_list
 from ..i18n import tr
+from .. import codepage
 
 # -- addresses ---------------------------------------------------------------
 #
@@ -64,8 +65,12 @@ from ..i18n import tr
 
 WORLD_X = 0x00672E0C          # the player, in world pixels
 WORLD_Y = 0x00672E10
-DEST_X = 0x00672E5C           # where a click sent them, same units
-DEST_Y = 0x00672E60
+# Where a click sent them, same units. Written by the engine's one "go here"
+# routine (0x004C1E54) with the travelling flag, and zeroed with it on arrival.
+# 0x00672E5C, read here until 1.0.1, is where the last encounter roll was made:
+# it never matched a destination, so every journey was reported as refused.
+DEST_X = 0x00672E20
+DEST_Y = 0x00672E24
 CURRENT_AREA = 0x00672E08     # index into the area table, or -1 for open country
 TRAVELLING = 0x00672E1C       # non-zero while the marker is moving
 SCROLL_X = 0x0051DE2C         # top-left of the viewport within the world
@@ -462,7 +467,7 @@ def areas(proc: Process) -> List[Area]:
             # than to silence -- an odd-looking name is still a name, and this
             # is what a content mod that adds an area without a message will
             # hit.
-            name = blob[off:off + 40].split(b"\0")[0].decode("cp1252", "replace")
+            name = blob[off:off + 40].split(b"\0")[0].decode(codepage.game(), "replace")
         entrances: List[Entrance] = []
         for e in range(max(0, min(n_ent, MAX_ENTRANCES))):
             eo = off + A_ENTRANCES + e * ENTRANCE_STRIDE

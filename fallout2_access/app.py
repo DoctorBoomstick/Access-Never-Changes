@@ -30,6 +30,7 @@ from .game.aim import Aimer
 from .game.chargen import CharGen, MSG_EDITOR, POINTER_SECTIONS
 from .game import perkpick
 from . import words
+from . import codepage, i18n
 
 # editor.msg's own title for the perk window: "PICK A PERK".
 MSG_PICK_A_PERK = 152
@@ -2718,11 +2719,6 @@ class WorldMapWatcher(Watcher):
     # not a thing anybody did and not worth a sentence.
     SCROLL_NOTICE = 8
 
-    # How often the journey may be reported, in seconds. Travel takes in-game
-    # days and real seconds, and a progress line on every one of twenty ticks a
-    # second is not information, it is a wall.
-    PROGRESS_SECONDS = 3.0
-
     def __init__(self, proc, hwnd=None, log_path: Optional[str] = None,
                  ticker=None) -> None:
         self.proc = proc
@@ -2735,7 +2731,11 @@ class WorldMapWatcher(Watcher):
         self._dest: Optional[Tuple[int, int]] = None
         self._area: Optional[int] = None
         self._town: Optional[int] = None
-        self._spoke_at = 0.0
+        # The square the marker was last on while travelling. A journey is
+        # heard as the step tick on each new square, the way a walk is heard
+        # hex by hex; a progress line every few seconds talked over the game
+        # and said less than the rhythm does.
+        self._square: Optional[Tuple[int, int]] = None
 
     def reset(self) -> None:
         self.cursor.reset()
@@ -2744,7 +2744,7 @@ class WorldMapWatcher(Watcher):
         self._dest = None
         self._area = None
         self._town = None
-        self._spoke_at = 0.0
+        self._square = None
 
     # -- arriving ------------------------------------------------------------
 
@@ -2784,7 +2784,9 @@ class WorldMapWatcher(Watcher):
         if not moved:
             ann.answer(why)
             return
-        self.ticker.step()
+        # No tick. The player knows the cursor moved -- they moved it -- and the
+        # hex cursor on the local map is silent for the same reason. The tick
+        # belongs to the marker, which moves on its own.
         said = self.cursor.say_step(self.proc)
         if said:
             ann.answer(said)
@@ -2973,7 +2975,7 @@ class WorldMapWatcher(Watcher):
         """Note that a journey started, so `poll` does not announce it twice."""
         self._travelling = True
         self._dest = worldmap.destination(self.proc)
-        self._spoke_at = time.time()
+        self._square = worldmap.player_subtile(self.proc)
         ann.answer(said)
 
     # -- watching ------------------------------------------------------------
@@ -3093,16 +3095,16 @@ class WorldMapWatcher(Watcher):
         if travelling and not self._travelling:
             self._travelling = True
             self._dest = dest
-            self._spoke_at = time.time()
+            self._square = worldmap.player_subtile(self.proc)
             return
 
         if travelling:
             self._dest = dest or self._dest
-            if time.time() - self._spoke_at >= self.PROGRESS_SECONDS:
-                self._spoke_at = time.time()
-                said = self._journey()
-                if said:
-                    ann.say(said, interrupt=False, force=True)
+            square = worldmap.player_subtile(self.proc)
+            if square is not None and square != self._square:
+                if self._square is not None:
+                    self.ticker.step()
+                self._square = square
             return
 
         if self._travelling:
@@ -3241,6 +3243,8 @@ class App:
             print("[app] cannot determine the game's folder; is it running?",
                   flush=True)
             return False
+        print("[app] game text in {}".format(
+            codepage.set_language(i18n.game_language(game_dir))), flush=True)
         log_path = os.path.join(game_dir, "debug.log")
         if not os.path.exists(log_path):
             # Not fatal: the game creates it on launch and truncates it each

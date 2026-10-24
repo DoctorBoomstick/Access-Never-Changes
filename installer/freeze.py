@@ -15,6 +15,7 @@ The layout it makes is the one fallout2_access/paths.py expects:
         lang\\*.ini                       from lang\\
         nvdaControllerClient64.dll       from accessible_output2
         manual.html, LICENSE
+        changelog.txt                    from CHANGELOG.md
         _internal\\                       PyInstaller's; the code and its data
 
 One folder rather than one file, on purpose: a one-file exe unpacks itself to a
@@ -96,6 +97,8 @@ def assemble() -> None:
     # The manual lives in docs\ in the repo and beside the program once installed.
     shutil.copy2(os.path.join(ROOT, "docs", "manual.html"), OUT)
     shutil.copy2(os.path.join(ROOT, "LICENSE"), OUT)
+    # As .txt, so it opens in Notepad wherever nothing is set to open Markdown.
+    shutil.copy2(os.path.join(ROOT, "CHANGELOG.md"), os.path.join(OUT, "changelog.txt"))
 
 
 def main() -> int:
