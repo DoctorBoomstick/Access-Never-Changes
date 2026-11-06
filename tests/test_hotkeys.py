@@ -566,7 +566,7 @@ class TestKeyReleaseIsSwallowedToo(unittest.TestCase):
         added outside it would report twice per press.
         """
         src = self.script()
-        anchor = "if (key == DIK_SEMICOLON) then begin"
+        anchor = "if (bound(g_k_status) or bound(g_k_weapon)) then begin"
         self.assertIn(anchor, src)
         body = src[src.index(anchor):]
         body = body[:body.index("set_sfall_return")]

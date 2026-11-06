@@ -34,6 +34,7 @@ grow a key the grammar does not allow.
 from __future__ import annotations
 
 from typing import Dict, FrozenSet, Iterable, NamedTuple, Optional, Tuple
+from . import keys
 from .i18n import tr, tr_text
 
 # What each physical key is allowed to mean. The values are roles; a binding
@@ -101,16 +102,22 @@ class Binding(NamedTuple):
     actions: Tuple[str, ...] = ()
     call: Optional[str] = None
     args: Tuple = ()
+    # The keys.ini actions `keys` names, when it names any. Moved in keys.ini,
+    # F1 says where they went instead of the default `keys` text.
+    binds: Tuple[str, ...] = ()
 
 
 # The keys every screen answers to the same way. Not repeated per screen; F1
 # says them last.
 COMMON = (
-    Binding("Numpad slash", "say it again", "repeat", ("repeat",), "repeat"),
-    Binding("Numpad star", "where you are", "summary", ("summary",), "summary"),
+    Binding("Numpad slash", "say it again", "repeat", ("repeat",), "repeat",
+            binds=("say_again",)),
+    Binding("Numpad star", "where you are", "summary", ("summary",), "summary",
+            binds=("where_am_i",)),
     Binding("Shift with comma and period", "the message log, older and newer",
-            "history", ("log_prev", "log_next")),
-    Binding("F1", "these keys", "help", ("help",)),
+            "history", ("log_prev", "log_next"),
+            binds=("log_older", "log_newer")),
+    Binding("F1", "these keys", "help", ("help",), binds=("help",)),
 )
 
 # Where numpad plus and minus are mouse buttons. Everywhere else they are
@@ -156,9 +163,25 @@ def help_text(bindings, screen_name: str = "") -> str:
     return head + " ".join(lines) + " " + tail
 
 
+_keymap = keys.DEFAULTS
+
+
+def use_keymap(keymap) -> None:
+    """The keys F1 describes, from keys.ini."""
+    global _keymap
+    _keymap = keymap
+
+
+def key_text(b: Binding) -> str:
+    """What F1 calls the keys of `b`: the table's words, or where they moved."""
+    if b.binds and any(_keymap.moved(a) for a in b.binds):
+        return keys.describe(b.binds, _keymap)
+    return tr_text("keys", b.keys)
+
+
 def _said(b: Binding) -> str:
     """One line of F1, translated under keys made from the table's English."""
-    return "{}: {}.".format(tr_text("keys", b.keys), tr_text("help", b.does))
+    return "{}: {}.".format(key_text(b), tr_text("help", b.does))
 
 
 def violations(screen: str, bindings: Iterable[Binding], watcher_cls=None):

@@ -30,10 +30,15 @@ from .game.aim import Aimer
 from .game.chargen import CharGen, MSG_EDITOR, POINTER_SECTIONS
 from .game import perkpick
 from . import words
-from . import codepage, i18n
+from . import codepage, i18n, keys
 
 # editor.msg's own title for the perk window: "PICK A PERK".
 MSG_PICK_A_PERK = 152
+
+# keys.ini's names for the look cursor, in the order F1 has always said them.
+LOOK_CURSOR = ("cursor_northwest", "cursor_northeast", "cursor_west",
+               "cursor_east", "cursor_southwest", "cursor_southeast")
+WORLD_CURSOR = LOOK_CURSOR + ("cursor_north", "cursor_south")
 from .game.combat import CombatWatcher
 from . import controls
 from .controls import Binding
@@ -42,7 +47,7 @@ from .game import calledshot, pausemenu, prefs
 from .game.displaywin import DisplayWindow
 from .game import (actions, barter, charsheet, dialogue, itemactions, itemmove,
                    pipboy, quantity, slotscreen, timerwin, uiwindow)
-from .game import floattext, history, inventory
+from .game import floattext, history, inventory, subtitles
 from .game.inventory import InventoryWatcher
 from .game.premade import PremadeScreen
 from .game.saves import SaveWatcher
@@ -873,25 +878,38 @@ class WorldWatcher(Watcher):
     # listed for F1 rather than dispatched -- except the two mouse buttons,
     # which only exist here.
     KEYS = (
-        Binding("Numpad 7, 9, 4, 6, 1 and 3", "move the look cursor; 5 comes back to you",
-                controls.GAME),
+        Binding("Numpad 7, 9, 4, 6, 1 and 3", "move the look cursor",
+                controls.GAME, binds=LOOK_CURSOR),
+        Binding("Numpad 5", "back to you", controls.GAME,
+                binds=("cursor_home",)),
         Binding("Numpad plus", "left click on the look cursor's hex", "mouse",
-                ("click",)),
-        Binding("Numpad minus", "right click there", "mouse", ("rclick",)),
-        Binding("Numpad dot", "what can I do to this", controls.GAME),
+                ("click",), binds=("left_click",)),
+        Binding("Numpad minus", "right click there", "mouse", ("rclick",),
+                binds=("right_click",)),
+        Binding("Numpad dot", "what can I do to this", controls.GAME,
+                binds=("menu",)),
         Binding("Square brackets", "the scanner: next and previous kind of "
-                "thing, with Shift which one, with Control the category",
-                controls.GAME),
-        Binding("Slash", "go to the thing the scanner is on", controls.GAME),
-        Binding("Shift and slash", "the way to the look cursor", controls.GAME),
+                "thing", controls.GAME,
+                binds=("scan_kind_previous", "scan_kind_next")),
+        Binding("Shift with square brackets", "which one of that kind",
+                controls.GAME, binds=("scan_one_previous", "scan_one_next")),
+        Binding("Control with square brackets", "the category", controls.GAME,
+                binds=("scan_category_previous", "scan_category_next")),
+        Binding("Slash", "go to the thing the scanner is on", controls.GAME,
+                binds=("scan_go",)),
+        Binding("Shift and slash", "the way to the look cursor", controls.GAME,
+                binds=("route_say",)),
         Binding("Control and slash", "walk all the way there; again to stop",
-                controls.GAME),
-        Binding("Semicolon", "how you are doing; with Shift, what you hold",
-                controls.GAME),
+                controls.GAME, binds=("route_walk",)),
+        Binding("Semicolon", "how you are doing", controls.GAME,
+                binds=("status",)),
+        Binding("Shift and semicolon", "what you hold", controls.GAME,
+                binds=("weapon",)),
         Binding("N and B", "attack mode and hands", controls.GAME),
-        Binding("U", "use what is in your hand", controls.GAME),
+        Binding("U", "use what is in your hand", controls.GAME,
+                binds=("use_hand",)),
         Binding("Shift and 1", "how much light is on the look cursor's hex",
-                controls.GAME),
+                controls.GAME, binds=("light",)),
         Binding("F6 and F7", "quick save and quick load", controls.GAME),
     )
     TALK_KEYS = (
@@ -902,7 +920,7 @@ class WorldWatcher(Watcher):
         # Dispatched by App._do_action, which has the window to type into.
         Binding("Enter", "say the reply you are on", "choose", ("enter",)),
         Binding("Numpad 5", "that reply again", "repeat", ("dlg_say",),
-                "dlg_say"),
+                "dlg_say", binds=("cursor_home",)),
         Binding("The number row", "say a reply by its number", controls.GAME),
     )
     ITEM_KEYS = (
@@ -910,9 +928,11 @@ class WorldWatcher(Watcher):
         Binding("Left and Right", "the lists", controls.GAME),
         Binding("Enter", "move the item: once to pick it up, once where it "
                 "goes", controls.GAME),
-        Binding("Numpad dot", "what can I do with this item", controls.GAME),
+        Binding("Numpad dot", "what can I do with this item", controls.GAME,
+                binds=("menu",)),
         Binding("A", "take everything, in a container", controls.GAME),
-        Binding("O", "offer, when trading", controls.GAME),
+        Binding("O", "offer, when trading", controls.GAME,
+                binds=("barter_offer",)),
         Binding("Escape", "close it", controls.GAME),
     )
 
@@ -1844,7 +1864,8 @@ class TimerWatcher(Watcher):
                 (timerwin.MAX_STEPS,)),
         Binding("Enter", "arm it", "choose"),
         Binding("Escape", "cancel", "back"),
-        Binding("Numpad 5", "say it again", "repeat", ("dlg_say",), "repeat"),
+        Binding("Numpad 5", "say it again", "repeat", ("dlg_say",), "repeat",
+                binds=("cursor_home",)),
     )
 
     def __init__(self, timer) -> None:
@@ -1958,7 +1979,7 @@ class PipboyWatcher(Watcher):
                 ("back",), "back"),
         Binding("Escape", "close the Pip-Boy", "back"),
         Binding("Numpad 5", "say it again", "repeat", ("num5", "dlg_say"),
-                "repeat"),
+                "repeat", binds=("cursor_home",)),
     )
 
     # How long to let the panel rebuild after a page is opened, before reading
@@ -2431,7 +2452,8 @@ class QuantityWatcher(Watcher):
     ) + (
         Binding("Enter", "take it", "choose"),
         Binding("Escape", "cancel", "back"),
-        Binding("Numpad 5", "say it again", "repeat", ("dlg_say",), "repeat"),
+        Binding("Numpad 5", "say it again", "repeat", ("dlg_say",), "repeat",
+                binds=("cursor_home",)),
     )
     # Ten at a time while Control is held; set by App before each key.
     big = 1
@@ -2526,7 +2548,7 @@ class CalledShotWatcher(Watcher):
         Binding("Enter", "fire", "choose", ("enter",), "choose"),
         Binding("Escape", "cancel", "back"),
         Binding("Numpad 5", "say it again", "repeat", ("num5", "dlg_say"),
-                "repeat"),
+                "repeat", binds=("cursor_home",)),
     )
 
     def __init__(self, shot) -> None:
@@ -2643,7 +2665,8 @@ class PrefsWatcher(Watcher):
         Binding("End", "the highest", "most", ("end",), "extreme", (True,)),
         Binding("Enter", "save and close", "choose"),
         Binding("Escape", "close without saving", "back"),
-        Binding("Numpad 5", "say it again", "repeat", ("dlg_say",), "repeat"),
+        Binding("Numpad 5", "say it again", "repeat", ("dlg_say",), "repeat",
+                binds=("cursor_home",)),
     )
 
     def __init__(self, settings) -> None:
@@ -2697,17 +2720,19 @@ class WorldMapWatcher(Watcher):
     TITLE = "World map"
     KEYS = tuple(
         Binding("Numpad 1 to 9", "move the cursor a square", "cursor",
-                ("wm_" + d,), "wm_" + d)
+                ("wm_" + d,), "wm_" + d, binds=WORLD_CURSOR)
         for d in ("n", "s", "e", "w", "ne", "nw", "se", "sw")
     ) + (
         Binding("Numpad 5", "back to where you are", "cursor", ("wm_snap",),
-                "wm_snap"),
+                "wm_snap", binds=("cursor_home",)),
         Binding("Square brackets", "the places you know", "scan",
-                ("wm_scan_prev",), "wm_scan_prev"),
+                ("wm_scan_prev",), "wm_scan_prev",
+                binds=("scan_kind_previous", "scan_kind_next")),
         Binding("Square brackets", "the places you know", "scan",
-                ("wm_scan_next",), "wm_scan_next"),
+                ("wm_scan_next",), "wm_scan_next",
+                binds=("scan_kind_previous", "scan_kind_next")),
         Binding("Slash", "put the cursor on that place", "scan",
-                ("wm_scan_jump",), "wm_scan_jump"),
+                ("wm_scan_jump",), "wm_scan_jump", binds=("scan_go",)),
         Binding("Enter", "travel to the cursor, or go in", "choose",
                 ("enter",), "travel"),
         Binding("T", "the town map", "watch", ("wm_town",), "wm_town"),
@@ -3147,14 +3172,18 @@ class WorldMapWatcher(Watcher):
 
 class App:
     def __init__(self, speaker: Optional[Speaker] = None, require_focus: bool = True,
-                 step_sound: bool = True) -> None:
+                 step_sound: bool = True, keymap=None) -> None:
         self.ann = Announcer(speaker or get_speaker())
+        # The mod's own keys, as keys.ini has them. F1 says these.
+        self.keymap = keymap or keys.DEFAULTS
+        controls.use_keymap(self.keymap)
         self.require_focus = require_focus
         self.ticker = sound.Ticker(enabled=step_sound)
         self.proc: Optional[Process] = None
         self.hwnd: Optional[int] = None
         self.watchers: Dict[str, Watcher] = {}
         self.aimer = None
+        self.subtitles = subtitles.Subtitles()
         self.screen: str = screens.UNKNOWN
         self._pending_screen: str = screens.UNKNOWN
         self._pending_ticks: int = 0
@@ -3245,6 +3274,13 @@ class App:
             return False
         print("[app] game text in {}".format(
             codepage.set_language(i18n.game_language(game_dir))), flush=True)
+        # The scripts' copy of keys.ini. Written here as well as at start-up,
+        # because run from the repo the mod does not know the game's folder
+        # until now -- and without this the scripts kept their default keys
+        # while the Python side used the moved ones.
+        where = keys.write_script_keys(self.keymap, game_dir)
+        print("[keys] for the scripts: {}".format(where or "could not write"),
+              flush=True)
         log_path = os.path.join(game_dir, "debug.log")
         if not os.path.exists(log_path):
             # Not fatal: the game creates it on launch and truncates it each
@@ -4117,6 +4153,13 @@ class App:
         for line in self.saves.poll():
             self.ann.say(line, force=True)
         marks.append(("saves", time.time()))
+        # Subtitles, whatever the screen: a movie plays over any of them, and
+        # the ending slides come after the game has stopped being one.
+        for line in self.subtitles.poll(self.proc):
+            print("[subtitle] {}".format(line), flush=True)
+            self.history.add(line)
+            self.ann.say(line, force=True)
+        marks.append(("subtitles", time.time()))
         # The script's mode says whether this is Save or Load; before a game
         # loads there is no script, and the only way here is Load.
         self.slots.mode = self.world.log.game_mode if self.world.log.session_live else None

@@ -41,6 +41,8 @@
 #include "sfall/define_lite.h"
 // define_extra.h carries the OBJ_TYPE_* constants.
 #include "sfall/define_extra.h"
+// The mod's own keys, from keys.ini: g_k_*, bound() and keys_load.
+#include "keys.h"
 
 // Game modes that put a panel over the map. get_game_mode is a bitmask, so
 // membership is tested with bwand rather than equality. LOCALMAP, COMBAT and
@@ -457,6 +459,7 @@ procedure start begin
    if game_loaded then begin
       set_global_script_type(1);   // run wherever the cursor is visible
       set_global_script_repeat(2); // ~30 polls/sec; fast enough to catch a click
+      call keys_load;
       register_hook_proc(HOOK_KEYPRESS, on_key);
       register_hook_proc(HOOK_USESKILLON, on_useskill);
       g_cursor := tile_num(dude_obj);
@@ -835,6 +838,8 @@ procedure on_key begin
     * straight through, up and down alike.
     */
    variable pressed := (event == 1);
+   // What the key is with its modifiers, for bound() below. See keys.h.
+   call key_note(key, pressed);
 
    /*
     * F1 is the mod's key for "what keys work here", answered by the Python
@@ -842,7 +847,7 @@ procedure on_key begin
     * The game's own F1 puts up a picture of the keyboard, which tells a blind
     * player nothing and leaves a screen up to find the way out of.
     */
-   if (key == DIK_F1) then begin
+   if (bound(g_k_help)) then begin
       set_sfall_return(KEY_SWALLOW);
       return;
    end
@@ -852,8 +857,7 @@ procedure on_key begin
     * well, so the shifted keys are taken from it here; comma and period
     * without Shift still turn you.
     */
-   if ((key == DIK_COMMA or key == DIK_PERIOD)
-       and (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT))) then begin
+   if (bound(g_k_log_older) or bound(g_k_log_newer)) then begin
       set_sfall_return(KEY_SWALLOW);
       return;
    end
@@ -863,8 +867,7 @@ procedure on_key begin
     * reads Shift and 1 as `!`, which it binds to nothing, so taking it costs
     * nothing.
     */
-   if (key == DIK_1 and (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT))
-       and not (get_game_mode bwand MAP_HIDDEN)) then begin
+   if (bound(g_k_light) and not (get_game_mode bwand MAP_HIDDEN)) then begin
       if (pressed) then call report_light;
       set_sfall_return(KEY_SWALLOW);
       return;
@@ -950,12 +953,13 @@ procedure on_key begin
          set_sfall_return(KEY_SWALLOW);
          return;
       end
-      // Numpad dot joins them now that it opens the menu: pressing it again
-      // with a list already up would build a second list on top of the first.
+      // The menu key joins them now that it opens the menu: pressing it
+      // again with a list already up would build a second list on top of the
+      // first. And the look cursor's keys, wherever keys.ini put them.
       if (key == DIK_NUMPAD0 or key == DIK_NUMPAD1 or key == DIK_NUMPAD2
        or key == DIK_NUMPAD3 or key == DIK_NUMPAD4 or key == DIK_NUMPAD5
        or key == DIK_NUMPAD6 or key == DIK_NUMPAD7 or key == DIK_NUMPAD8
-       or key == DIK_NUMPAD9 or key == DIK_DECIMAL) then begin
+       or key == DIK_NUMPAD9 or bound(g_k_menu) or cursor_key) then begin
          set_sfall_return(KEY_SWALLOW);
          return;
       end
@@ -989,12 +993,13 @@ procedure on_key begin
          set_sfall_return(KEY_SWALLOW);
          return;
       end
-      // Numpad dot joins them now that it opens the menu: pressing it again
-      // with a list already up would build a second list on top of the first.
+      // The menu key joins them now that it opens the menu: pressing it
+      // again with a list already up would build a second list on top of the
+      // first. And the look cursor's keys, wherever keys.ini put them.
       if (key == DIK_NUMPAD0 or key == DIK_NUMPAD1 or key == DIK_NUMPAD2
        or key == DIK_NUMPAD3 or key == DIK_NUMPAD4 or key == DIK_NUMPAD5
        or key == DIK_NUMPAD6 or key == DIK_NUMPAD7 or key == DIK_NUMPAD8
-       or key == DIK_NUMPAD9 or key == DIK_DECIMAL) then begin
+       or key == DIK_NUMPAD9 or bound(g_k_menu) or cursor_key) then begin
          set_sfall_return(KEY_SWALLOW);
          return;
       end
@@ -1024,16 +1029,16 @@ procedure on_key begin
        * rearranging your pack. A key that only worked while nothing was open
        * would be missing exactly the moments it is for.
        */
-      if (key == DIK_SEMICOLON) then begin
+      if (bound(g_k_status) or bound(g_k_weapon)) then begin
          /*
-          * Shift makes it the WEAPON, and it has to work here for the same
-          * reason the status does: what is in your hand and how much is left
-          * in it are things a sighted player reads off the bar without
-          * looking away from whatever panel is open. A key that only answered
-          * on an empty screen would be silent in exactly the fight it is for.
+          * The weapon too, and it has to work here for the same reason the
+          * status does: what is in your hand and how much is left in it are
+          * things a sighted player reads off the bar without looking away
+          * from whatever panel is open. A key that only answered on an empty
+          * screen would be silent in exactly the fight it is for.
           */
          if (pressed) then begin
-            if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
+            if (bound(g_k_weapon)) then
                call report_weapon;
             else
                call report_status;
@@ -1120,18 +1125,20 @@ procedure on_key begin
    if (m bwand MAP_HIDDEN) then return;
 
    variable dir := -1;
-   if      (key == DIK_NUMPAD9) then dir := DIR_NE;
-   else if (key == DIK_NUMPAD6) then dir := DIR_E;
-   else if (key == DIK_NUMPAD3) then dir := DIR_SE;
-   else if (key == DIK_NUMPAD1) then dir := DIR_SW;
-   else if (key == DIK_NUMPAD4) then dir := DIR_W;
-   else if (key == DIK_NUMPAD7) then dir := DIR_NW;
+   // Every key from here down but the mod's own two -- apostrophe and
+   // backslash, which the Python side presses -- is wherever keys.ini put it.
+   if      (bound(g_k_ne)) then dir := DIR_NE;
+   else if (bound(g_k_e)) then dir := DIR_E;
+   else if (bound(g_k_se)) then dir := DIR_SE;
+   else if (bound(g_k_sw)) then dir := DIR_SW;
+   else if (bound(g_k_w)) then dir := DIR_W;
+   else if (bound(g_k_nw)) then dir := DIR_NW;
    // Numpad 8 and 2 are taken and do nothing. They used to fake north and
    // south by alternating the diagonals, and on Fallout's maps that was not
    // reliable enough to steer by (owner, 0.2.37). Still swallowed, so the
    // engine does not read them as anything either.
-   else if (key == DIK_NUMPAD8 or key == DIK_NUMPAD2) then dir := ACT_BLOCKED;
-   else if (key == DIK_NUMPAD5) then dir := ACT_SNAP;
+   else if (bound(g_k_n) or bound(g_k_s)) then dir := ACT_BLOCKED;
+   else if (bound(g_k_home)) then dir := ACT_SNAP;
    // Calibration is the aimer's own business, pressed several times per click
    // and never by a player, so it sits on a key nobody reaches for.
    else if (key == DIK_APOSTROPHE) then dir := ACT_CALIB;
@@ -1147,41 +1154,23 @@ procedure on_key begin
    //     ctrl  [ ]   the category -- critters, items, scenery
    // key_pressed reads the live keyboard, which is why modifiers work from
    // inside a keypress hook.
-   else if (key == DIK_LBRACKET) then begin
-      if (key_pressed(DIK_LCONTROL) or key_pressed(DIK_RCONTROL)) then
-         dir := ACT_SCAN_CATPREV;
-      else if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
-         dir := ACT_SCAN_INSTPREV;
-      else
-         dir := ACT_SCAN_TYPEPREV;
-   end
-   else if (key == DIK_RBRACKET) then begin
-      if (key_pressed(DIK_LCONTROL) or key_pressed(DIK_RCONTROL)) then
-         dir := ACT_SCAN_CATNEXT;
-      else if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
-         dir := ACT_SCAN_INSTNEXT;
-      else
-         dir := ACT_SCAN_TYPENEXT;
-   end
+   // key_note read the live keyboard for the modifiers, which is why they
+   // work from inside a keypress hook.
+   else if (bound(g_k_cat_prev))  then dir := ACT_SCAN_CATPREV;
+   else if (bound(g_k_one_prev))  then dir := ACT_SCAN_INSTPREV;
+   else if (bound(g_k_kind_prev)) then dir := ACT_SCAN_TYPEPREV;
+   else if (bound(g_k_cat_next))  then dir := ACT_SCAN_CATNEXT;
+   else if (bound(g_k_one_next))  then dir := ACT_SCAN_INSTNEXT;
+   else if (bound(g_k_kind_next)) then dir := ACT_SCAN_TYPENEXT;
    // Semicolon is you; shift-semicolon is what you are holding. The same
-   // finger, and the same trick the scanner brackets use -- a keypress hook is
-   // handed a scancode with no modifier in it, so the live keyboard is asked.
-   else if (key == DIK_SEMICOLON) then begin
-      if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
-         dir := ACT_WEAPON;
-      else
-         dir := ACT_STATUS;
-   end
+   // finger, and the same trick the scanner brackets use.
+   else if (bound(g_k_weapon)) then dir := ACT_WEAPON;
+   else if (bound(g_k_status)) then dir := ACT_STATUS;
    // Slash takes the look cursor to what the scanner is on; with Shift it
    // says the way to the look cursor, and with Control it walks it.
-   else if (key == DIK_SLASH) then begin
-      if (key_pressed(DIK_LCONTROL) or key_pressed(DIK_RCONTROL)) then
-         dir := ACT_ROUTE_GO;
-      else if (key_pressed(DIK_LSHIFT) or key_pressed(DIK_RSHIFT)) then
-         dir := ACT_ROUTE_SAY;
-      else
-         dir := ACT_SCAN_JUMP;
-   end
+   else if (bound(g_k_route_walk)) then dir := ACT_ROUTE_GO;
+   else if (bound(g_k_route_say))  then dir := ACT_ROUTE_SAY;
+   else if (bound(g_k_scan_go))    then dir := ACT_SCAN_JUMP;
    /*
     * The action menu, on the key the player actually presses.
     *
@@ -1202,8 +1191,8 @@ procedure on_key begin
     * here removes the queue, the staleness window and the second binding
     * together, because there is no longer a journey to go wrong.
     */
-   else if (key == DIK_DECIMAL) then dir := ACT_MENU;
-   else if (key == DIK_U) then dir := ACT_USE_ACTIVE;
+   else if (bound(g_k_menu)) then dir := ACT_MENU;
+   else if (bound(g_k_use)) then dir := ACT_USE_ACTIVE;
    else if (key == DIK_BACKSLASH) then dir := ACT_PREPARE;
    else return;
 

@@ -64,9 +64,10 @@ Name: "{app}"; Permissions: users-modify
 Name: "{app}\lang"; Permissions: users-modify
 
 [Files]
-Source: "{#Frozen}\*"; DestDir: "{app}"; Excludes: "access.ini"; Flags: ignoreversion recursesubdirs createallsubdirs
-; The player's settings survive an upgrade.
+Source: "{#Frozen}\*"; DestDir: "{app}"; Excludes: "access.ini,keys.ini"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The player's settings and keys survive an upgrade.
 Source: "{#Frozen}\access.ini"; DestDir: "{app}"; Flags: onlyifdoesntexist
+Source: "{#Frozen}\keys.ini"; DestDir: "{app}"; Flags: onlyifdoesntexist
 
 [Icons]
 ; Each name says which mod it belongs to, because the brand's folder holds every mod's shortcuts side by side. "Fallout 2 (Access Never Changes)" rather than a plain "Fallout 2" also keeps it from replacing a shortcut Steam or GOG made, which uninstalling would then take with it.
@@ -75,6 +76,7 @@ Name: "{group}\Access Never Changes, mod only"; Filename: "{app}\{#ExeName}"; Wo
 Name: "{group}\Access Never Changes manual"; Filename: "{app}\manual.html"
 Name: "{group}\Access Never Changes changelog"; Filename: "{sys}\notepad.exe"; Parameters: """{app}\changelog.txt"""
 Name: "{group}\Access Never Changes settings"; Filename: "{sys}\notepad.exe"; Parameters: """{app}\access.ini"""
+Name: "{group}\Access Never Changes keys"; Filename: "{sys}\notepad.exe"; Parameters: """{app}\keys.ini"""
 Name: "{group}\Access Never Changes folder"; Filename: "{app}"
 Name: "{group}\Uninstall Access Never Changes"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Fallout 2 (Access Never Changes)"; Filename: "{app}\{#ExeName}"; Parameters: "--launch"; WorkingDir: "{app}"; Tasks: desktopicon
@@ -89,6 +91,8 @@ Filename: "{app}\{#ExeName}"; Parameters: "uninstall ""{app}\.."""; Flags: runhi
 
 [UninstallDelete]
 Type: files; Name: "{app}\*.log"
+; Written by the mod each time it starts, for the in-game scripts to read.
+Type: files; Name: "{app}\script_keys.ini"
 
 [Code]
 var

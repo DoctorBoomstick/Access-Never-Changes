@@ -70,7 +70,7 @@
 <ul>
 <li>Firstly, you shall be met by the Interplay logo. Vault-Tec does not condone advertisement of a non-partner company and, as such, Vault Dwellers are to skip this with alacrity.</li>
 <li>Secondly, the Fallout 2 first (yes, they need to be numbered) opening cutscene shall play. Vault-Tec has, as of writing, not regulated for audio description services to be applied to game cinematics and, consequently, this movie is undescribed.</li>
-<li>Following this, you will be greeted with the second opening cinematic, delivered by Hakunin. Hakunin is not a registered Vault Dweller, and as such his meaningless exposition and slandering of the United States ought to be disregarded.</li>
+<li>Following this, you will be greeted with the second opening cinematic, delivered by Hakunin. Hakunin is not a registered Vault Dweller, and as such his meaningless exposition and slandering of the United States ought to be disregarded. Should one insist on hearing it anyway, the mod will read subtitles aloud. Subtitle lines will also be pushed to the mod’s message log, described later, for your perusal.</li>
 </ul>
 
 <p>You shall now be on the main menu, the relevant keys for which include:</p>
@@ -337,6 +337,14 @@
 </ul>
 
 <p>Save the file and start the mod again for a change to take effect.</p>
+
+<h3 id="changing-the-keys">Changing the Keys</h3>
+
+<p>Vault-Tec has been made aware that the default keybinds are uncomfortable for users of particular keyboard layouts, such as German. Vault-Tec, naturally, rejects the notion of other countries on principle as it is the United States that won World War II and not Germany. Yet, a capability to change mod keybinds has been included for the sake of argument, for Vault-Tec recognizes that it is not the fault of vault-dwellers that they possess weak, flimsy, nonregulation, lazy, flabby, cold, clammy, non-cheeseburger holding, slimy, crooked, girly socialist hands. The mod's own keys may be edited in <code>keys.ini</code>, beside <code>access.ini</code>.</p>
+
+<p>Everything the mod adds can be moved: the look cursor, the scanner, the route keys, status and weapon, use, the light level, the action menu, the two mouse buttons, and the keys every screen answers to. The arrows, Enter, Escape, Backspace, Tab, Home, End and the number row cannot, as every menu and the game itself depend on them, and nor can Apostrophe, Backslash and Numpad 0, which the mod presses itself. Ask for one of those, for a key that does not exist, or for the same key twice, and that line goes back to what it was; the mod says a settings file has a mistake, and <code>f2access.log</code> says which.</p>
+
+<p>A key moved under the map's section is taken from the game while you are on a map. Should you put the look cursor on a letter the game already uses, the game will no longer hear that letter there. Vault-Tec accepts no liability for Vault Dwellers who bind the look cursor to I and then cannot find their inventory.</p>
 
 <h2 id="translating-the-mod">Translating the Mod</h2>
 

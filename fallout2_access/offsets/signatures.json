@@ -244,6 +244,50 @@
       "owners": [],
       "pattern": "00 00 00 B8 ?? ?? ?? ?? 89 DA E8 90"
     },
+    "ENDING_COUNT": {
+      "address": 5342824,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.subtitles",
+          "ENDING_COUNT"
+        ]
+      ],
+      "pattern": "00 00 8B 3D ?? ?? ?? ?? 31 DB 31 F6"
+    },
+    "ENDING_CURRENT": {
+      "address": 5342832,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.subtitles",
+          "ENDING_CURRENT"
+        ]
+      ],
+      "pattern": "51 00 3B 15 ?? ?? ?? ?? 0F 8E A2 01"
+    },
+    "ENDING_LINES": {
+      "address": 5704648,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.subtitles",
+          "ENDING_LINES"
+        ]
+      ],
+      "pattern": "60 08 00 A3 ?? ?? ?? ?? 85 C0 74 3B"
+    },
+    "ENDING_ON": {
+      "address": 5704652,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.subtitles",
+          "ENDING_ON"
+        ]
+      ],
+      "pattern": "03 44 00 B9 ?? ?? ?? ?? BB 60 1A 50"
+    },
     "GAME_GLOBALS": {
       "address": 5342912,
       "operand_offset": 4,
@@ -397,6 +441,28 @@
         ]
       ],
       "pattern": "00 31 D2 B8 ?? ?? ?? ?? E8 8A 1A 0A"
+    },
+    "MOVIE_FLAGS": {
+      "address": 6524536,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.subtitles",
+          "MOVIE_FLAGS"
+        ]
+      ],
+      "pattern": "75 55 F6 05 ?? ?? ?? ?? 08 74 1D 8B"
+    },
+    "MOVIE_SUBTITLES": {
+      "address": 6524532,
+      "operand_offset": 4,
+      "owners": [
+        [
+          "..game.subtitles",
+          "MOVIE_HEAD"
+        ]
+      ],
+      "pattern": "50 00 8B 3D ?? ?? ?? ?? 85 FF 74 2A"
     },
     "MSG_EDITOR": {
       "address": 5700776,

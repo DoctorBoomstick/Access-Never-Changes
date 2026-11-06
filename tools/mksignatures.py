@@ -185,6 +185,13 @@ REGISTRY = {
     "WM_TOWN_SCROLL":    (0x00672F10, [("..game.worldmap", "TOWN_SCROLL")]),
     "MSG_WORLDMAP":      (0x00672FB0, [("..game.worldmap", "MSG_WORLDMAP")]),
     "WM_ENCOUNTER_ODDS": (0x00672FB8, [("..game.worldmap", "ENCOUNTER_CHANCE")]),
+    # -- the subtitles: movies, and the ending slides' narration -------------
+    "MOVIE_SUBTITLES":   (0x00638E74, [("..game.subtitles", "MOVIE_HEAD")]),
+    "MOVIE_FLAGS":       (0x00638E78, [("..game.subtitles", "MOVIE_FLAGS")]),
+    "ENDING_LINES":      (0x00570BC8, [("..game.subtitles", "ENDING_LINES")]),
+    "ENDING_COUNT":      (0x00518668, [("..game.subtitles", "ENDING_COUNT")]),
+    "ENDING_CURRENT":    (0x00518670, [("..game.subtitles", "ENDING_CURRENT")]),
+    "ENDING_ON":         (0x00570BCC, [("..game.subtitles", "ENDING_ON")]),
     # -- where the pointer really is -----------------------------------------
     "MOUSE_X":           (0x006AC750, [("..game.pointer", "MOUSE_X")]),
     "MENU_MOUSE_X":      (0x006AC794, [("..game.pointer", "MENU_MOUSE_X")]),

@@ -41,6 +41,8 @@
 #include "sfall/dik.h"
 #include "sfall/define_lite.h"
 #include "sfall/define_extra.h"
+// The mod's own keys, from keys.ini: here only for the menu key.
+#include "keys.h"
 
 // Fields are separated by '|' because item names contain spaces, and every
 // line also ENDS with one: the engine appends its own debug output to ours
@@ -204,6 +206,7 @@ procedure start begin
    if game_loaded then begin
       set_global_script_type(1);
       set_global_script_repeat(2);   // ~30 polls/sec; only watching a mode flag
+      call keys_load;
       register_hook_proc(HOOK_KEYPRESS, on_key);
       register_hook_proc(HOOK_BARTERPRICE, on_barterprice);
       debug_msg("INVEN:ready" + SEP);
@@ -987,6 +990,7 @@ procedure on_key begin
    // The release is swallowed alongside the press -- see KEY_SWALLOW. Dropping
    // it here left the engine holding half of every key this script took.
    pressed := (event == 1);
+   call key_note(key, pressed);
    if (not (get_game_mode bwand INVEN_MODES)) then return;
    /*
     * Stand down while the quantity window is up.
@@ -1064,9 +1068,10 @@ procedure on_key begin
     * M is kept here, unlike on the map. There it had to go because the manual
     * gives it the mouse mode toggle; in an inventory panel there is no mouse
     * mode to toggle, so holding onto it costs the player nothing and leaves a
-    * second way in for anyone who has learned it.
+    * second way in for anyone who has learned it. The menu key is wherever
+    * keys.ini put it; M stays M.
     */
-   if (key == DIK_DECIMAL or key == DIK_M) then begin
+   if (bound(g_k_menu) or key == DIK_M) then begin
       call imenu_open;
       set_sfall_return(KEY_SWALLOW);
       return;

@@ -30,4 +30,5 @@ dist/
 
 # A developer's own settings and logs at the repo root
 /access.ini
+/keys.ini
 /install.log

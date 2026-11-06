@@ -156,6 +156,12 @@ REQUIRED = {
         # cannot tell a loaded map from the premade-character screen -- so it
         # announces "character selection" at somebody standing in Arroyo.
         "show_script_messages": "1",
+        # The movies' and ending slides' subtitles, which the mod reads aloud.
+        # The game loads the text only with this on; off, there is nothing in
+        # memory to read and those scenes are voice with no words. It is also
+        # the Subtitles switch on the game's own Preferences screen, so a
+        # player can still turn it off there.
+        "subtitles": "1",
     },
 }
 

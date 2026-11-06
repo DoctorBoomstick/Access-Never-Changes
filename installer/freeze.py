@@ -12,6 +12,7 @@ The layout it makes is the one fallout2_access/paths.py expects:
     AccessNeverChanges\\
         AccessNeverChanges.exe
         access.ini                       from config\\access.ini
+        keys.ini                         from config\\keys.ini
         lang\\*.ini                       from lang\\
         nvdaControllerClient64.dll       from accessible_output2
         manual.html, LICENSE
@@ -86,6 +87,7 @@ def nvda_dll() -> str:
 
 def assemble() -> None:
     shutil.copy2(os.path.join(ROOT, "config", "access.ini"), OUT)
+    shutil.copy2(os.path.join(ROOT, "config", "keys.ini"), OUT)
     lang = os.path.join(OUT, "lang")
     os.makedirs(lang, exist_ok=True)
     for path in glob.glob(os.path.join(ROOT, "lang", "*.ini")):

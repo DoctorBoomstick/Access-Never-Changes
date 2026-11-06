@@ -43,7 +43,7 @@ import sys
 import threading
 import time
 
-from fallout2_access import config, i18n, paths
+from fallout2_access import config, i18n, keys, paths
 from fallout2_access.i18n import tr
 from fallout2_access.app import App
 from fallout2_access.version import banner
@@ -147,12 +147,24 @@ SHIFTED_HOTKEYS = {
 }
 
 
-def hotkey_for(vk, shift: bool):
-    """The action a key means, given whether Shift is held, or None.
+# Keys that mean something with Control held. None by default: the scripts
+# read their own Control keys, and Control with the arrows is the arrows to
+# the "how many" window. keys.ini can put a Python-side action here.
+CTRL_HOTKEYS = {}
+
+
+def hotkey_for(vk, shift: bool, ctrl: bool = False):
+    """The action a key means, given whether Shift and Control are held, or None.
 
     With Shift, the number row is not digits: Shift and 1 is the light level,
     read by the script, and the "how many" window must not take it for a 1.
+    A key with nothing of its own under Control means what it means without:
+    Control and Up is still Up, which the "how many" window counts in tens.
     """
+    if ctrl:
+        what = CTRL_HOTKEYS.get(vk)
+        if what:
+            return what
     if shift:
         what = SHIFTED_HOTKEYS.get(vk)
         if what:
@@ -242,7 +254,8 @@ def start_hotkeys(app: App) -> bool:
             # noted: the box it opens has no words the mod can read, and
             # knowing the key that opened it is how the box gets named.
             app.quit_key_at = time.time()
-        what = hotkey_for(key_vk(key), held["shift"])
+        what = hotkey_for(key_vk(key), held["shift"],
+                          getattr(app, "ctrl_held", False))
         if not what:
             return
         if app.require_focus and not app._active():
@@ -256,14 +269,29 @@ def start_hotkeys(app: App) -> bool:
                                  suppress=False, win32_event_filter=from_player)
     listener.daemon = True
     listener.start()
+    km = app.keymap
     print(
-        "[hotkeys] numpad +  LEFT click   |  numpad -  RIGHT click\n"
-        "[hotkeys] numpad *  summary      |  numpad /  repeat    |  numpad .  describe\n"
-        "[hotkeys] on a map: numpad 0-9 and the brackets are handled inside the game\n"
-        "[hotkeys] on the world map: numpad 1-9 walk the cursor, [ ] / scan places",
+        "[hotkeys] {}  LEFT click   |  {}  RIGHT click\n"
+        "[hotkeys] {}  summary      |  {}  repeat    |  {}  describe\n"
+        "[hotkeys] on a map: the look cursor and the scanner are handled inside the game\n"
+        "[hotkeys] on the world map: the look cursor's keys walk its cursor".format(
+            km.said("left_click"), km.said("right_click"), km.said("where_am_i"),
+            km.said("say_again"), km.said("menu")),
         flush=True,
     )
     return True
+
+
+def use_keys(keymap, game) -> None:
+    """Move the keys keys.ini moved: in the tables above, and for the scripts."""
+    keys.apply(keymap, HOTKEYS, SHIFTED_HOTKEYS, CTRL_HOTKEYS)
+    where = keys.write_script_keys(keymap, game)
+    if where:
+        print("[keys] for the scripts: {}".format(where), flush=True)
+    moved = [a.name for a in keys.ACTIONS if keymap.moved(a.name)]
+    if moved:
+        print("[keys] moved: {}".format(", ".join(
+            "{} to {}".format(n, keymap[n].written()) for n in moved)), flush=True)
 
 
 class _Tee:
@@ -479,6 +507,15 @@ def main(argv=None) -> int:
     for problem in problems + notes:
         print("[config] {}".format(problem), flush=True)
     problems += [n for n in notes if not n.startswith("no ")]
+    key_problems = []
+    keymap = keys.load(problems=key_problems)
+    print("[keys] {}{}".format(
+        keys.keys_path(),
+        "" if os.path.exists(keys.keys_path()) else " (none there; default keys)"),
+        flush=True)
+    for problem in key_problems:
+        print("[keys] {}".format(problem), flush=True)
+    problems += key_problems
 
     prefer = args.speech or (None if settings.speech == "auto" else settings.speech)
     speaker = get_speaker(prefer=prefer)
@@ -487,7 +524,9 @@ def main(argv=None) -> int:
                       "The log says which."))
     app = App(speaker=speaker,
               require_focus=not (args.any_focus or settings.speak_without_focus),
-              step_sound=settings.step_sound and not args.no_step_sound)
+              step_sound=settings.step_sound and not args.no_step_sound,
+              keymap=keymap)
+    use_keys(keymap, game)
 
     if settings.hotkeys and not args.no_hotkeys:
         start_hotkeys(app)
