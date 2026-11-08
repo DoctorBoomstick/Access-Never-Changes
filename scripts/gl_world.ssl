@@ -59,6 +59,8 @@
 // live rather than documented, which is why it is defined here beside the
 // mod's own constants and not taken from sfall's.
 #define CURSOR_USE_ITEM     (3)
+#define PID_DYNAMITE        (51)   // unarmed; armed are 206 and 209
+#define PID_PLASTIC         (85)
 
 #define DIR_NE              (0)
 #define DIR_E               (1)
@@ -2404,7 +2406,13 @@ procedure report_active begin
     * A weapon still goes the old way. The slot attacks with it, and "attack
     * it" is the action menu's; using a spear "on" a rat is not an attack.
     */
-   if (item and g_unsafe > 0 and obj_item_subtype(item) != item_type_weapon) then begin
+   /*
+    * Explosives go the old way too. The engine arms a charge only when it is
+    * USED on its own -- the item slot -- which opens the countdown. Used ON
+    * something through F_USE_ITEM_ON it never reaches the timer at all.
+    */
+   if (item and g_unsafe > 0 and obj_item_subtype(item) != item_type_weapon
+       and obj_pid(item) != PID_DYNAMITE and obj_pid(item) != PID_PLASTIC) then begin
       call pick_collect;
       if (g_pick_count <= 0) then begin
          debug_msg("WORLD:pick none|");
